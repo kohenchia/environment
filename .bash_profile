@@ -101,6 +101,14 @@ function gpush
     git push -u origin "$@"
 }
 
+function pd
+{
+    echo "Working Directory: $(pwd)"
+    if [[ -n "${VIRTUAL_ENV}" ]]; then
+        echo "Virtual Environment: ${VIRTUAL_ENV}"
+    fi
+}
+
 function ve
 {
     if [[ -n "$VIRTUAL_ENV" ]]; then
@@ -146,3 +154,4 @@ alias ll='ls -alFh'
 alias home='cd ~'
 alias bb='cd ~/bitbucket'
 alias m='open -a MacVim'
+alias tmp='cd /tmp'
