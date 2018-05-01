@@ -78,7 +78,7 @@ function gpull
 
 function gpush
 {
-    git push origin "$@"
+    git push -u origin "$@"
 }
 
 # Commands
