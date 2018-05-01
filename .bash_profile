@@ -18,9 +18,24 @@ IWhite='\033[38;5;15m'
 export GIT_PS1_SHOWDIRTYSTATE=1
 export GIT_PS1_SHOWUNTRACKEDFILES=1
 
+function virtualenv_info(){
+    # Get Virtual Env
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        # Strip out the path and just leave the env name
+        venv=`python --version | sed -e 's/^Python //' -e 's/ //'`
+    else
+        # In case you don't have one activated
+        venv=''
+    fi
+    [[ -n "$venv" ]] && echo "(Py: $venv) "
+}
+
+# disable the default virtualenv prompt change
+export VIRTUAL_ENV_DISABLE_PROMPT=1
+
 function __ps_line_1
 {
-    echo "${IRed}\h:${ICyan}\w${IMagenta}"'$(__git_ps1 " (%s)")'
+    echo "${IYellow}\$(virtualenv_info)${IRed}\h:${ICyan}\w${IMagenta}"'$(__git_ps1 " (%s)")'
 }
 
 function __ps_line_2
@@ -44,6 +59,11 @@ function gb
 function gc
 {
     git commit -m "$@"
+}
+
+function gd
+{
+    git diff "$@"
 }
 
 function gch
@@ -79,6 +99,46 @@ function gpull
 function gpush
 {
     git push -u origin "$@"
+}
+
+function ve
+{
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        echo "Current virtualenv: ${VIRTUAL_ENV}"
+        return 1
+    else
+        local curdir=`pwd`
+        while [[ ! -d "${curdir}/.virtualenv" && -n "${curdir}" ]]; do
+            curdir=${curdir%/*}
+        done
+        if [[ -d "${curdir}/.virtualenv" ]]; then
+            . "${curdir}/.virtualenv/bin/activate"
+        else
+            echo "Virtualenv not found in the hierarchy $(pwd)"
+            return 1
+        fi
+    fi
+}
+
+function vc
+{
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        echo "Current virtualenv: ${VIRTUAL_ENV}"
+        return 1
+    else
+        virtualenv .virtualenv -p python3
+        ve
+    fi
+}
+
+function vd
+{
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        deactivate
+    else
+        echo "Not currently in a virtualenv"
+        return 1
+    fi
 }
 
 # Commands
