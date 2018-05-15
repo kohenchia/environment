@@ -5,14 +5,14 @@ source ~/bitbucket/environment/git-prompt.sh
 export CLICOLOR=1
 export LSCOLORS=gxFxhxDxfxhxhxhxhxcxcx
 
-IBlack='\033[38;5;8m'
-IRed='\033[38;5;9m'
-IGreen='\033[38;5;10m'
-IYellow='\033[38;5;11m'
-IBlue='\033[38;5;12m'
-IMagenta='\033[38;5;13m'
-ICyan='\033[38;5;14m'
-IWhite='\033[38;5;15m'
+IBlack='\[\033[38;5;8m\]'
+IRed='\[\033[38;5;9m\]'
+IGreen='\[\033[38;5;10m\]'
+IYellow='\[\033[38;5;11m\]'
+IBlue='\[\033[38;5;12m\]'
+IMagenta='\[\033[38;5;13m\]'
+ICyan='\[\033[38;5;14m\]'
+IWhite='\[\033[38;5;244m\]'
 
 # Prompt
 export GIT_PS1_SHOWDIRTYSTATE=1
@@ -22,12 +22,23 @@ function virtualenv_info(){
     # Get Virtual Env
     if [[ -n "$VIRTUAL_ENV" ]]; then
         # Strip out the path and just leave the env name
-        venv=`python --version | sed -e 's/^Python //' -e 's/ //'`
+        # venv=`python --version | sed -e 's/^Python //' -e 's/ //'`
+        venv=`echo $VIRTUAL_ENV | sed -e 's/.*\/\([^/]*\)\/.virtualenv/\1/'`
     else
         # In case you don't have one activated
         venv=''
     fi
-    [[ -n "$venv" ]] && echo "(Py: $venv) "
+    [[ -n "$venv" ]] && echo "(v:$venv) "
+}
+
+function conda_info() {
+    # Get conda env
+    if [[ -n "$CONDA_PREFIX" ]]; then
+        cenv=`basename $CONDA_PREFIX`
+    else
+        cenv=''
+    fi
+    [[ -n "$cenv" ]] && echo "(c:$cenv) "
 }
 
 # disable the default virtualenv prompt change
@@ -35,17 +46,27 @@ export VIRTUAL_ENV_DISABLE_PROMPT=1
 
 function __ps_line_1
 {
-    echo "${IYellow}\$(virtualenv_info)${IRed}\h:${ICyan}\w${IMagenta}"'$(__git_ps1 " (%s)")'
+    echo "${IGreen}\$(conda_info)${IYellow}\$(virtualenv_info)${IRed}\h:${ICyan}\w${IMagenta}"'$(__git_ps1 " (%s)")'
 }
 
 function __ps_line_2
 {
-    echo "${IWhite}\$ \[$(tput sgr0)\]"
+    echo "\[$(tput sgr0)\]\$ "
 }
 
-export PS1="$(__ps_line_1)\n$(__ps_line_2)"
+export PS1="$(__ps_line_1)\n$(__ps_line_2)\[$(tput sgr0)\]"
 
 # Command Functions
+function cna
+{
+    conda activate "$@"
+}
+
+function cnd
+{
+    conda deactivate
+}
+
 function ga
 {
     git add -A "$@"
@@ -155,3 +176,8 @@ alias home='cd ~'
 alias bb='cd ~/bitbucket'
 alias m='open -a MacVim'
 alias tmp='cd /tmp'
+alias p='python'
+
+# added by Anaconda3 5.1.0 installer
+export PATH="/anaconda3/bin:$PATH"
+. /anaconda3/etc/profile.d/conda.sh
