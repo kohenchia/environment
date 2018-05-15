@@ -7,6 +7,7 @@ export LSCOLORS=gxFxhxDxfxhxhxhxhxcxcx
 
 IBlack='\[\033[38;5;8m\]'
 IRed='\[\033[38;5;9m\]'
+IOrange='\[\033[38;5;208m\]'
 IGreen='\[\033[38;5;10m\]'
 IYellow='\[\033[38;5;11m\]'
 IBlue='\[\033[38;5;12m\]'
@@ -55,7 +56,7 @@ export VIRTUAL_ENV_DISABLE_PROMPT=1
 
 function __ps_line_1
 {
-    echo "${IGreen}\$(conda_info)${IYellow}\$(virtualenv_info)${IRed}\h:${ICyan}\w${IGreen}\$(mounted_info)${IMagenta}"'$(__git_ps1 " (%s)")'
+    echo "${IYellow}\$(conda_info)\$(virtualenv_info)${IRed}\h:${ICyan}\w${IOrange}\$(mounted_info)${IMagenta}"'$(__git_ps1 " (%s)")'
 }
 
 function __ps_line_2
