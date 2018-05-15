@@ -199,7 +199,7 @@ alias home='cd ~'
 alias bb='cd ~/bitbucket'
 alias m='open -a MacVim'
 alias tmp='cd /tmp'
-alias mnt='cd /mnt'
+alias mnt='cd ~/mnt'
 alias p='python'
 
 # added by Anaconda3 5.1.0 installer
