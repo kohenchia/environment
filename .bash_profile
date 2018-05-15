@@ -41,12 +41,21 @@ function conda_info() {
     [[ -n "$cenv" ]] && echo "(c:$cenv) "
 }
 
+function mounted_info() {
+    if [[ "$PWD" == */mnt/* ]]; then
+        mounted=' (Mounted)'
+    else
+        mounted=''
+    fi
+    [[ -n "$mounted" ]] && echo "$mounted"
+}
+
 # disable the default virtualenv prompt change
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 
 function __ps_line_1
 {
-    echo "${IGreen}\$(conda_info)${IYellow}\$(virtualenv_info)${IRed}\h:${ICyan}\w${IMagenta}"'$(__git_ps1 " (%s)")'
+    echo "${IGreen}\$(conda_info)${IYellow}\$(virtualenv_info)${IRed}\h:${ICyan}\w${IGreen}\$(mounted_info)${IMagenta}"'$(__git_ps1 " (%s)")'
 }
 
 function __ps_line_2
@@ -120,6 +129,20 @@ function gpull
 function gpush
 {
     git push -u origin "$@"
+}
+
+function mnt
+{
+    if [[ -n "$1" ]]; then
+        sshfs kohenc@"$1":/home/kohenc ~/mnt/"$1"
+    fi
+}
+
+function umnt
+{
+    if [[ -n "$1" ]]; then
+        umount ~/mnt/"$1"
+    fi
 }
 
 function pd
