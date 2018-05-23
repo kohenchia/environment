@@ -3,7 +3,7 @@ source ~/bitbucket/environment/git-prompt.sh
 
 # Colors
 export CLICOLOR=1
-export LSCOLORS=gxFxhxDxfxhxhxhxhxcxcx
+export LSCOLORS=gxFxhxDxCxhxhxhxhxcxcx
 
 IBlack='\[\033[38;5;8m\]'
 IRed='\[\033[38;5;9m\]'
@@ -132,6 +132,15 @@ function gpush
     git push -u origin "$@"
 }
 
+function gif
+{
+    palette="/tmp/palette.png"
+    filters="fps=15,scale=320:-1:flags=lanczos"
+
+    ffmpeg -i ${1} -vf "$filters,palettegen" -y $palette
+    ffmpeg -i ${1} -i $palette -lavfi "$filters [x]; [x][1:v] paletteuse" -y output.gif
+}
+
 function mnt
 {
     if [[ -n "$1" ]]; then
@@ -201,6 +210,7 @@ alias ll='ls -alFh'
 alias home='cd ~'
 alias bb='cd ~/bitbucket'
 alias m='open -a MacVim'
+alias vsc='open -a Visual\ Studio\ Code'
 alias tmp='cd /tmp'
 alias p='python'
 
