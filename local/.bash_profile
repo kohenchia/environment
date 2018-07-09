@@ -165,6 +165,12 @@ function pd
     fi
 }
 
+# Log in to docker container
+function ssd
+{
+    docker exec -it ${1} bash
+}
+
 function ve
 {
     if [[ -n "$VIRTUAL_ENV" ]]; then
@@ -206,6 +212,7 @@ function vd
 }
 
 # Commands
+alias l='ls -alFh'
 alias ll='ls -alFh'
 alias home='cd ~'
 alias bb='cd ~/bitbucket'
@@ -213,7 +220,9 @@ alias m='open -a MacVim'
 alias vsc='open -a Visual\ Studio\ Code'
 alias tmp='cd /tmp'
 alias p='python'
+alias d='docker'
+alias dcp='docker-compose'
 
 # added by Anaconda3 5.1.0 installer
-export PATH="/anaconda3/bin:$PATH"
-. /anaconda3/etc/profile.d/conda.sh
+# export PATH="/anaconda3/bin:$PATH"
+# . /anaconda3/etc/profile.d/conda.sh
