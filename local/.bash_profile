@@ -1,6 +1,9 @@
 # Dependencies
 source ~/bitbucket/environment/git-prompt.sh
 
+# Don't generate .pyc files
+export PYTHONDONTWRITEBYTECODE=1
+
 # Colors
 export CLICOLOR=1
 export LSCOLORS=gxFxhxDxCxhxhxhxhxcxcx
@@ -77,6 +80,16 @@ function cnd
     conda deactivate
 }
 
+function drm
+{
+    docker stop ${1}; docker rm ${1}
+}
+
+function drmall
+{
+    docker ps -aq | xargs -I {} bash -c "docker stop {}; docker rm {}"
+}
+
 function ga
 {
     git add -A "$@"
@@ -115,6 +128,12 @@ function ghist
 function gl
 {
     git log "$@"
+}
+
+function glc
+{
+    echo Counting all lines in the ${1:-master} branch...
+    wc -l `git ls-tree -r ${1:-master} --name-only`
 }
 
 function gs
@@ -168,7 +187,7 @@ function pd
 # Log in to docker container
 function ssd
 {
-    docker exec -it ${1} bash
+    docker exec -e COLUMNS="`tput cols`" -e LINES="`tput lines`" -it ${1} sh -l
 }
 
 function ve
@@ -217,12 +236,15 @@ alias ll='ls -alFh'
 alias home='cd ~'
 alias bb='cd ~/bitbucket'
 alias m='open -a MacVim'
+alias a='open -a Atom'
 alias vsc='open -a Visual\ Studio\ Code'
 alias tmp='cd /tmp'
 alias p='python'
+alias p3='python3'
 alias d='docker'
 alias dcp='docker-compose'
 
 # added by Anaconda3 5.1.0 installer
 # export PATH="/anaconda3/bin:$PATH"
 # . /anaconda3/etc/profile.d/conda.sh
+
