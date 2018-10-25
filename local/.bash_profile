@@ -235,6 +235,7 @@ alias l='ls -alFh'
 alias ll='ls -alFh'
 alias home='cd ~'
 alias bb='cd ~/bitbucket'
+alias gh='cd ~/github'
 alias m='open -a MacVim'
 alias a='open -a Atom'
 alias vsc='open -a Visual\ Studio\ Code'
@@ -247,4 +248,6 @@ alias dcp='docker-compose'
 # added by Anaconda3 5.1.0 installer
 # export PATH="/anaconda3/bin:$PATH"
 # . /anaconda3/etc/profile.d/conda.sh
+
+eval "$(pyenv init -)"
 
