@@ -54,6 +54,14 @@ function mounted_info() {
     [[ -n "$mounted" ]] && echo "$mounted"
 }
 
+function ff() {
+    find . -type f -name ${@}
+}
+
+function fd() {
+    find . -type d -name ${@}
+}
+
 # disable the default virtualenv prompt change
 export VIRTUAL_ENV_DISABLE_PROMPT=1
 
@@ -68,6 +76,19 @@ function __ps_line_2
 }
 
 export PS1="$(__ps_line_1)\n$(__ps_line_2)\[$(tput sgr0)\]"
+
+# Argbash
+function argbash-docker
+{
+    #!/bin/bash
+    docker run -it --rm -v "$(pwd):/work" matejak/argbash "$@"
+}
+
+function argbash-init-docker
+{
+    #!/bin/bash
+    docker run -it -e PROGRAM=argbash-init --rm -v "$(pwd):/work" matejak/argbash "$@"
+}
 
 # Command Functions
 function cna
@@ -136,6 +157,11 @@ function glc
     wc -l `git ls-tree -r ${1:-master} --name-only`
 }
 
+function gmr
+{
+    git merge --no-commit --no-ff "$@"
+}
+
 function gs
 {
     git status -s "$@"
@@ -162,8 +188,8 @@ function gif
 
 function mnt
 {
-    if [[ -n "$1" ]]; then
-        sshfs kohenc@"$1":/home/kohenc ~/mnt/"$1"
+    if [ "$1" = "gpu" ]; then
+        sshfs ec2-user@gpu:/home/ec2-user ~/mnt/gpu
     else
         cd ~/mnt
     fi
@@ -184,10 +210,52 @@ function pd
     fi
 }
 
+# Push docker image
+function push_image
+{
+    logincmd=$(aws ecr get-login --no-include-email)
+    eval $logincmd
+    docker tag ${1:?}-service:local 980036564575.dkr.ecr.us-west-2.amazonaws.com/${1:?}-service:latest
+    docker push 980036564575.dkr.ecr.us-west-2.amazonaws.com/${1:?}-service:latest
+}
+
 # Log in to docker container
 function ssd
 {
     docker exec -e COLUMNS="`tput cols`" -e LINES="`tput lines`" -it ${1} sh -l
+}
+
+function sshswap
+{
+    pushd ~/.ssh
+    ./swap.sh
+    popd
+}
+
+# Terraform commands 
+function tf
+{
+    terraform "$@"
+}
+
+function ta
+{
+    terraform apply "$@"
+}
+
+function tp
+{
+    terraform plan "$@"
+}
+
+function twl
+{
+    terraform workspace list
+}
+
+function tws
+{
+    terraform workspace select "$@"
 }
 
 function ve
@@ -215,8 +283,12 @@ function vc
         echo "Current virtualenv: ${VIRTUAL_ENV}"
         return 1
     else
+        pyenv local 3.7.2
         virtualenv .virtualenv -p python3
         ve
+        pip install --upgrade pip
+        pip install requests arrow flake8 black
+        rm .python-version
     fi
 }
 
@@ -230,24 +302,29 @@ function vd
     fi
 }
 
-# Commands
-alias l='ls -alFh'
-alias ll='ls -alFh'
-alias home='cd ~'
-alias bb='cd ~/bitbucket'
-alias gh='cd ~/github'
-alias m='open -a MacVim'
+# Set minikube envvars
+if [ -x "$(command -v minikube)" ]; then
+    export MINIKUBE_IN_STYLE=true
+    export MINIKUBE_WANTUPDATENOTIFICATION=true
+    export MINIKUBE_REMINDERWAITPERIODINHOURS=24
+fi
+
+# Aliases
 alias a='open -a Atom'
-alias vsc='open -a Visual\ Studio\ Code'
-alias tmp='cd /tmp'
-alias p='python'
-alias p3='python3'
+alias bb='cd ~/bitbucket'
 alias d='docker'
 alias dcp='docker-compose'
-
-# added by Anaconda3 5.1.0 installer
-# export PATH="/anaconda3/bin:$PATH"
-# . /anaconda3/etc/profile.d/conda.sh
+alias gh='cd ~/github'
+alias home='cd ~'
+alias l='ls -lFh'
+alias ll='ls -alFh'
+alias m='open -a MacVim'
+alias p='python'
+alias p3='python3'
+alias tmp='cd /tmp'
+alias vsc='open -a Visual\ Studio\ Code'
 
 eval "$(pyenv init -)"
 
+# Use conda from one of the pyenv Anaconda installations
+. /Users/kohenchia/.pyenv/versions/anaconda3-5.2.0/etc/profile.d/conda.sh
