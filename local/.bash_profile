@@ -283,7 +283,10 @@ function vc
         echo "Current virtualenv: ${VIRTUAL_ENV}"
         return 1
     else
-        pyenv local 3.7.2
+        pyenv local 3.7.4
+	if [ ! -x "$(command -v virtualenv)" ]; then
+	    pip install virtualenv
+	fi
         virtualenv .virtualenv -p python3
         ve
         pip install --upgrade pip
