@@ -1,5 +1,5 @@
 # Dependencies
-source ~/bitbucket/environment/git-prompt.sh
+source ~/github/environment/git-prompt.sh
 
 # Don't generate .pyc files
 export PYTHONDONTWRITEBYTECODE=1
