@@ -283,14 +283,12 @@ function vc
         echo "Current virtualenv: ${VIRTUAL_ENV}"
         return 1
     else
-        pyenv local 3.7.4
-	if [ ! -x "$(command -v virtualenv)" ]; then
+        pyenv local 3.8.0
 	    pip install virtualenv
-	fi
         virtualenv .virtualenv -p python3
         ve
         pip install --upgrade pip
-        pip install requests arrow flake8 black
+        pip install requests arrow flake8 black mypy
         rm .python-version
     fi
 }
@@ -330,4 +328,4 @@ alias vsc='open -a Visual\ Studio\ Code'
 eval "$(pyenv init -)"
 
 # Use conda from one of the pyenv Anaconda installations
-. /Users/kohenchia/.pyenv/versions/anaconda3-5.2.0/etc/profile.d/conda.sh
+# . /Users/kohenchia/.pyenv/versions/anaconda3-5.2.0/etc/profile.d/conda.sh
