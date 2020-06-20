@@ -1,5 +1,5 @@
 # Dependencies
-source ~/bitbucket/environment/git-prompt.sh
+source ~/github/environment/git-prompt.sh
 
 # Colors
 IBlack='\[\033[38;5;8m\]'
