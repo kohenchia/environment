@@ -15,7 +15,7 @@ export ZSH="/Users/kohenchia/.oh-my-zsh"
 # load a random theme each time oh-my-zsh is loaded, in which case,
 # to know which specific one was loaded, run: echo $RANDOM_THEME
 # See https://github.com/ohmyzsh/ohmyzsh/wiki/Themes
-ZSH_THEME="robbyrussell"
+ZSH_THEME="powerlevel10k/powerlevel10k"
 
 # Set list of themes to pick from when loading at random
 # Setting this variable when ZSH_THEME=random will cause zsh to load
@@ -249,6 +249,8 @@ alias d='docker'
 alias dcp='docker-compose'
 alias gh='cd ~/github'
 alias home='cd ~'
+alias l='ls -lFh'
+alias ll='ls -alFh'
 alias m='open -a MacVim'
 alias p='python'
 alias p3='python3'
