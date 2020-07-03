@@ -249,7 +249,6 @@ function vd
 }
 
 # Aliases
-alias a='open -a Atom'
 alias bb='cd ~/bitbucket'
 alias d='docker'
 alias dcp='docker-compose'
@@ -257,11 +256,17 @@ alias gh='cd ~/github'
 alias home='cd ~'
 alias l='ls -lFh'
 alias ll='ls -alFh'
-alias m='open -a MacVim'
 alias p='python'
 alias p3='python3'
 alias tmp='cd /tmp'
-alias vsc='open -a Visual\ Studio\ Code'
+
+# Application shortcuts
+if [ "$(uname 2> /dev/null)" != "Linux" ]; then
+    # Not Linux, assumed to be OSX
+    alias a='open -a Atom'
+    alias m='open -a MacVim'
+    alias vsc='open -a Visual\ Studio\ Code'
+fi
 
 eval "$(pyenv init -)"
 
