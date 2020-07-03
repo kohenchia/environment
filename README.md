@@ -10,8 +10,7 @@ Change your default shell to `zsh`:
 chsh -s /bin/zsh
 ```
 
-Install [oh-my-zsh](https://ohmyz.sh)
-j:
+Install [oh-my-zsh](https://ohmyz.sh):
 
 ```
 sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
@@ -26,7 +25,7 @@ git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-~
 ### Installation
 
 ```
-$ git clone git@github.com:kohenchia/environment.git
-$ cd environment
-$ ./setup.sh
+git clone git@github.com:kohenchia/environment.git
+cd environment
+./setup.sh
 ```
