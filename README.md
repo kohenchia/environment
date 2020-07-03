@@ -6,12 +6,12 @@ Contains scripts for setting up a new development environment.
 
 Change your default shell to `zsh`:
 ```
-$ chsh -s /bin/zsh
+chsh -s /bin/zsh
 ```
 
 Install [oh-my-zsh](https://ohmyz.sh)
 ```
-$ sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
 ```
 
 Install [powerlevel10k](https://github.com/romkatv/powerlevel10k#oh-my-zsh)
