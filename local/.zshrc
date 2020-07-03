@@ -9,7 +9,13 @@ fi
 # export PATH=$HOME/bin:/usr/local/bin:$PATH
 
 # Path to your oh-my-zsh installation.
-export ZSH="/Users/kohenchia/.oh-my-zsh"
+if [ "$(uname 2> /dev/null)" != "Linux" ]; then
+    # Not Linux, assumed to be OSX
+    export ZSH="/Users/kohenchia/.oh-my-zsh"
+else
+    # Linux
+    export ZSH="/home/kohenchia/.oh-my-zsh"
+fi
 
 # Set name of the theme to load --- if set to "random", it will
 # load a random theme each time oh-my-zsh is loaded, in which case,
