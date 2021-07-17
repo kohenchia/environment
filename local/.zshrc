@@ -252,6 +252,7 @@ function vd
 alias bb='cd ~/bitbucket'
 alias d='docker'
 alias dcp='docker-compose'
+alias dev='cd ~/development'
 alias gh='cd ~/github'
 alias home='cd ~'
 alias l='ls -lFh'
@@ -259,6 +260,8 @@ alias ll='ls -alFh'
 alias p='python'
 alias p3='python3'
 alias tmp='cd /tmp'
+alias rn='npx react-native'
+alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
 
 # Application shortcuts
 if [ "$(uname 2> /dev/null)" != "Linux" ]; then
@@ -270,3 +273,4 @@ fi
 
 eval "$(pyenv init -)"
 
+export PATH="/usr/local/opt/ruby/bin:$PATH"

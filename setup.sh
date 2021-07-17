@@ -11,6 +11,7 @@ link_file() {
 }
 
 link_file local/.zshrc ~/.zshrc
+link_file local/.zprofile ~/.zprofile
 link_file vim/.vimrc ~/.vimrc
 link_file vim/.gvimrc ~/.gvimrc
 
