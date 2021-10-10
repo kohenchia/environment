@@ -228,11 +228,11 @@ function vc
         echo "Current virtualenv: ${VIRTUAL_ENV}"
         return 1
     else
-        pyenv local 3.8.1
+        pyenv local 3.10.0
+        pip install --upgrade pip
 	    pip install virtualenv
         virtualenv .virtualenv -p python3
         ve
-        pip install --upgrade pip
         pip install requests arrow flake8 black mypy
         rm .python-version
     fi
