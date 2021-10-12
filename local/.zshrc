@@ -118,6 +118,10 @@ source ~/.oh-my-zsh/custom/themes/powerlevel10k/powerlevel10k.zsh-theme
 # ====================================
 # Custom
 
+function drawline() {
+    printf %"$COLUMNS"s | tr " " "-"
+}
+
 function ff() {
     find . -type f -name ${@}
 }
@@ -225,14 +229,27 @@ function ve
 function vc
 {
     if [[ -n "$VIRTUAL_ENV" ]]; then
-        echo "Current virtualenv: ${VIRTUAL_ENV}"
+        echo "You are already in a virtualenv: ${VIRTUAL_ENV}"
         return 1
     fi
 
-    pyenv local $1
+    if ! type "pyenv" > /dev/null 2>&1; then
+        "Please first install pyenv on your system."
+        return 1
+    fi
 
-    if [[ $? = 1 ]]; then
-        echo "Target python version ${1} not found. Exiting vc."
+    if [[ -z $1 ]]; then
+        echo "Usage: vc <python_version>"
+        echo ""
+        echo "Available Python versions:"
+        pyenv versions
+        return 1
+    fi
+
+    if ! pyenv local $1; then
+        echo ""
+        echo "Available Python versions:"
+        pyenv versions
         return 1
     fi
 
@@ -242,11 +259,11 @@ function vc
     # Create the virtualenv
     virtualenv .virtualenv -p python3
 
-    # Upgrade the virtualenv's version of pip
-    pip install --upgrade pip
-
     # Activate the virtualenv
     ve
+
+    # Upgrade the virtualenv's version of pip
+    pip install --upgrade pip
 
     # Install additional stuff
     pip install requests arrow flake8 black mypy
