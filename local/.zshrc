@@ -227,15 +227,21 @@ function vc
     if [[ -n "$VIRTUAL_ENV" ]]; then
         echo "Current virtualenv: ${VIRTUAL_ENV}"
         return 1
-    else
-        pyenv local 3.10.0
-        pip install --upgrade pip
-	    pip install virtualenv
-        virtualenv .virtualenv -p python3
-        ve
-        pip install requests arrow flake8 black mypy
-        rm .python-version
     fi
+
+    pyenv local $1
+
+    if [[ $? = 1 ]]; then
+        echo "Target python version ${1} not found. Exiting vc."
+        return 1
+    fi
+
+    pip install --upgrade pip
+    pip install virtualenv
+    virtualenv .virtualenv -p python3
+    ve
+    pip install requests arrow flake8 black mypy
+    rm .python-version
 }
 
 function vd
