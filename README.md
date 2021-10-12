@@ -1,6 +1,6 @@
 # kohenchia/environment
 
-Contains scripts for setting up a new development environment.
+Contains scripts for setting up a new development environment on OSX.
 
 ### First-time setup
 
