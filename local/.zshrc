@@ -236,11 +236,22 @@ function vc
         return 1
     fi
 
-    pip install --upgrade pip
-    pip install virtualenv
+    # Upgrade pyenv's version of virtualenv and pip
+    pip install --upgrade virtualenv pip
+
+    # Create the virtualenv
     virtualenv .virtualenv -p python3
+
+    # Upgrade the virtualenv's version of pip
+    pip install --upgrade pip
+
+    # Activate the virtualenv
     ve
+
+    # Install additional stuff
     pip install requests arrow flake8 black mypy
+
+    # Cleanup: Remove pyenv reference since we are now using the virtualenv
     rm .python-version
 }
 
