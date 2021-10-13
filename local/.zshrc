@@ -284,6 +284,7 @@ function vd
 
 # Aliases
 alias bb='cd ~/bitbucket'
+alias cf='caffeinate'
 alias d='docker'
 alias dcp='docker-compose'
 alias dev='cd ~/development'
