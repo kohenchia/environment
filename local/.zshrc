@@ -282,6 +282,9 @@ function vd
     fi
 }
 
+# Setting options
+setopt PUSHDSILENT
+
 # Aliases
 alias bb='cd ~/bitbucket'
 alias cf='caffeinate'
