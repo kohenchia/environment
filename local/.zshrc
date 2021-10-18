@@ -288,6 +288,7 @@ setopt PUSHDSILENT
 # Aliases
 alias bb='cd ~/bitbucket'
 alias cf='caffeinate'
+alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
 alias d='docker'
 alias dcp='docker-compose'
 alias dev='cd ~/development'
