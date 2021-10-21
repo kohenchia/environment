@@ -299,6 +299,7 @@ alias ll='ls -alFh'
 alias p='python'
 alias p3='python3'
 alias tmp='cd /tmp'
+alias wt='watson'
 alias rn='npx react-native'
 alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
 
