@@ -263,4 +263,6 @@ fi
 
 eval "$(pyenv init -)"
 
+source ~/.zshrc_work
+
 export PATH="/usr/local/opt/ruby/bin:$PATH"
