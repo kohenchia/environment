@@ -130,77 +130,25 @@ function fd() {
     find . -type d -name ${@}
 }
 
+# Git aliases
 unalias ga
-function ga
-{
-    git add -A "$@"
-}
-
-unalias gb
-function gb
-{
-    git branch "$@"
-}
-
+alias ga='git add -A'
 unalias gc
-function gc
-{
-    git commit -m "$@"
-}
-
+alias gc='git commit -v -m'  # This will force a commit message to be provided
 unalias gd
-function gd
-{
-    git diff "$@"
-}
-
-function gch
-{
-    git checkout "$@"
-}
-
-unalias gf
-function gf
-{
-    git fetch --prune
-}
-
-function ghist
-{
-    git log --pretty=format:'%h %ad | %s%d [%an]' --graph --date=short
-}
-
-unalias gl
-function gl
-{
-    git log "$@"
-}
-
+alias gd='git diff -w "$@"'
+alias ghist="git log --pretty=format:'%h %ad | %s%d [%an]' --graph --date=short"
 function glc
 {
     echo Counting all lines in the ${1:-master} branch...
     wc -l `git ls-tree -r ${1:-master} --name-only`
 }
-
-function gmr
-{
-    git merge --no-commit --no-ff "$@"
-}
-
-function gs
-{
-    git status -s "$@"
-}
-
-function gpull
-{
-    git fetch origin && git rebase -p origin/"$@"
-}
-
-function gpush
-{
-    git push -u origin "$@"
-}
+unalias gm
+alias gm='git merge --no-commit --no-ff'
+alias gpush='git push -u origin "$@"'
+alias gs='git status -s'
+unalias gup
+alias gup='git fetch --prune && git rebase -r'
 
 function ssd
 {
