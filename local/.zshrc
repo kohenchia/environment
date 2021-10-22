@@ -133,6 +133,8 @@ function fd() {
 # Git aliases
 unalias ga
 alias ga='git add -A'
+unalias gb
+alias gb='git branch -avv'
 unalias gc
 alias gc='git commit -v -m'  # This will force a commit message to be provided
 unalias gd
