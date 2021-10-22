@@ -194,7 +194,7 @@ function gs
 
 function gpull
 {
-    git pull origin "$@"
+    git fetch origin && git rebase -p origin/"$@"
 }
 
 function gpush
