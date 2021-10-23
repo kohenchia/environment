@@ -248,10 +248,15 @@ alias l='ls -lFh'
 alias ll='ls -alFh'
 alias p='python'
 alias p3='python3'
-alias tmp='cd /tmp'
-alias wt='watson'
 alias rn='npx react-native'
 alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
+alias tmp='cd /tmp'
+alias wt='watson'
+
+function gt() {
+    branch=`git branch 2> /dev/null | sed -n -e 's/^\* \(.*\)/\1/p'`
+    git ls-tree -r --name-only ${1:-${branch}}
+}
 
 # Application shortcuts
 if [ "$(uname 2> /dev/null)" != "Linux" ]; then
