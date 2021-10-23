@@ -263,6 +263,10 @@ fi
 
 eval "$(pyenv init -)"
 
-source ~/.zshrc_work
-
 export PATH="/usr/local/opt/ruby/bin:$PATH"
+
+# Work stuff
+if [[ -e "/Users/kohenchia/.zshrc_work" ]]; then
+    source /Users/kohenchia/.zshrc_work
+fi
+
