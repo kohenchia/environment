@@ -216,7 +216,7 @@ function vc
     pip install --upgrade pip
 
     # Install additional stuff
-    pip install requests arrow flake8 black mypy
+    pip install pipdeptree requests arrow flake8 black mypy
 
     # Cleanup: Remove pyenv reference since we are now using the virtualenv
     rm .python-version
@@ -248,6 +248,7 @@ alias l='ls -lFh'
 alias ll='ls -alFh'
 alias p='python'
 alias p3='python3'
+alias pdt='pipdeptree'
 alias rn='npx react-native'
 alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
 alias tmp='cd /tmp'
