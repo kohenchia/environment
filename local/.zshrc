@@ -118,6 +118,8 @@ source ~/.oh-my-zsh/custom/themes/powerlevel10k/powerlevel10k.zsh-theme
 # ====================================
 # Custom
 
+export POWERLEVEL9K_COMMAND_EXECUTION_TIME_THRESHOLD=0
+
 function drawline() {
     printf %"$COLUMNS"s | tr " " "-"
 }
@@ -267,6 +269,10 @@ if [ "$(uname 2> /dev/null)" != "Linux" ]; then
     alias m='open -a MacVim'
     alias vsc='open -a Visual\ Studio\ Code'
 fi
+
+# Thid will ensure pyenv always installs Python as a framework,
+# which is required for some libraries like matplotlib to control native UI elements
+export PYTHON_CONFIGURE_OPTS="--enable-framework"
 
 eval "$(pyenv init -)"
 

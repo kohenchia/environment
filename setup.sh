@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env zsh
 
 link_file() {
     if [ -f "${2}" ]; then
