@@ -149,7 +149,7 @@ function glc
 }
 unalias gm
 alias gm='git merge --no-commit --no-ff'
-alias gpush='git push -u origin "$@"'
+alias gpush='git push -f -u origin "$@"'
 alias gs='git status -s'
 unalias gup
 alias gup='git fetch --prune && git rebase -r'
