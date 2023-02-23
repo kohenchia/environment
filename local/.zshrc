@@ -149,10 +149,13 @@ function glc
 }
 unalias gm
 alias gm='git merge --no-commit --no-ff'
-alias gpush='git push -f -u origin "$@"'
+alias gpush='git push -f --tags -u origin "$@"'
 alias gs='git status -s'
 unalias gup
 alias gup='git fetch --prune && git rebase -r'
+
+# k8s
+alias k='kubectl'
 
 function ssd
 {
@@ -284,3 +287,7 @@ if [[ -e "/Users/kohenchia/.zshrc_work" ]]; then
     source /Users/kohenchia/.zshrc_work
 fi
 
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
