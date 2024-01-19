@@ -279,7 +279,7 @@ fi
 
 # Thid will ensure pyenv always installs Python as a framework,
 # which is required for some libraries like matplotlib to control native UI elements
-export PYTHON_CONFIGURE_OPTS="--enable-framework"
+# export PYTHON_CONFIGURE_OPTS="--enable-framework"
 
 eval "$(pyenv init -)"
 
