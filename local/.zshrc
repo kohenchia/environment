@@ -220,8 +220,11 @@ function vc
     # Upgrade the virtualenv's version of pip
     pip install --upgrade pip
 
-    # Install additional stuff
-    pip install pipdeptree requests arrow flake8 black mypy
+    # Install additional tools
+    pip install pipdeptree
+
+    # Install dev stuff: Code linting / type-checking
+    pip install ruff mypy
 
     # Cleanup: Remove pyenv reference since we are now using the virtualenv
     rm .python-version
