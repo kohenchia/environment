@@ -1,0 +1,30 @@
+{
+    "vim.normalModeKeyBindingsNonRecursive": [
+        {
+            "before": ["<space>"],
+            "after": ["z", "z"]
+        },
+        {
+            "before": ["<C-j>"],
+            "after": ["2", "<C-e>", "2", "j"]
+        },
+        {
+            "before": ["<C-k>"],
+            "after": ["2", "<C-y>", "2", "k"]
+        }
+    ],
+    "vim.visualModeKeyBindingsNonRecursive": [
+        {
+            "before": ["<space>"],
+            "after": ["z", "z"]
+        },
+        {
+            "before": ["<C-j>"],
+            "after": ["2", "<C-e>", "2", "j"]
+        },
+        {
+            "before": ["<C-k>"],
+            "after": ["2", "<C-y>", "2", "k"]
+        }
+    ]
+}
