@@ -26,5 +26,9 @@
             "before": ["<C-k>"],
             "after": ["2", "<C-y>", "2", "k"]
         }
-    ]
+    ],
+    "editor.renderLineHighlight": "all",
+    "workbench.colorCustomizations": {
+        "editor.lineHighlightBackground": "#333333"
+    }
 }
