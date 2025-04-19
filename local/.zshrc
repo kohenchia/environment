@@ -152,7 +152,7 @@ alias gm='git merge --no-commit --no-ff'
 alias gpush='git push -f --tags -u origin "$@"'
 alias gs='git status -s'
 unalias gup
-alias gup='git fetch --prune origin  && git fetch --prune origin "+refs/tags/*:refs/tags/*" && git rebase -r'
+alias gup='git fetch --prune origin & git rebase -r'
 
 # k8s
 alias k='kubectl'
@@ -173,7 +173,7 @@ function ve
             curdir=${curdir%/*}
         done
         if [[ -d "${curdir}/.virtualenv" ]]; then
-            . "${curdir}/.virtualenv/bin/activate"
+# . "${curdir}/.virtualenv/bin/activate"  # commented out by conda initialize
         else
             echo "Virtualenv not found in the hierarchy $(pwd)"
             return 1
@@ -293,3 +293,23 @@ fi
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
 [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+
+# >>> conda initialize >>>
+# !! Contents within this block are managed by 'conda init' !!
+__conda_setup="$('/home/kohenchia/miniforge3/bin/conda' 'shell.zsh' 'hook' 2> /dev/null)"
+if [ $? -eq 0 ]; then
+    eval "$__conda_setup"
+else
+    if [ -f "/home/kohenchia/miniforge3/etc/profile.d/conda.sh" ]; then
+        . "/home/kohenchia/miniforge3/etc/profile.d/conda.sh"
+    else
+        export PATH="/home/kohenchia/miniforge3/bin:$PATH"
+    fi
+fi
+unset __conda_setup
+
+if [ -f "/home/kohenchia/miniforge3/etc/profile.d/mamba.sh" ]; then
+    . "/home/kohenchia/miniforge3/etc/profile.d/mamba.sh"
+fi
+# <<< conda initialize <<<
+
