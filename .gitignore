@@ -1,3 +1,4 @@
 .virtualenv/
 .git/
 .DS_Store
+*.swp
