@@ -245,6 +245,8 @@ setopt PUSHDSILENT
 
 # Aliases
 alias bb='cd ~/bitbucket'
+alias ca="conda activate"
+alias cda="conda deactivate"
 alias cf='caffeinate'
 alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
 alias d='docker'
@@ -256,9 +258,8 @@ alias l='ls -lFh'
 alias ll='ls -alFh'
 alias p='python'
 alias p3='python3'
-alias pdp='pipdeptree'
 alias pdt='pipdeptree'
-alias pvd='echo Starting debupy server at port 17778. Waiting for client...; p -ic "import debugpy; debugpy.listen(17778); debugpy.wait_for_client()"; print("Connected.")'
+alias pvd='echo Starting debugpy server at port 17778. Waiting for client...; p -ic "import debugpy; debugpy.listen(17778); debugpy.wait_for_client()"; print("Connected.")'
 alias rn='npx react-native'
 alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
 alias tmp='cd /tmp'
@@ -267,6 +268,16 @@ alias wt='watson'
 function gt() {
     branch=`git branch 2> /dev/null | sed -n -e 's/^\* \(.*\)/\1/p'`
     git ls-tree -r --name-only ${1:-${branch}}
+}
+
+# Conda
+function c() {
+    if command -v conda >/dev/null 2>&1; then
+        eval "$(conda shell.zsh hook)"
+    else
+        echo "conda not found. You cannot use the c() function to initialize conda."
+        exit 1
+    fi
 }
 
 # Application shortcuts
