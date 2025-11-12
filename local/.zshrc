@@ -281,9 +281,6 @@ function vc
         
         # Activate the virtual environment
         source "$env_path/bin/activate"
-        
-        # Sync to ensure all commands use the right uv variant
-        uv sync
     else
         # Local .venv environment
         if [[ -d ".venv" ]]; then
@@ -307,9 +304,6 @@ function vc
         
         # Activate the virtual environment
         source .venv/bin/activate
-        
-        # Sync to ensure all commands use the right uv variant
-        uv sync
     fi
 }
 
