@@ -22,10 +22,10 @@ $ Install [powerlevel10k](https://github.com/romkatv/powerlevel10k#oh-my-zsh):
 $ git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/themes/powerlevel10k
 ```
 
-$ Install [pyenv](https://github.com/pyenv/pyenv)
+$ Install [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer)
 
 ```
-$ brew install pyenv
+$ brew install uv
 ```
 
 ### Installation
