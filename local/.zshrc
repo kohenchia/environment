@@ -256,6 +256,7 @@ alias gh='cd ~/github'
 alias home='cd ~'
 alias l='ls -lFh'
 alias ll='ls -alFh'
+alias mkdv='uv pip install -e ".[dev]"'
 alias p='python'
 alias p3='python3'
 alias pdt='pipdeptree'
@@ -301,6 +302,6 @@ if [[ -e "/Users/kohenchia/.zshrc_work" ]]; then
     source /Users/kohenchia/.zshrc_work
 fi
 
-export NVM_DIR="$HOME/.nvm"
-[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
-[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
+# export NVM_DIR="$HOME/.nvm"
+# [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+# [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"  # This loads nvm bash_completion
