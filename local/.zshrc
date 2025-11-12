@@ -359,21 +359,45 @@ function vls
     fi
     
     echo ""
-    echo "Local environment in current directory:"
-    if [[ -d ".venv" ]]; then
-        local env_path="$(pwd)/.venv"
+    
+    # Check if there's an active environment that's not managed by uv
+    local is_managed_env=0
+    if [[ -n "$VIRTUAL_ENV" ]]; then
+        # Check if it's a named environment in ~/.uv/
+        if [[ "$VIRTUAL_ENV" == "$HOME/.uv/"* ]]; then
+            is_managed_env=1
+        fi
+        # Check if it's the local .venv in current directory
+        if [[ "$VIRTUAL_ENV" == "$(pwd)/.venv" ]]; then
+            is_managed_env=1
+        fi
+    fi
+    
+    # If active environment is not managed, show it instead of local environment
+    if [[ -n "$VIRTUAL_ENV" ]] && [[ $is_managed_env -eq 0 ]]; then
+        echo "Active environment (not managed by uv):"
         local python_version=""
-        if [[ -x ".venv/bin/python" ]]; then
-            python_version=$(".venv/bin/python" --version 2>&1 | awk '{print $2}')
+        if [[ -x "$VIRTUAL_ENV/bin/python" ]]; then
+            python_version=$("$VIRTUAL_ENV/bin/python" --version 2>&1 | awk '{print $2}')
         fi
-        
-        if [[ "$VIRTUAL_ENV" == "$env_path" ]]; then
-            echo "  ${GREEN}* .venv${NC} ${GRAY}(Python $python_version)${NC}"
-        else
-            echo "    ${YELLOW}.venv${NC} ${GRAY}(Python $python_version)${NC}"
-        fi
+        echo "  ${GREEN}* $VIRTUAL_ENV${NC} ${GRAY}(Python $python_version)${NC}"
     else
-        echo "  (none)"
+        echo "Local environment in current directory:"
+        if [[ -d ".venv" ]]; then
+            local env_path="$(pwd)/.venv"
+            local python_version=""
+            if [[ -x ".venv/bin/python" ]]; then
+                python_version=$(".venv/bin/python" --version 2>&1 | awk '{print $2}')
+            fi
+            
+            if [[ "$VIRTUAL_ENV" == "$env_path" ]]; then
+                echo "  ${GREEN}* .venv${NC} ${GRAY}(Python $python_version)${NC}"
+            else
+                echo "    ${YELLOW}.venv${NC} ${GRAY}(Python $python_version)${NC}"
+            fi
+        else
+            echo "  (none)"
+        fi
     fi
 }
 
