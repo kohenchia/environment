@@ -164,79 +164,271 @@ function ssd
 
 function ve
 {
-    if [[ -n "$VIRTUAL_ENV" ]]; then
-        echo "Current virtualenv: ${VIRTUAL_ENV}"
+    # ANSI color codes
+    local RED='\033[0;31m'
+    local YELLOW='\033[0;33m'
+    local NC='\033[0m' # No Color
+    
+    if ! type "uv" > /dev/null 2>&1; then
+        echo "${RED}Error: Please first install uv on your system.${NC}"
         return 1
-    else
-        local curdir=`pwd`
-        while [[ ! -d "${curdir}/.virtualenv" && -n "${curdir}" ]]; do
-            curdir=${curdir%/*}
-        done
-        if [[ -d "${curdir}/.virtualenv" ]]; then
-            . "${curdir}/.virtualenv/bin/activate"
-        else
-            echo "Virtualenv not found in the hierarchy $(pwd)"
+    fi
+
+    if [[ -n "$1" ]]; then
+        # Named environment at ~/.uv/<arg>
+        local env_path="$HOME/.uv/$1"
+        
+        if [[ ! -d "$env_path" ]]; then
+            echo "${RED}Error: Environment '$1' does not exist at $env_path${NC}"
             return 1
         fi
+        
+        # Check if already in this environment
+        if [[ "$VIRTUAL_ENV" == "$env_path" ]]; then
+            echo "${YELLOW}Warning: Already using environment '$1'${NC}"
+            return 0
+        fi
+        
+        # Deactivate current environment if any
+        if [[ -n "$VIRTUAL_ENV" ]]; then
+            deactivate
+        fi
+        
+        # Activate the environment
+        source "$env_path/bin/activate"
+    else
+        # Local .venv environment
+        if [[ ! -d ".venv" ]]; then
+            echo "${RED}Error: No local .venv folder found${NC}"
+            echo "${YELLOW}Suggestion: Switch to a folder with a .venv folder, or provide an environment name (e.g., ve myenv)${NC}"
+            return 1
+        fi
+        
+        local env_path="$(pwd)/.venv"
+        
+        # Check if already in this environment
+        if [[ "$VIRTUAL_ENV" == "$env_path" ]]; then
+            echo "${YELLOW}Warning: Already in this environment${NC}"
+            return 0
+        fi
+        
+        # Deactivate current environment if any
+        if [[ -n "$VIRTUAL_ENV" ]]; then
+            deactivate
+        fi
+        
+        # Activate the environment
+        source .venv/bin/activate
     fi
 }
 
 function vc
 {
-    if [[ -n "$VIRTUAL_ENV" ]]; then
-        echo "You are already in a virtualenv: ${VIRTUAL_ENV}"
+    # ANSI color codes
+    local RED='\033[0;31m'
+    local YELLOW='\033[0;33m'
+    local NC='\033[0m' # No Color
+    
+    if ! type "uv" > /dev/null 2>&1; then
+        echo "${RED}Error: Please first install uv on your system.${NC}"
         return 1
     fi
 
-    if ! type "pyenv" > /dev/null 2>&1; then
-        "Please first install pyenv on your system."
-        return 1
+    # Parse arguments
+    local env_name=""
+    local python_version=""
+    
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -p|--python)
+                python_version="$2"
+                shift 2
+                ;;
+            *)
+                env_name="$1"
+                shift
+                ;;
+        esac
+    done
+
+    # Build uv venv command with optional python version
+    local uv_cmd="uv venv"
+    if [[ -n "$python_version" ]]; then
+        uv_cmd="$uv_cmd --python $python_version"
     fi
 
-    if [[ -z $1 ]]; then
-        echo "Usage: vc <python_version>"
-        echo ""
-        echo "Available Python versions:"
-        pyenv versions
-        return 1
+    if [[ -n "$env_name" ]]; then
+        # Named environment at ~/.uv/<arg>
+        local env_path="$HOME/.uv/$env_name"
+        
+        if [[ -d "$env_path" ]]; then
+            echo "${RED}Error: Environment '$env_name' already exists at $env_path${NC}"
+            return 1
+        fi
+        
+        # Deactivate current environment if any
+        if [[ -n "$VIRTUAL_ENV" ]]; then
+            echo "Deactivating current environment: ${VIRTUAL_ENV}"
+            deactivate
+        fi
+        
+        # Create the virtual environment
+        eval "$uv_cmd \"$env_path\""
+        if [[ $? -ne 0 ]]; then
+            echo "${RED}Error: Failed to create virtual environment${NC}"
+            return 1
+        fi
+        
+        # Activate the virtual environment
+        source "$env_path/bin/activate"
+        
+        # Sync to ensure all commands use the right uv variant
+        uv sync
+    else
+        # Local .venv environment
+        if [[ -d ".venv" ]]; then
+            echo "${RED}Error: A local environment already exists at .venv${NC}"
+            echo "${YELLOW}Suggestion: Provide a name to create a named environment instead (e.g., vc myenv)${NC}"
+            return 1
+        fi
+        
+        # Deactivate current environment if any
+        if [[ -n "$VIRTUAL_ENV" ]]; then
+            echo "Deactivating current environment: ${VIRTUAL_ENV}"
+            deactivate
+        fi
+        
+        # Create the virtual environment
+        eval "$uv_cmd .venv"
+        if [[ $? -ne 0 ]]; then
+            echo "${RED}Error: Failed to create virtual environment${NC}"
+            return 1
+        fi
+        
+        # Activate the virtual environment
+        source .venv/bin/activate
+        
+        # Sync to ensure all commands use the right uv variant
+        uv sync
     fi
-
-    if ! pyenv local $1; then
-        echo ""
-        echo "Available Python versions:"
-        pyenv versions
-        return 1
-    fi
-
-    # Upgrade pyenv's version of virtualenv and pip
-    pip install --upgrade virtualenv pip
-
-    # Create the virtualenv
-    virtualenv .virtualenv -p python3
-
-    # Activate the virtualenv
-    ve
-
-    # Upgrade the virtualenv's version of pip
-    pip install --upgrade pip
-
-    # Install additional tools
-    pip install pipdeptree
-
-    # Install dev stuff: Code linting / type-checking
-    pip install ruff mypy
-
-    # Cleanup: Remove pyenv reference since we are now using the virtualenv
-    rm .python-version
 }
 
 function vd
 {
+    # ANSI color codes
+    local RED='\033[0;31m'
+    local NC='\033[0m' # No Color
+    
     if [[ -n "$VIRTUAL_ENV" ]]; then
         deactivate
     else
-        echo "Not currently in a virtualenv"
+        echo "${RED}Error: Not currently in a virtualenv${NC}"
         return 1
+    fi
+}
+
+function vls
+{
+    # ANSI color codes
+    local RED='\033[0;31m'
+    local GREEN='\033[0;32m'
+    local YELLOW='\033[0;33m'
+    local GRAY='\033[0;90m'
+    local NC='\033[0m' # No Color
+    
+    echo "Named environments in ~/.uv/:"
+    if [[ -d "$HOME/.uv" ]]; then
+        local found=0
+        # Use nullglob to handle empty directories without errors
+        setopt local_options nullglob
+        for env in "$HOME/.uv"/*; do
+            if [[ -d "$env" ]]; then
+                local env_name=$(basename "$env")
+                local python_version=""
+                if [[ -x "$env/bin/python" ]]; then
+                    python_version=$("$env/bin/python" --version 2>&1 | awk '{print $2}')
+                fi
+                
+                if [[ "$VIRTUAL_ENV" == "$env" ]]; then
+                    echo "  ${GREEN}* $env_name${NC} ${GRAY}(Python $python_version)${NC}"
+                else
+                    echo "    ${YELLOW}$env_name${NC} ${GRAY}(Python $python_version)${NC}"
+                fi
+                found=1
+            fi
+        done
+        if [[ $found -eq 0 ]]; then
+            echo "  (none)"
+        fi
+    else
+        echo "  (none)"
+    fi
+    
+    echo ""
+    echo "Local environment in current directory:"
+    if [[ -d ".venv" ]]; then
+        local env_path="$(pwd)/.venv"
+        local python_version=""
+        if [[ -x ".venv/bin/python" ]]; then
+            python_version=$(".venv/bin/python" --version 2>&1 | awk '{print $2}')
+        fi
+        
+        if [[ "$VIRTUAL_ENV" == "$env_path" ]]; then
+            echo "  ${GREEN}* .venv${NC} ${GRAY}(Python $python_version)${NC}"
+        else
+            echo "    ${YELLOW}.venv${NC} ${GRAY}(Python $python_version)${NC}"
+        fi
+    else
+        echo "  (none)"
+    fi
+}
+
+function vrm
+{
+    # ANSI color codes
+    local RED='\033[0;31m'
+    local YELLOW='\033[0;33m'
+    local NC='\033[0m' # No Color
+    
+    if [[ -n "$1" ]]; then
+        # Named environment at ~/.uv/<arg>
+        local env_path="$HOME/.uv/$1"
+        
+        if [[ ! -d "$env_path" ]]; then
+            echo "${RED}Error: Environment '$1' does not exist at $env_path${NC}"
+            return 1
+        fi
+        
+        # Deactivate if currently active
+        if [[ "$VIRTUAL_ENV" == "$env_path" ]]; then
+            echo "Deactivating environment '$1'..."
+            deactivate
+        fi
+        
+        # Delete the environment
+        echo "Deleting environment '$1' at $env_path..."
+        rm -rf "$env_path"
+        echo "Environment '$1' has been deleted."
+    else
+        # Local .venv environment
+        if [[ ! -d ".venv" ]]; then
+            echo "${RED}Error: No local .venv folder found${NC}"
+            echo "${YELLOW}Suggestion: Switch to a folder with a .venv folder, or provide an environment name (e.g., vrm myenv)${NC}"
+            return 1
+        fi
+        
+        local env_path="$(pwd)/.venv"
+        
+        # Deactivate if currently active
+        if [[ "$VIRTUAL_ENV" == "$env_path" ]]; then
+            echo "Deactivating local environment..."
+            deactivate
+        fi
+        
+        # Delete the environment
+        echo "Deleting local .venv environment..."
+        rm -rf .venv
+        echo "Local .venv environment has been deleted."
     fi
 }
 
