@@ -151,7 +151,6 @@ unalias gm
 alias gm='git merge --no-commit --no-ff'
 alias gpush='git push -f --tags -u origin "$@"'
 alias gs='git status -s'
-unalias gup
 alias gup='git fetch --prune origin  && git fetch --prune origin "+refs/tags/*:refs/tags/*" && git rebase -r'
 
 # k8s
@@ -458,11 +457,11 @@ alias bb='cd ~/bitbucket'
 alias ca="conda activate"
 alias cda="conda deactivate"
 alias cf='caffeinate'
+alias cg='cd ~/github'
 alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
 alias d='docker'
 alias dcp='docker-compose'
 alias dev='cd ~/development'
-alias gh='cd ~/github'
 alias home='cd ~'
 alias l='ls -lFh'
 alias ll='ls -alFh'
@@ -474,6 +473,7 @@ alias pvd='echo Starting debugpy server at port 17778. Waiting for client...; p 
 alias rn='npx react-native'
 alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
 alias tmp='cd /tmp'
+alias ur='uv run'
 alias wt='watson'
 
 function gt() {
