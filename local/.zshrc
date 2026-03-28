@@ -499,11 +499,7 @@ if [ "$(uname 2> /dev/null)" != "Linux" ]; then
     alias vsc='open -a Visual\ Studio\ Code'
 fi
 
-# Thid will ensure pyenv always installs Python as a framework,
-# which is required for some libraries like matplotlib to control native UI elements
-export PYTHON_CONFIGURE_OPTS="--enable-framework"
-
-eval "$(pyenv init -)"
+export PATH="$HOME/.local/bin:$PATH"
 
 export PATH="/usr/local/opt/ruby/bin:$PATH"
 
