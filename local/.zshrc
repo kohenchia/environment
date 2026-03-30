@@ -508,6 +508,228 @@ if [[ -e "/Users/kohenchia/.zshrc_work" ]]; then
     source /Users/kohenchia/.zshrc_work
 fi
 
+# ── Git Worktree helpers ──────────────────────────────────────────────
+# Work on multiple features in parallel without stashing or branch-switching.
+#
+# Usage:
+#   wta <repo> <branch> [base]    Create a worktree and cd into it
+#   wtl [repo]                    List active worktrees
+#   wtc <repo> <branch>           cd into an existing worktree
+#   wtr <repo> <branch>           Remove a finished worktree
+#
+# Worktrees live at ~/github/<repo>-wt/<branch>/
+#
+# Set WT_REPOS=(repo1 repo2 ...) before this block to control which repos
+# appear in tab completion and wtl scanning. If unset, all git repos under
+# ~/github/ are discovered automatically.
+
+# Auto-discover git repos under ~/github/ (used when WT_REPOS is not set)
+function _wt_discover_repos() {
+    local dir
+    setopt local_options nullglob
+    for dir in ~/github/*/; do
+        if [[ -d "${dir}.git" ]]; then
+            echo "${dir:h:t}"
+        fi
+    done
+}
+
+function _wt_repo_list() {
+    if [[ -n "${WT_REPOS+x}" ]]; then
+        echo "${WT_REPOS[@]}"
+    else
+        _wt_discover_repos
+    fi
+}
+
+function wta() {
+    if [[ $# -lt 2 ]]; then
+        print "Usage: wta <repo> <branch> [base-branch]"
+        print "  e.g. wta belle my-feature"
+        print "  e.g. wta belle my-feature origin/main"
+        return 1
+    fi
+
+    local repo=$1
+    local branch=$2
+    local base=${3:-HEAD}
+    local repo_dir=~/github/${repo}
+    local wt_dir=~/github/${repo}-wt/${branch}
+
+    if [[ ! -d "$repo_dir/.git" ]]; then
+        print "\033[0;31m✗\033[0m ~/github/${repo} is not a git repo"
+        return 1
+    fi
+
+    if [[ -d "$wt_dir" ]]; then
+        print "\033[0;33m⊘\033[0m Worktree already exists at ${wt_dir}"
+        print "  Run: wtc ${repo} ${branch}"
+        return 1
+    fi
+
+    git -C "$repo_dir" fetch --quiet 2>/dev/null
+
+    if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/${branch}" 2>/dev/null; then
+        git -C "$repo_dir" worktree add "$wt_dir" "$branch"
+    else
+        git -C "$repo_dir" worktree add -b "$branch" "$wt_dir" "$base"
+    fi
+
+    if [[ $? -eq 0 ]]; then
+        print "\033[0;32m✓\033[0m Worktree ready at \033[1m${wt_dir}\033[0m"
+        cd "$wt_dir"
+    fi
+}
+
+function wtl() {
+    local filter=$1
+    local found=false
+    local repos=($(_wt_repo_list))
+
+    for repo in $repos; do
+        if [[ -n "$filter" && "$repo" != "$filter" ]]; then
+            continue
+        fi
+        local repo_dir=~/github/${repo}
+        if [[ ! -d "$repo_dir/.git" ]]; then
+            continue
+        fi
+
+        local wt_output=$(git -C "$repo_dir" worktree list 2>/dev/null)
+        local wt_count=$(echo "$wt_output" | wc -l)
+
+        if [[ $wt_count -gt 1 ]]; then
+            if ! $found; then
+                print "\033[1mActive worktrees:\033[0m"
+                found=true
+            fi
+            print "\n  \033[1m\033[0;36m${repo}\033[0m"
+            echo "$wt_output" | while read -r line; do
+                print "    ${line}"
+            done
+        fi
+    done
+
+    if ! $found; then
+        if [[ -n "$filter" ]]; then
+            print "No worktrees for ${filter}."
+        else
+            print "No active worktrees."
+        fi
+    fi
+}
+
+function wtr() {
+    if [[ $# -lt 2 ]]; then
+        print "Usage: wtr <repo> <branch>"
+        return 1
+    fi
+
+    local repo=$1
+    local branch=$2
+    local repo_dir=~/github/${repo}
+    local wt_dir=~/github/${repo}-wt/${branch}
+
+    if [[ ! -d "$wt_dir" ]]; then
+        print "\033[0;31m✗\033[0m No worktree at ${wt_dir}"
+        return 1
+    fi
+
+    if [[ "$(pwd)" == "${wt_dir}"* ]]; then
+        cd "$repo_dir"
+    fi
+
+    git -C "$repo_dir" worktree remove "$wt_dir"
+    if [[ $? -eq 0 ]]; then
+        print "\033[0;32m✓\033[0m Removed worktree \033[1m${wt_dir}\033[0m"
+        rmdir ~/github/${repo}-wt 2>/dev/null
+
+        read "del?Delete branch '${branch}' too? [y/N] "
+        if [[ "$del" =~ ^[Yy]$ ]]; then
+            git -C "$repo_dir" branch -d "$branch" 2>/dev/null || \
+            git -C "$repo_dir" branch -D "$branch"
+            print "\033[0;32m✓\033[0m Branch '${branch}' deleted"
+        fi
+    fi
+}
+
+function wtc() {
+    if [[ $# -lt 2 ]]; then
+        print "Usage: wtc <repo> <branch>"
+        return 1
+    fi
+
+    local wt_dir=~/github/${1}-wt/${2}
+
+    if [[ ! -d "$wt_dir" ]]; then
+        print "\033[0;31m✗\033[0m No worktree at ${wt_dir}"
+        print "Create one with: wta ${1} ${2}"
+        return 1
+    fi
+
+    cd "$wt_dir"
+    print "Now in \033[1m${wt_dir}\033[0m ($(git rev-parse --abbrev-ref HEAD))"
+}
+
+# ── Worktree tab completions ─────────────────────────────────────────
+
+function _wt_existing_branches() {
+    local wt_parent=~/github/${1}-wt
+    if [[ -d "$wt_parent" ]]; then
+        setopt local_options nullglob
+        for d in "$wt_parent"/*(/:t); do
+            echo "$d"
+        done
+    fi
+}
+
+function _wt_all_branches() {
+    local repo_dir=~/github/${1}
+    if [[ -d "$repo_dir/.git" ]]; then
+        git -C "$repo_dir" for-each-ref --format='%(refname:short)' refs/heads/ refs/remotes/ 2>/dev/null | sed 's|^origin/||' | sort -u
+    fi
+}
+
+function _wt_complete_repos() {
+    if [[ -n "${WT_REPOS+x}" ]]; then
+        compadd -a WT_REPOS
+    else
+        compadd $(_wt_discover_repos)
+    fi
+}
+
+function _wta() {
+    case $CURRENT in
+        2) _wt_complete_repos ;;
+        3) compadd $(_wt_all_branches "${words[2]}") ;;
+        4) compadd $(_wt_all_branches "${words[2]}") ;;
+    esac
+}
+compdef _wta wta
+
+function _wtl() {
+    case $CURRENT in
+        2) _wt_complete_repos ;;
+    esac
+}
+compdef _wtl wtl
+
+function _wtr() {
+    case $CURRENT in
+        2) _wt_complete_repos ;;
+        3) compadd $(_wt_existing_branches "${words[2]}") ;;
+    esac
+}
+compdef _wtr wtr
+
+function _wtc() {
+    case $CURRENT in
+        2) _wt_complete_repos ;;
+        3) compadd $(_wt_existing_branches "${words[2]}") ;;
+    esac
+}
+compdef _wtc wtc
+
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then \. "$NVM_DIR/nvm.sh"; fi # This loads nvm
 if [ -s "$NVM_DIR/bash_completion" ]; then \. "$NVM_DIR/bash_completion"; fi  # This loads nvm bash_completion
