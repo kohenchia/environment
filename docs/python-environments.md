@@ -180,6 +180,6 @@ vrm playground              # clean up when done
 |---|---|---|
 | `ur` | `uv run` | Run a command inside the environment without activating |
 | `mkdv` | `uv pip install -e ".[dev]"` | Install current package in editable mode with dev extras |
-| `p` | `python` | Short alias for python |
-| `p3` | `python3` | Short alias for python3 |
-| `pdt` | `pipdeptree` | Show dependency tree |
+| `p` | `uv run python` | Short alias for python (runs via uv) |
+| `p3` | `uv run python3` | Short alias for python3 (runs via uv) |
+| `pdt` | `uvx pipdeptree` | Show dependency tree (runs without install) |

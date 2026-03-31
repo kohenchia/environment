@@ -466,15 +466,14 @@ alias home='cd ~'
 alias l='ls -lFh'
 alias ll='ls -alFh'
 alias mkdv='uv pip install -e ".[dev]"'
-alias p='python'
-alias p3='python3'
-alias pdt='pipdeptree'
-alias pvd='echo Starting debugpy server at port 17778. Waiting for client...; p -ic "import debugpy; debugpy.listen(17778); debugpy.wait_for_client()"; print("Connected.")'
+alias p='uv run python'
+alias p3='uv run python3'
+alias pdt='uvx pipdeptree'
+alias pvd='echo Starting debugpy server at port 17778. Waiting for client...; uv run python -ic "import debugpy; debugpy.listen(17778); debugpy.wait_for_client()"; print("Connected.")'
 alias rn='npx react-native'
 alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
 alias tmp='cd /tmp'
 alias ur='uv run'
-alias wt='watson'
 
 function gt() {
     branch=`git branch 2> /dev/null | sed -n -e 's/^\* \(.*\)/\1/p'`
@@ -494,7 +493,6 @@ function c() {
 # Application shortcuts
 if [ "$(uname 2> /dev/null)" != "Linux" ]; then
     # Not Linux, assumed to be OSX
-    alias a='open -a Atom'
     alias m='open -a MacVim'
     alias vsc='open -a Visual\ Studio\ Code'
 fi

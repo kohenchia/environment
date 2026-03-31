@@ -20,35 +20,6 @@ A comprehensive development environment for macOS. Includes shell configuration,
 
 ## Setup & Installation
 
-### Prerequisites
-
-**1. Set zsh as your default shell:**
-
-```
-chsh -s /bin/zsh
-```
-
-**2. Install [oh-my-zsh](https://ohmyz.sh):**
-
-```
-sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-```
-
-**3. Install [Powerlevel10k](https://github.com/romkatv/powerlevel10k#oh-my-zsh):**
-
-```
-git clone --depth=1 https://github.com/romkatv/powerlevel10k.git \
-  ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/themes/powerlevel10k
-```
-
-**4. Install [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) (Python package manager):**
-
-```
-brew install uv
-```
-
-### Install
-
 ```
 git clone git@github.com:kohenchia/environment.git
 cd environment
@@ -57,11 +28,20 @@ cd environment
 
 ### What `setup.sh` does
 
-The setup script creates symlinks from this repo into your home directory. Existing files are backed up with a `.bak` extension before linking.
+The setup script installs prerequisites and creates symlinks from this repo into your home directory. Existing files are backed up with a `.bak` extension before linking.
+
+**Prerequisites installed automatically:**
+- Sets zsh as the default shell
+- [oh-my-zsh](https://ohmyz.sh)
+- [Powerlevel10k](https://github.com/romkatv/powerlevel10k) prompt theme
+- [uv](https://docs.astral.sh/uv/) Python package manager (via Homebrew or standalone installer)
+
+**Symlinks created:**
 
 ```
 environment/local/.zshrc     →  ~/.zshrc
 environment/local/.zprofile  →  ~/.zprofile
+environment/local/.p10k.zsh  →  ~/.p10k.zsh
 environment/vim/.vimrc       →  ~/.vimrc
 environment/vim/.gvimrc      →  ~/.gvimrc
 environment/vim/             →  ~/.vim

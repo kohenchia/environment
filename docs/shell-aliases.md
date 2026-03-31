@@ -57,11 +57,11 @@ drawline
 
 | Alias | Command | Description |
 |---|---|---|
-| `p` | `python` | Python shortcut |
-| `p3` | `python3` | Python 3 shortcut |
+| `p` | `uv run python` | Python shortcut (runs via uv) |
+| `p3` | `uv run python3` | Python 3 shortcut (runs via uv) |
 | `ur` | `uv run` | Run a command with uv (no activation needed) |
 | `mkdv` | `uv pip install -e ".[dev]"` | Install package in editable mode with dev extras |
-| `pdt` | `pipdeptree` | Display Python dependency tree |
+| `pdt` | `uvx pipdeptree` | Display Python dependency tree (runs without install) |
 | `rn` | `npx react-native` | React Native CLI via npx |
 
 ### `pvd` — Python Visual Debugger
@@ -130,12 +130,10 @@ These aliases open files or directories in GUI applications:
 
 | Alias | Application |
 |---|---|
-| `a` | Atom |
 | `m` | MacVim |
 | `vsc` | Visual Studio Code |
 
 ```bash
-a .            # Open current directory in Atom
 m file.txt     # Open file in MacVim
 vsc .          # Open current directory in VS Code
 ```
@@ -165,14 +163,6 @@ resetaudio
 # Kills the coreaudiod process; macOS restarts it automatically
 # Use when audio output is glitchy or not working
 ```
-
----
-
-## Time Tracking
-
-| Alias | Command | Description |
-|---|---|---|
-| `wt` | `watson` | [Watson](https://github.com/TailorDev/Watson) time tracker CLI |
 
 ---
 
