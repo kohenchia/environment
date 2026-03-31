@@ -48,8 +48,10 @@ The shell config includes `wt*` commands for managing [git worktrees](https://gi
 | `wtl [repo]` | **List** all active worktrees, optionally filtered to one repo. |
 | `wtc <repo> <branch>` | **Change** into an existing worktree. |
 | `wtr <repo> <branch>` | **Remove** a finished worktree. Offers to delete the branch too. |
+| `wts <repo> <branch>` | **Symlink** a worktree into the current directory. Creates `<repo>@<branch>`. |
+| `wtu <repo> <branch>` | **Unlink** a worktree symlink from the current directory. |
 
-All four commands support tab completion for both `<repo>` and `<branch>` arguments.
+All six commands support tab completion for both `<repo>` and `<branch>` arguments.
 
 ### Directory layout
 
@@ -124,6 +126,25 @@ $ wtr myproject add-login-page
 # ✓ Removed worktree ~/github/myproject-wt/add-login-page
 # Delete branch 'add-login-page' too? [y/N] y
 # ✓ Branch 'add-login-page' deleted
+```
+
+**Symlink a worktree into a workspace:**
+
+```bash
+$ cd ~/github/ace
+$ wts benchmark feature/launch-ifp
+# ✓ benchmark@feature-launch-ifp -> ~/github/benchmark-wt/feature/launch-ifp
+
+$ ls -l benchmark*
+# benchmark -> ../benchmark                                       # untouched
+# benchmark@feature-launch-ifp -> ~/github/benchmark-wt/feature/launch-ifp
+```
+
+**Remove the symlink when done:**
+
+```bash
+$ wtu benchmark feature/launch-ifp
+# ✓ Removed benchmark@feature-launch-ifp
 ```
 
 ### Controlling the repo list

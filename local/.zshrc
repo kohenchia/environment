@@ -730,6 +730,87 @@ function _wtc() {
 }
 compdef _wtc wtc
 
+# ── Worktree symlinks ────────────────────────────────────────────────
+#
+# Create and remove local symlinks that point to worktrees.
+# Works from any directory — useful for workspaces that aggregate repos
+# via symlinks (e.g. ace).
+
+function wts() {
+    if [[ $# -lt 2 ]]; then
+        print "Usage: wts <repo> <branch>"
+        print "  Creates a symlink in the current directory pointing to the worktree."
+        print "  e.g. wts benchmark feature/launch-ifp"
+        print "       -> benchmark@feature-launch-ifp"
+        return 1
+    fi
+
+    local repo=$1
+    local branch=$2
+    local wt_dir=~/github/${repo}-wt/${branch}
+    local link_name="${repo}@${branch//\//-}"
+
+    if [[ ! -d "$wt_dir" ]]; then
+        print "\033[0;31m✗\033[0m No worktree at ${wt_dir}"
+        print "  Create one with: wta ${repo} ${branch}"
+        return 1
+    fi
+
+    if [[ -e "$link_name" || -L "$link_name" ]]; then
+        local resolved="${wt_dir:A}"
+        local link_resolved="$(readlink -f "$link_name" 2>/dev/null)"
+        if [[ "$link_resolved" == "$resolved" ]]; then
+            print "\033[0;33m⊘\033[0m ${link_name} already links to this worktree"
+            return 0
+        else
+            print "\033[0;31m✗\033[0m ${link_name} already exists"
+            return 1
+        fi
+    fi
+
+    ln -s "${wt_dir:A}" "$link_name"
+    print "\033[0;32m✓\033[0m ${link_name} -> ${wt_dir}"
+}
+
+function wtu() {
+    if [[ $# -lt 2 ]]; then
+        print "Usage: wtu <repo> <branch>"
+        print "  Removes a worktree symlink from the current directory."
+        print "  e.g. wtu benchmark feature/launch-ifp"
+        print "       -> removes benchmark@feature-launch-ifp"
+        return 1
+    fi
+
+    local repo=$1
+    local branch=$2
+    local link_name="${repo}@${branch//\//-}"
+
+    if [[ ! -L "$link_name" ]]; then
+        print "\033[0;31m✗\033[0m No symlink '${link_name}' in current directory"
+        return 1
+    fi
+
+    rm "$link_name"
+    print "\033[0;32m✓\033[0m Removed ${link_name}"
+}
+
+function _wts() {
+    case $CURRENT in
+        2) _wt_complete_repos ;;
+        3) compadd $(_wt_existing_branches "${words[2]}") ;;
+    esac
+}
+compdef _wts wts
+
+function _wtu() {
+    # Complete with worktree symlinks in the current directory.
+    case $CURRENT in
+        2) _wt_complete_repos ;;
+        3) compadd $(_wt_existing_branches "${words[2]}") ;;
+    esac
+}
+compdef _wtu wtu
+
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then \. "$NVM_DIR/nvm.sh"; fi # This loads nvm
 if [ -s "$NVM_DIR/bash_completion" ]; then \. "$NVM_DIR/bash_completion"; fi  # This loads nvm bash_completion
