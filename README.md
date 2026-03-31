@@ -1,164 +1,87 @@
 # kohenchia/environment
 
-Contains scripts for setting up a new development environment on OSX.
+A comprehensive development environment for macOS. Includes shell configuration, Python virtual environment management, git worktree workflows, Vim/VS Code setup, and productivity aliases — all installed via a single setup script.
 
-### First-time setup
+<p align="center">
 
-Change your default shell to `zsh`:
-
-```
-$ chsh -s /bin/zsh
-```
-
-Install [oh-my-zsh](https://ohmyz.sh):
-
-```
-$ sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
-```
-
-$ Install [powerlevel10k](https://github.com/romkatv/powerlevel10k#oh-my-zsh):
-
-```
-$ git clone --depth=1 https://github.com/romkatv/powerlevel10k.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/themes/powerlevel10k
-```
-
-$ Install [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer)
-
-```
-$ brew install uv
-```
-
-### Installation
-
-```
-$ git clone git@github.com:kohenchia/environment.git
-$ cd environment
-$ ./setup.sh
-```
-
-## Git Worktree Workflow
-
-The shell config includes `wt*` commands for managing [git worktrees](https://git-scm.com/docs/git-worktree) across your repos. Worktrees let you work on multiple branches simultaneously without stashing or switching — each branch gets its own directory with a full working copy.
-
-### Commands
-
-| Command | Description |
+| Feature | Description |
 |---|---|
-| `wta <repo> <branch> [base]` | **Add** a worktree. Creates `~/github/<repo>-wt/<branch>/` and cds into it. |
-| `wtl [repo]` | **List** all active worktrees, optionally filtered to one repo. |
-| `wtc <repo> <branch>` | **Change** into an existing worktree. |
-| `wtr <repo> <branch>` | **Remove** a finished worktree. Offers to delete the branch too. |
-| `wts <repo> <branch>` | **Symlink** a worktree into the current directory. Creates `<repo>@<branch>`. |
-| `wtu <repo> <branch>` | **Unlink** a worktree symlink from the current directory. |
+| [**Setup & Installation**](#setup--installation) | First-time setup and the `setup.sh` installer |
+| [**Python Environments**](docs/python-environments.md) | Create, activate, list, and remove `uv`-based virtual environments |
+| [**Git Worktrees**](docs/git-worktrees.md) | Work on multiple branches simultaneously with `wt*` commands |
+| [**Git Aliases**](docs/git-aliases.md) | Shorthand commands for everyday git operations |
+| [**Shell Aliases & Functions**](docs/shell-aliases.md) | Navigation, Docker, Kubernetes, system utilities, and more |
+| [**Vim Configuration**](docs/vim.md) | Plugins, keybindings, and color scheme |
+| [**VS Code Configuration**](docs/vscode.md) | Vim keybindings and editor settings for VS Code |
 
-All six commands support tab completion for both `<repo>` and `<branch>` arguments.
+</p>
 
-### Directory layout
+---
 
-Worktrees are created alongside the main checkout, in a `-wt/` sibling directory:
+## Setup & Installation
+
+### Prerequisites
+
+**1. Set zsh as your default shell:**
 
 ```
-~/github/
-├── myproject/                    # main checkout (untouched)
-├── myproject-wt/
-│   ├── feature-a/                # worktree for feature-a branch
-│   └── bugfix-123/               # worktree for bugfix-123 branch
-├── otherproject/
-└── otherproject-wt/
-    └── refactor-api/
+chsh -s /bin/zsh
 ```
 
-Your main checkout stays on its current branch. `git pull`, CI scripts, and other tooling that expects a clean main branch are unaffected.
+**2. Install [oh-my-zsh](https://ohmyz.sh):**
 
-### Examples
-
-**Start a new feature:**
-
-```bash
-$ wta myproject add-login-page
-# Fetches latest, creates branch add-login-page, cds into the worktree
-# ✓ Worktree ready at ~/github/myproject-wt/add-login-page
+```
+sh -c "$(curl -fsSL https://raw.github.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
 ```
 
-**Branch off a specific base:**
+**3. Install [Powerlevel10k](https://github.com/romkatv/powerlevel10k#oh-my-zsh):**
 
-```bash
-$ wta myproject hotfix-99 origin/release-2.0
-# Creates the branch from origin/release-2.0 instead of HEAD
+```
+git clone --depth=1 https://github.com/romkatv/powerlevel10k.git \
+  ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/themes/powerlevel10k
 ```
 
-**Check out an existing remote branch:**
+**4. Install [uv](https://docs.astral.sh/uv/getting-started/installation/#standalone-installer) (Python package manager):**
 
-```bash
-$ wta myproject someone-elses-branch
-# If the branch already exists locally, the worktree uses it as-is
+```
+brew install uv
 ```
 
-**See what you have going:**
+### Install
 
-```bash
-$ wtl
-# Active worktrees:
-#
-#   myproject
-#     /Users/you/github/myproject              abc1234 [main]
-#     /Users/you/github/myproject-wt/add-login  def5678 [add-login-page]
-#
-#   otherproject
-#     /Users/you/github/otherproject           111aaaa [main]
-#     /Users/you/github/otherproject-wt/fix    222bbbb [fix-api]
+```
+git clone git@github.com:kohenchia/environment.git
+cd environment
+./setup.sh
 ```
 
-**Jump between worktrees:**
+### What `setup.sh` does
 
-```bash
-$ wtc myproject add-login-page
-# Now in ~/github/myproject-wt/add-login-page (add-login-page)
+The setup script creates symlinks from this repo into your home directory. Existing files are backed up with a `.bak` extension before linking.
 
-$ wtc otherproject fix-api
-# Now in ~/github/otherproject-wt/fix-api (fix-api)
+```
+environment/local/.zshrc     →  ~/.zshrc
+environment/local/.zprofile  →  ~/.zprofile
+environment/vim/.vimrc       →  ~/.vimrc
+environment/vim/.gvimrc      →  ~/.gvimrc
+environment/vim/             →  ~/.vim
 ```
 
-**Clean up when done:**
+After running `setup.sh`, open a new terminal to load the configuration. Run `p10k configure` to customize your Powerlevel10k prompt.
 
-```bash
-$ wtr myproject add-login-page
-# ✓ Removed worktree ~/github/myproject-wt/add-login-page
-# Delete branch 'add-login-page' too? [y/N] y
-# ✓ Branch 'add-login-page' deleted
-```
+### Work-specific configuration
 
-**Symlink a worktree into a workspace:**
+If `~/.zshrc_work` exists, it is automatically sourced at the end of `.zshrc`. Use this file for employer-specific aliases, paths, or environment variables that shouldn't be committed to this repo.
 
-```bash
-$ cd ~/github/ace
-$ wts benchmark feature/launch-ifp
-# ✓ benchmark@feature-launch-ifp -> ~/github/benchmark-wt/feature/launch-ifp
+---
 
-$ ls -l benchmark*
-# benchmark -> ../benchmark                                       # untouched
-# benchmark@feature-launch-ifp -> ~/github/benchmark-wt/feature/launch-ifp
-```
+## Documentation
 
-**Remove the symlink when done:**
+See the **[docs/](docs/)** folder for detailed guides on each feature:
 
-```bash
-$ wtu benchmark feature/launch-ifp
-# ✓ Removed benchmark@feature-launch-ifp
-```
-
-### Controlling the repo list
-
-By default, tab completion and `wtl` auto-discover all git repos under `~/github/`. To restrict completions to a specific set of repos, set `WT_REPOS` before the worktree block is loaded:
-
-```bash
-# In .zshrc or a sourced file (e.g. .zshrc_work):
-WT_REPOS=(myproject otherproject webapp)
-```
-
-### Tips
-
-- **Each worktree is independent.** You can have different virtual environments, run tests, and build in each one without interference.
-- **Worktrees share the same `.git` data.** Commits, branches, stashes, and reflog are shared with the main checkout. There is no extra clone overhead.
-- **Don't manually delete worktree directories.** Always use `wtr` (or `git worktree remove`) so git's internal bookkeeping stays clean. If you accidentally `rm -rf` a worktree directory, run `git worktree prune` in the main checkout to clean up.
-- **You can't have the same branch checked out in two places.** Git enforces this. If you need the same code in two terminals, just `cd` into the same worktree from both.
+- **[Python Environments](docs/python-environments.md)** — `ve`, `vc`, `vd`, `vls`, `vrm`
+- **[Git Worktrees](docs/git-worktrees.md)** — `wta`, `wtl`, `wtc`, `wtr`, `wts`, `wtu`
+- **[Git Aliases](docs/git-aliases.md)** — `ga`, `gb`, `gc`, `gd`, `gs`, `gm`, `gpush`, `gup`, `ghist`, `gt`, `glc`
+- **[Shell Aliases & Functions](docs/shell-aliases.md)** — Navigation, Docker, Kubernetes, development tools, system utilities
+- **[Vim Configuration](docs/vim.md)** — Plugins, keybindings, status line, color scheme
+- **[VS Code Configuration](docs/vscode.md)** — Vim-style keybindings and editor theme settings
