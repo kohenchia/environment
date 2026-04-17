@@ -151,8 +151,7 @@ unalias gm
 alias gm='git merge --no-commit --no-ff'
 alias gpush='git push -f --tags -u origin "$@"'
 alias gs='git status -s'
-unalias gup
-alias gup='git fetch --prune origin & git rebase -r'
+alias gup='git fetch --prune origin  && git fetch --prune origin "+refs/tags/*:refs/tags/*" && git rebase -r'
 
 # k8s
 alias k='kubectl'
