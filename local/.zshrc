@@ -454,6 +454,8 @@ setopt PUSHDSILENT
 
 # Aliases
 alias bb='cd ~/bitbucket'
+alias ca="conda activate"
+alias cda="conda deactivate"
 alias cf='caffeinate'
 alias cg='cd ~/github'
 alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
