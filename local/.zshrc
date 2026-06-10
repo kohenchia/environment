@@ -459,6 +459,7 @@ alias cda="conda deactivate"
 alias cf='caffeinate'
 alias cg='cd ~/github'
 alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
+alias cy='claude --dangerously-skip-permissions'
 alias d='docker'
 alias dcp='docker-compose'
 alias dev='cd ~/development'
