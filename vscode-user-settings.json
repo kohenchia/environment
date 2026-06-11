@@ -30,5 +30,6 @@
     "editor.renderLineHighlight": "all",
     "workbench.colorCustomizations": {
         "editor.lineHighlightBackground": "#333333"
-    }
+    },
+    "terminal.integrated.scrollback": 100000
 }

@@ -120,6 +120,10 @@ source ~/.oh-my-zsh/custom/themes/powerlevel10k/powerlevel10k.zsh-theme
 
 export POWERLEVEL9K_COMMAND_EXECUTION_TIME_THRESHOLD=0
 
+# Cross-session command history
+HISTSIZE=100000
+SAVEHIST=100000
+
 function drawline() {
     printf %"$COLUMNS"s | tr " " "-"
 }
