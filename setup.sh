@@ -59,8 +59,21 @@ elif command -v brew >/dev/null 2>&1; then
     warn "Installing fzf via Homebrew..."
     brew install fzf
     info "fzf installed"
+elif command -v apt-get >/dev/null 2>&1; then
+    warn "Installing fzf via apt-get (WSL/Debian/Ubuntu)..."
+    sudo apt-get update -qq
+    sudo apt-get install -y fzf
+    info "fzf installed"
 else
-    warn "fzf not found and Homebrew unavailable — install manually for interactive worktree pickers"
+    warn "Installing fzf via upstream installer into ~/.fzf..."
+    if [[ ! -d "$HOME/.fzf" ]]; then
+        git clone --depth 1 https://github.com/junegunn/fzf.git "$HOME/.fzf"
+    fi
+    "$HOME/.fzf/install" --bin
+    # Symlink into ~/.local/bin (already on PATH per local/.zshrc)
+    mkdir -p "$HOME/.local/bin"
+    ln -sf "$HOME/.fzf/bin/fzf" "$HOME/.local/bin/fzf"
+    info "fzf installed at ~/.fzf/bin/fzf (symlinked into ~/.local/bin)"
 fi
 
 # ── Symlinks ────────────────────────────────────────────────────────
