@@ -13,7 +13,7 @@ Work on multiple branches simultaneously without stashing or switching. Each bra
 | `wts <repo> <branch>` | **Symlink** a worktree into the current directory |
 | `wtu <repo> <branch>` | **Unlink** a worktree symlink |
 
-All six commands support **tab completion** for both `<repo>` and `<branch>` arguments.
+All six commands support **tab completion** for both `<repo>` and `<branch>` arguments. They also support **interactive mode** — run any of them with no arguments and an [`fzf`](https://github.com/junegunn/fzf) picker opens for you to choose from existing worktrees (or repos, in the case of `wta`).
 
 ---
 
@@ -150,6 +150,20 @@ All commands offer intelligent tab completion:
 | `<repo>` | Git repos under `~/github/` (or `WT_REPOS` if set) |
 | `<branch>` for `wta` | All local and remote branches |
 | `<branch>` for `wtc`, `wtr`, `wts`, `wtu` | Only existing worktree branches |
+
+---
+
+## Interactive Mode
+
+If you call any of `wta`, `wtc`, `wtr`, `wts`, or `wtu` with no arguments, an [`fzf`](https://github.com/junegunn/fzf) picker opens. Type to filter, `Enter` to select, `Esc` to cancel.
+
+| Command | What the picker shows |
+|---|---|
+| `wta` | All known repos. After picking, prompts for branch name and base. |
+| `wtc`, `wtr`, `wts` | All existing worktrees as `<repo>` `<branch>` rows. |
+| `wtu` | All worktree symlinks in the current directory. |
+
+`fzf` is installed automatically by `setup.sh` (via Homebrew). If `fzf` is missing or stdin is not a TTY, the commands fall back to printing the usage message — the original positional-argument form continues to work unchanged.
 
 ---
 
