@@ -52,6 +52,17 @@ else
     info "uv installed"
 fi
 
+# Install fzf (idempotent) — powers the wt* worktree pickers when called without args
+if command -v fzf >/dev/null 2>&1; then
+    info "fzf already installed"
+elif command -v brew >/dev/null 2>&1; then
+    warn "Installing fzf via Homebrew..."
+    brew install fzf
+    info "fzf installed"
+else
+    warn "fzf not found and Homebrew unavailable — install manually for interactive worktree pickers"
+fi
+
 # ── Symlinks ────────────────────────────────────────────────────────
 
 link_file() {

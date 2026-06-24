@@ -35,6 +35,7 @@ The setup script installs prerequisites and creates symlinks from this repo into
 - [oh-my-zsh](https://ohmyz.sh)
 - [Powerlevel10k](https://github.com/romkatv/powerlevel10k) prompt theme
 - [uv](https://docs.astral.sh/uv/) Python package manager (via Homebrew or standalone installer)
+- [fzf](https://github.com/junegunn/fzf) fuzzy finder (powers interactive `wt*` worktree pickers)
 
 **Symlinks created:**
 

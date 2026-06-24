@@ -545,17 +545,105 @@ function _wt_repo_list() {
     fi
 }
 
+# ── Interactive pickers (used when a wt* command is called without args) ──
+
+function _wt_has_fzf() {
+    command -v fzf >/dev/null 2>&1
+}
+
+# Pick a repo via fzf. Prints the chosen repo on stdout; returns 1 on cancel.
+function _wt_pick_repo() {
+    local prompt=${1:-"repo> "}
+    local repos=($(_wt_repo_list))
+    if [[ ${#repos[@]} -eq 0 ]]; then
+        print -u 2 "No repos found under ~/github/."
+        return 1
+    fi
+    print -l -- $repos | fzf --prompt="$prompt" --height=40% --reverse --no-multi
+}
+
+# Print "<repo>\t<branch>" for every git-tracked worktree of every known repo.
+# Source of truth is `git worktree list --porcelain`, NOT the filesystem — that way
+# nested branch names (e.g. gt/foo) and orphan -wt/ directories are handled correctly.
+function _wt_list_worktrees() {
+    local repos=($(_wt_repo_list))
+    local repo repo_dir TAB=$'\t'
+    for repo in $repos; do
+        repo_dir=~/github/${repo}
+        [[ -d "$repo_dir/.git" ]] || continue
+        git -C "$repo_dir" worktree list --porcelain 2>/dev/null | awk -v repo="$repo" -v tab="$TAB" -v main="$repo_dir" '
+            /^worktree / { path = substr($0, 10); next }
+            /^branch refs\/heads\// {
+                if (path != main) {
+                    branch = substr($0, 19)
+                    printf "%s%s%s\n", repo, tab, branch
+                }
+                path = ""
+            }
+            /^detached/ { path = "" }
+        '
+    done
+}
+
+# Pick an existing worktree via fzf.
+# On success, sets REPLY_REPO and REPLY_BRANCH in the caller's scope.
+function _wt_pick_worktree() {
+    local prompt=${1:-"worktree> "}
+    local lines
+    lines=$(_wt_list_worktrees)
+    if [[ -z "$lines" ]]; then
+        print -u 2 "No worktrees found under ~/github/*-wt/."
+        return 1
+    fi
+    local sel
+    sel=$(print -r -- "$lines" \
+        | fzf --prompt="$prompt" --height=40% --reverse --no-multi \
+              --delimiter=$'\t' --with-nth=1,2) || return 1
+    [[ -z "$sel" ]] && return 1
+    REPLY_REPO=${sel%%$'\t'*}
+    REPLY_BRANCH=${sel#*$'\t'}
+}
+
+# Pick a worktree symlink in the current directory via fzf. Prints the link name.
+function _wt_pick_local_link() {
+    setopt local_options nullglob
+    local prompt=${1:-"symlink> "}
+    local f target links=()
+    for f in *(@); do
+        target=$(readlink -f "$f" 2>/dev/null)
+        case "$target" in
+            "$HOME"/github/*-wt/*) links+=("$f") ;;
+        esac
+    done
+    if [[ ${#links[@]} -eq 0 ]]; then
+        print -u 2 "No worktree symlinks in $(pwd)."
+        return 1
+    fi
+    print -l -- $links | fzf --prompt="$prompt" --height=40% --reverse --no-multi
+}
+
 function wta() {
-    if [[ $# -lt 2 ]]; then
+    local repo branch base
+    if [[ $# -ge 2 ]]; then
+        repo=$1
+        branch=$2
+        base=${3:-HEAD}
+    elif _wt_has_fzf && [[ -t 0 ]]; then
+        repo=$(_wt_pick_repo "wta repo> ") || return 1
+        [[ -z "$repo" ]] && return 1
+        print -n "Branch name: "
+        read branch
+        [[ -z "$branch" ]] && { print "Aborted."; return 1; }
+        print -n "Base [HEAD]: "
+        read base
+        base=${base:-HEAD}
+    else
         print "Usage: wta <repo> <branch> [base-branch]"
         print "  e.g. wta belle my-feature"
         print "  e.g. wta belle my-feature origin/main"
         return 1
     fi
 
-    local repo=$1
-    local branch=$2
-    local base=${3:-HEAD}
     local repo_dir=~/github/${repo}
     local wt_dir=~/github/${repo}-wt/${branch}
 
@@ -623,13 +711,20 @@ function wtl() {
 }
 
 function wtr() {
-    if [[ $# -lt 2 ]]; then
+    local repo branch
+    if [[ $# -ge 2 ]]; then
+        repo=$1
+        branch=$2
+    elif _wt_has_fzf && [[ -t 0 ]]; then
+        local REPLY_REPO REPLY_BRANCH
+        _wt_pick_worktree "wtr (remove)> " || return 1
+        repo=$REPLY_REPO
+        branch=$REPLY_BRANCH
+    else
         print "Usage: wtr <repo> <branch>"
         return 1
     fi
 
-    local repo=$1
-    local branch=$2
     local repo_dir=~/github/${repo}
     local wt_dir=~/github/${repo}-wt/${branch}
 
@@ -657,16 +752,25 @@ function wtr() {
 }
 
 function wtc() {
-    if [[ $# -lt 2 ]]; then
+    local repo branch
+    if [[ $# -ge 2 ]]; then
+        repo=$1
+        branch=$2
+    elif _wt_has_fzf && [[ -t 0 ]]; then
+        local REPLY_REPO REPLY_BRANCH
+        _wt_pick_worktree "wtc (cd)> " || return 1
+        repo=$REPLY_REPO
+        branch=$REPLY_BRANCH
+    else
         print "Usage: wtc <repo> <branch>"
         return 1
     fi
 
-    local wt_dir=~/github/${1}-wt/${2}
+    local wt_dir=~/github/${repo}-wt/${branch}
 
     if [[ ! -d "$wt_dir" ]]; then
         print "\033[0;31m✗\033[0m No worktree at ${wt_dir}"
-        print "Create one with: wta ${1} ${2}"
+        print "Create one with: wta ${repo} ${branch}"
         return 1
     fi
 
@@ -677,13 +781,16 @@ function wtc() {
 # ── Worktree tab completions ─────────────────────────────────────────
 
 function _wt_existing_branches() {
-    local wt_parent=~/github/${1}-wt
-    if [[ -d "$wt_parent" ]]; then
-        setopt local_options nullglob
-        for d in "$wt_parent"/*(/:t); do
-            echo "$d"
-        done
-    fi
+    local repo_dir=~/github/${1}
+    [[ -d "$repo_dir/.git" ]] || return
+    git -C "$repo_dir" worktree list --porcelain 2>/dev/null | awk -v main="$repo_dir" '
+        /^worktree / { path = substr($0, 10); next }
+        /^branch refs\/heads\// {
+            if (path != main) print substr($0, 19)
+            path = ""
+        }
+        /^detached/ { path = "" }
+    '
 }
 
 function _wt_all_branches() {
@@ -740,7 +847,16 @@ compdef _wtc wtc
 # via symlinks (e.g. ace).
 
 function wts() {
-    if [[ $# -lt 2 ]]; then
+    local repo branch
+    if [[ $# -ge 2 ]]; then
+        repo=$1
+        branch=$2
+    elif _wt_has_fzf && [[ -t 0 ]]; then
+        local REPLY_REPO REPLY_BRANCH
+        _wt_pick_worktree "wts (symlink here)> " || return 1
+        repo=$REPLY_REPO
+        branch=$REPLY_BRANCH
+    else
         print "Usage: wts <repo> <branch>"
         print "  Creates a symlink in the current directory pointing to the worktree."
         print "  e.g. wts benchmark feature/launch-ifp"
@@ -748,8 +864,6 @@ function wts() {
         return 1
     fi
 
-    local repo=$1
-    local branch=$2
     local wt_dir=~/github/${repo}-wt/${branch}
     local link_name="${repo}@${branch//\//-}"
 
@@ -776,17 +890,21 @@ function wts() {
 }
 
 function wtu() {
-    if [[ $# -lt 2 ]]; then
+    local link_name
+    if [[ $# -ge 2 ]]; then
+        local repo=$1
+        local branch=$2
+        link_name="${repo}@${branch//\//-}"
+    elif _wt_has_fzf && [[ -t 0 ]]; then
+        link_name=$(_wt_pick_local_link "wtu (unlink)> ") || return 1
+        [[ -z "$link_name" ]] && return 1
+    else
         print "Usage: wtu <repo> <branch>"
         print "  Removes a worktree symlink from the current directory."
         print "  e.g. wtu benchmark feature/launch-ifp"
         print "       -> removes benchmark@feature-launch-ifp"
         return 1
     fi
-
-    local repo=$1
-    local branch=$2
-    local link_name="${repo}@${branch//\//-}"
 
     if [[ ! -L "$link_name" ]]; then
         print "\033[0;31m✗\033[0m No symlink '${link_name}' in current directory"
