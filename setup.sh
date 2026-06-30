@@ -103,6 +103,7 @@ link_directory() {
 link_file local/.zshrc ~/.zshrc
 link_file local/.zprofile ~/.zprofile
 link_file local/.p10k.zsh ~/.p10k.zsh
+link_file local/.tmux.conf ~/.tmux.conf
 link_file vim/.vimrc ~/.vimrc
 link_file vim/.gvimrc ~/.gvimrc
 link_directory vim ~/.vim

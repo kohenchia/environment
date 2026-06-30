@@ -43,6 +43,7 @@ The setup script installs prerequisites and creates symlinks from this repo into
 environment/local/.zshrc     →  ~/.zshrc
 environment/local/.zprofile  →  ~/.zprofile
 environment/local/.p10k.zsh  →  ~/.p10k.zsh
+environment/local/.tmux.conf →  ~/.tmux.conf
 environment/vim/.vimrc       →  ~/.vimrc
 environment/vim/.gvimrc      →  ~/.gvimrc
 environment/vim/             →  ~/.vim
