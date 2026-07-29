@@ -53,13 +53,25 @@ set laststatus=2
 set statusline=%m\ %n:\ %F\ (%p%%)\ l\:%l\ c:%c\ b:%b\ (0x%B)
 
 " Clang
+" Probe the usual locations per platform: Xcode Command Line Tools on macOS,
+" Homebrew LLVM, then the distro libclang directories on Linux/WSL. First hit
+" wins. Kept on one line so it does not depend on line continuations.
 
-let s:clang_library_path='/Library/Developer/CommandLineTools/usr/lib'
-if isdirectory(s:clang_library_path)
-    let g:clang_library_path=s:clang_library_path
-endif
+let s:clang_paths = ['/Library/Developer/CommandLineTools/usr/lib', '/opt/homebrew/opt/llvm/lib', '/usr/local/opt/llvm/lib', '/usr/lib/llvm-18/lib', '/usr/lib/llvm-17/lib', '/usr/lib/llvm-16/lib', '/usr/lib/llvm-15/lib']
+
+for s:clang_path in s:clang_paths
+    if isdirectory(s:clang_path)
+        let g:clang_library_path=s:clang_path
+        break
+    endif
+endfor
 
 " Mouse options
 " if has('mouse')
 "    set mouse=a
 " endif
+
+" Machine-specific overrides, not tracked in this repo
+if filereadable(expand('~/.vimrc.local'))
+    source ~/.vimrc.local
+endif

@@ -4,13 +4,25 @@ Vim-style keybindings and editor theme settings for Visual Studio Code. These se
 
 **File:** `vscode-user-settings.json`
 
-This file is **not auto-installed** by `setup.sh`. Copy it manually to your VS Code settings directory:
+`setup.sh` symlinks this file into your VS Code user settings directory, which differs by platform:
+
+| Platform | Target |
+|---|---|
+| macOS | `~/Library/Application Support/Code/User/settings.json` |
+| Linux | `~/.config/Code/User/settings.json` |
+| WSL | Not linked — see below |
+
+Any existing `settings.json` is moved to `settings.json.bak` first, so merge your own settings back in afterwards if you had them.
+
+### WSL
+
+On WSL, VS Code runs on the Windows host and reads its user settings from the Windows filesystem, so there is nothing useful to link inside the Linux environment. (`~/.vscode-server/data/Machine/settings.json` only accepts machine-scoped settings, which excludes editor and extension settings like these.) `setup.sh` prints the path and skips the link. Copy it manually:
 
 ```bash
-# macOS
-cp vscode-user-settings.json ~/Library/Application\ Support/Code/User/settings.json
+cp vscode-user-settings.json "$(wslpath "$(cmd.exe /c 'echo %APPDATA%' 2>/dev/null | tr -d '\r')")/Code/User/settings.json"
 
-# Or merge into your existing settings.json
+# Or just open the folder and copy it by hand:
+explorer.exe "$(wslpath -w ~)"
 ```
 
 **Requires:** The [Vim extension for VS Code](https://marketplace.visualstudio.com/items?itemName=vscodevim.vim) (`vscodevim.vim`).

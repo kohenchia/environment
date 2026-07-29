@@ -53,6 +53,32 @@ drawline
 
 ---
 
+## Content Search — ripgrep
+
+[ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) is installed by `setup.sh`. It searches file *contents* recursively and respects `.gitignore` by default, which makes it much faster than `grep -r` in a repo.
+
+```bash
+rg "def main"              # Search all tracked files from the current directory
+rg -i todo                 # Case-insensitive
+rg -t py "import belle"    # Only Python files
+rg -l "TODO"               # Just list matching file names
+rg -C 3 "raise ValueError" # 3 lines of context around each match
+```
+
+These aliases are defined only when `rg` is on `PATH`:
+
+| Alias | Command | Description |
+|---|---|---|
+| `rgh` | `rg --hidden` | Include hidden files, still honouring `.gitignore` |
+| `rga` | `rg --hidden --no-ignore` | Search everything, including ignored files |
+| `rgf` | `rg --files` | List the files `rg` would search (no pattern) |
+
+When `rg` is present it also becomes fzf's file-listing command via `FZF_DEFAULT_COMMAND`, so `Ctrl-T` and bare `fzf` skip anything in `.gitignore`. The `wt*` worktree pickers feed fzf on stdin and are unaffected.
+
+Use `rg` for searching inside files and `ff`/`fd` for finding files and directories by *name*.
+
+---
+
 ## Python & Development
 
 | Alias | Command | Description |
@@ -124,23 +150,27 @@ This lazily initializes conda so it doesn't slow down shell startup.
 
 ---
 
-## Application Shortcuts (macOS only)
+## Application Shortcuts (platform-specific)
 
-These aliases open files or directories in GUI applications:
+These aliases open files or directories in GUI applications. Which ones exist depends on `$ENV_OS` (see [platform detection](../README.md#supported-platforms)):
 
-| Alias | Application |
-|---|---|
-| `m` | MacVim |
-| `vsc` | Visual Studio Code |
+| Alias | macOS | Linux | WSL |
+|---|---|---|---|
+| `m` | MacVim | — | — |
+| `vsc` | `open -a "Visual Studio Code"` | `code` | `code` (via the WSL shim) |
+| `open` | built in | `xdg-open` (if installed) | `wslview`, else `explorer.exe` |
 
 ```bash
-m file.txt     # Open file in MacVim
+m file.txt     # Open file in MacVim (macOS)
 vsc .          # Open current directory in VS Code
+open .         # Open current directory in the file manager
 ```
 
 ---
 
-## System Utilities
+## System Utilities (macOS only)
+
+These are defined only when `$ENV_OS` is `macos`:
 
 | Alias | Purpose |
 |---|---|
@@ -170,6 +200,8 @@ resetaudio
 
 | Variable | Value | Purpose |
 |---|---|---|
+| `ENV_OS` | `macos`, `linux`, `wsl`, or `unknown` | Detected platform; set before `~/.zshrc_work` is sourced |
 | `POWERLEVEL9K_COMMAND_EXECUTION_TIME_THRESHOLD` | `0` | Always show command execution time in prompt |
+| `FZF_DEFAULT_COMMAND` | `rg --files --hidden --glob "!.git/*"` | fzf file listing via ripgrep (only when `rg` is installed) |
 | `NVM_DIR` | `$HOME/.nvm` | Node Version Manager directory (auto-loaded if present) |
 | `PUSHDSILENT` | set | Suppress directory stack messages from `pushd`/`popd` |

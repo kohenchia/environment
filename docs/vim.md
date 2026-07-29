@@ -87,7 +87,9 @@ Plugins are managed by [Pathogen](https://github.com/tpope/vim-pathogen) and sto
 
 ### clang_complete
 
-C/C++ autocompletion powered by Clang. Automatically detects the Clang library from Xcode Command Line Tools at `/Library/Developer/CommandLineTools/usr/lib`.
+C/C++ autocompletion powered by Clang. The Clang library path is probed with `isdirectory()` across the usual per-platform locations — Xcode Command Line Tools (`/Library/Developer/CommandLineTools/usr/lib`) on macOS, Homebrew LLVM, and the distro `llvm`/`libclang` directories on Linux and WSL. The first one that exists wins; if none do, the plugin loads without a configured library path.
+
+To point it somewhere else, set `g:clang_library_path` in `~/.vimrc.local`, which `.vimrc` sources last if it exists. That file is not tracked by this repo — use it for any machine-specific Vim settings.
 
 ### vim-vividchalk
 
