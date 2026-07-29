@@ -75,12 +75,12 @@ wtl myproject
 Active worktrees:
 
   myproject
-    /Users/you/github/myproject              abc1234 [main]
-    /Users/you/github/myproject-wt/add-login  def5678 [add-login-page]
+    ~/github/myproject                    abc1234 [main]
+    ~/github/myproject-wt/add-login       def5678 [add-login-page]
 
   otherproject
-    /Users/you/github/otherproject           111aaaa [main]
-    /Users/you/github/otherproject-wt/fix    222bbbb [fix-api]
+    ~/github/otherproject                 111aaaa [main]
+    ~/github/otherproject-wt/fix          222bbbb [fix-api]
 ```
 
 ---
@@ -163,7 +163,7 @@ If you call any of `wta`, `wtc`, `wtr`, `wts`, or `wtu` with no arguments, an [`
 | `wtc`, `wtr`, `wts` | All existing worktrees as `<repo>` `<branch>` rows. |
 | `wtu` | All worktree symlinks in the current directory. |
 
-`fzf` is installed automatically by `setup.sh` (via Homebrew). If `fzf` is missing or stdin is not a TTY, the commands fall back to printing the usage message — the original positional-argument form continues to work unchanged.
+`fzf` is installed automatically by `setup.sh` (via your platform's package manager, or the upstream installer into `~/.fzf` as a fallback). If `fzf` is missing or stdin is not a TTY, the commands fall back to printing the usage message — the original positional-argument form continues to work unchanged.
 
 ---
 

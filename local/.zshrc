@@ -9,13 +9,7 @@ fi
 # export PATH=$HOME/bin:/usr/local/bin:$PATH
 
 # Path to your oh-my-zsh installation.
-if [ "$(uname 2> /dev/null)" != "Linux" ]; then
-    # Not Linux, assumed to be OSX
-    export ZSH="/Users/kohenchia/.oh-my-zsh"
-else
-    # Linux
-    export ZSH="/home/kohenchia/.oh-my-zsh"
-fi
+export ZSH="$HOME/.oh-my-zsh"
 
 # Set name of the theme to load --- if set to "random", it will
 # load a random theme each time oh-my-zsh is loaded, in which case,
@@ -83,7 +77,17 @@ ZSH_THEME="powerlevel10k/powerlevel10k"
 # Add wisely, as too many plugins slow down shell startup.
 plugins=(git)
 
-source $ZSH/oh-my-zsh.sh
+# Completions installed outside of oh-my-zsh (e.g. ripgrep's _rg, dropped here
+# by setup.sh). Must come before oh-my-zsh runs compinit.
+if [[ -d "$HOME/.local/share/zsh/site-functions" ]]; then
+    fpath=("$HOME/.local/share/zsh/site-functions" $fpath)
+fi
+
+if [[ -r "$ZSH/oh-my-zsh.sh" ]]; then
+    source $ZSH/oh-my-zsh.sh
+else
+    print -u 2 "oh-my-zsh not found at $ZSH — run ~/github/environment/setup.sh"
+fi
 
 # User configuration
 
@@ -110,13 +114,34 @@ source $ZSH/oh-my-zsh.sh
 # Example aliases
 # alias zshconfig="mate ~/.zshrc"
 # alias ohmyzsh="mate ~/.oh-my-zsh"
-source ~/.oh-my-zsh/custom/themes/powerlevel10k/powerlevel10k.zsh-theme
+
+# The powerlevel10k theme itself is loaded by oh-my-zsh via ZSH_THEME above.
 
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
 # ====================================
 # Custom
+
+# ── Platform detection ───────────────────────────────────────────────
+# ENV_OS is one of: macos, linux, wsl, unknown. Used to gate platform-specific
+# aliases and paths below, and available for use in ~/.zshrc_work.
+case "$(uname -s 2>/dev/null)" in
+    Darwin)
+        export ENV_OS=macos
+        ;;
+    Linux)
+        # WSL kernels advertise "microsoft" in /proc/version
+        if [[ -r /proc/version ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+            export ENV_OS=wsl
+        else
+            export ENV_OS=linux
+        fi
+        ;;
+    *)
+        export ENV_OS=unknown
+        ;;
+esac
 
 export POWERLEVEL9K_COMMAND_EXECUTION_TIME_THRESHOLD=0
 
@@ -136,14 +161,29 @@ function fd() {
     find . -type d -name ${@}
 }
 
+# ── ripgrep ──────────────────────────────────────────────────────────
+# rg (https://github.com/BurntSushi/ripgrep) is installed by setup.sh.
+if command -v rg >/dev/null 2>&1; then
+    alias rgh='rg --hidden'                # include hidden files, still honour .gitignore
+    alias rga='rg --hidden --no-ignore'    # search everything, ignore rules included
+    alias rgf='rg --files'                 # list searchable files (honours .gitignore)
+
+    # Let fzf use rg for file listing so it honours .gitignore. The wt* pickers
+    # feed fzf on stdin, so they are unaffected by this.
+    export FZF_DEFAULT_COMMAND='rg --files --hidden --glob "!.git/*"'
+    export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
+fi
+
 # Git aliases
-unalias ga
+# These override same-named aliases from the oh-my-zsh git plugin. Ignore
+# unalias errors: which aliases the plugin defines varies between versions.
+unalias ga 2>/dev/null
 alias ga='git add -A'
-unalias gb
+unalias gb 2>/dev/null
 alias gb='git branch'
-unalias gc
+unalias gc 2>/dev/null
 alias gc='git commit -v -m'  # This will force a commit message to be provided
-unalias gd
+unalias gd 2>/dev/null
 alias gd='git diff -w "$@"'
 alias ghist="git log --pretty=format:'%h %ad | %s%d [%an]' --graph --date=short"
 function glc
@@ -151,10 +191,13 @@ function glc
     echo Counting all lines in the ${1:-master} branch...
     wc -l `git ls-tree -r ${1:-master} --name-only`
 }
-unalias gm
+unalias gm 2>/dev/null
 alias gm='git merge --no-commit --no-ff'
+unalias gpush 2>/dev/null
 alias gpush='git push -f --tags -u origin "$@"'
+unalias gs 2>/dev/null
 alias gs='git status -s'
+unalias gup 2>/dev/null
 alias gup='git fetch --prune origin  && git fetch --prune origin "+refs/tags/*:refs/tags/*" && git rebase -r'
 
 # k8s
@@ -460,9 +503,7 @@ setopt PUSHDSILENT
 alias bb='cd ~/bitbucket'
 alias ca="conda activate"
 alias cda="conda deactivate"
-alias cf='caffeinate'
 alias cg='cd ~/github'
-alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
 alias cy='claude --dangerously-skip-permissions'
 alias d='docker'
 alias dcp='docker-compose'
@@ -476,7 +517,6 @@ alias p3='uv run python3'
 alias pdt='uvx pipdeptree'
 alias pvd='echo Starting debugpy server at port 17778. Waiting for client...; uv run python -ic "import debugpy; debugpy.listen(17778); debugpy.wait_for_client()"; print("Connected.")'
 alias rn='npx react-native'
-alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
 alias tmp='cd /tmp'
 alias ur='uv run'
 
@@ -495,20 +535,45 @@ function c() {
     fi
 }
 
-# Application shortcuts
-if [ "$(uname 2> /dev/null)" != "Linux" ]; then
-    # Not Linux, assumed to be OSX
-    alias m='open -a MacVim'
-    alias vsc='open -a Visual\ Studio\ Code'
-fi
+# ── Platform-specific aliases ────────────────────────────────────────
+case "$ENV_OS" in
+    macos)
+        # GUI application shortcuts
+        alias m='open -a MacVim'
+        alias vsc='open -a Visual\ Studio\ Code'
+        # System utilities (macOS only)
+        alias cf='caffeinate'
+        alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
+        alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
+        ;;
+    wsl)
+        alias vsc='code'   # the WSL shim launches VS Code on the Windows host
+        if command -v wslview >/dev/null 2>&1; then
+            alias open='wslview'
+        else
+            alias open='explorer.exe'
+        fi
+        ;;
+    linux)
+        alias vsc='code'
+        command -v xdg-open >/dev/null 2>&1 && alias open='xdg-open'
+        ;;
+esac
+
+# Homebrew-installed ruby, if present (path differs by platform and CPU)
+for ruby_prefix in /opt/homebrew/opt/ruby/bin /usr/local/opt/ruby/bin /home/linuxbrew/.linuxbrew/opt/ruby/bin; do
+    if [[ -d "$ruby_prefix" ]]; then
+        export PATH="$ruby_prefix:$PATH"
+        break
+    fi
+done
+unset ruby_prefix
 
 export PATH="$HOME/.local/bin:$PATH"
 
-export PATH="/usr/local/opt/ruby/bin:$PATH"
-
 # Work stuff
-if [[ -e "/Users/kohenchia/.zshrc_work" ]]; then
-    source /Users/kohenchia/.zshrc_work
+if [[ -e "$HOME/.zshrc_work" ]]; then
+    source "$HOME/.zshrc_work"
 fi
 
 # ── Git Worktree helpers ──────────────────────────────────────────────
@@ -610,7 +675,9 @@ function _wt_pick_local_link() {
     local prompt=${1:-"symlink> "}
     local f target links=()
     for f in *(@); do
-        target=$(readlink -f "$f" 2>/dev/null)
+        # ${f:A} is zsh's own resolve-and-absolutize — portable, unlike
+        # `readlink -f`, which BSD readlink only gained in macOS 12.3.
+        target=${f:A}
         case "$target" in
             "$HOME"/github/*-wt/*) links+=("$f") ;;
         esac
@@ -875,7 +942,7 @@ function wts() {
 
     if [[ -e "$link_name" || -L "$link_name" ]]; then
         local resolved="${wt_dir:A}"
-        local link_resolved="$(readlink -f "$link_name" 2>/dev/null)"
+        local link_resolved="${link_name:A}"
         if [[ "$link_resolved" == "$resolved" ]]; then
             print "\033[0;33m⊘\033[0m ${link_name} already links to this worktree"
             return 0
