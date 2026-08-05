@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+#
+# h — print a short, color-coded tutorial for a console command.
+#
+#   h <command>     e.g.  h rg
+#   h               list the commands that have a tutorial
+#
+# Tutorials are plain-markdown files under ../tutorials/<command>.md, rendered
+# to the terminal with ANSI color. Add a new tutorial by dropping a markdown
+# file in that directory — no code changes required.
+#
+# Color is emitted only when stdout is a terminal and $NO_COLOR is unset, so
+# `h rg | cat` and `h rg > file` produce clean, plain text.
+
+set -euo pipefail
+
+# ── Locate the tutorials directory relative to this script ──────────────
+# Resolve symlinks so it works when linked into ~/.local/bin.
+SOURCE=${BASH_SOURCE[0]}
+while [[ -L "$SOURCE" ]]; do
+    dir=$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)
+    SOURCE=$(readlink "$SOURCE")
+    [[ "$SOURCE" != /* ]] && SOURCE="$dir/$SOURCE"
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)
+TUTORIAL_DIR=$(cd -P "$SCRIPT_DIR/../tutorials" >/dev/null 2>&1 && pwd)
+
+# ── Colors (empty when not writing to a terminal, or NO_COLOR set) ───────
+if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
+    BOLD=$'\033[1m'; DIM=$'\033[2m'
+    CYAN=$'\033[36m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'
+    RESET=$'\033[0m'
+else
+    BOLD=''; DIM=''; CYAN=''; GREEN=''; YELLOW=''; RED=''; RESET=''
+fi
+BT='`'   # backtick, kept in a var so it never triggers command substitution
+
+list_tutorials() {
+    local found=0 f name
+    for f in "$TUTORIAL_DIR"/*.md; do
+        [[ -e "$f" ]] || continue
+        found=1
+        name=$(basename "$f" .md)
+        printf '  %s%s%s\n' "$GREEN" "$name" "$RESET"
+    done
+    [[ $found -eq 1 ]] || printf '  %s(none yet)%s\n' "$DIM" "$RESET"
+}
+
+# Apply inline markdown (`code` and **bold**) to a run of normal text.
+render_inline() {
+    printf '%s' "$1" | sed -E \
+        -e "s/${BT}([^${BT}]+)${BT}/${YELLOW}\1${RESET}/g" \
+        -e "s/\*\*([^*]+)\*\*/${BOLD}\1${RESET}/g"
+}
+
+render() {
+    local file=$1 in_code=0 line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Fenced code blocks: toggle on ``` and swallow the fence line.
+        if [[ "$line" == '```'* ]]; then
+            in_code=$(( 1 - in_code ))
+            continue
+        fi
+
+        if [[ $in_code -eq 1 ]]; then
+            # Dim any trailing "  # comment"; color the command green.
+            local body
+            body=$(printf '%s' "$line" | sed -E \
+                "s/([[:space:]])#(.*)$/\1${DIM}#\2${RESET}${GREEN}/")
+            printf '    %s%s%s\n' "$GREEN" "$body" "$RESET"
+            continue
+        fi
+
+        case "$line" in
+            '# '*)   printf '%s%s%s\n' "$BOLD$CYAN" "${line#\# }" "$RESET" ;;
+            '## '*)  printf '\n%s%s%s\n' "$BOLD$CYAN" "${line#\#\# }" "$RESET" ;;
+            '### '*) printf '\n%s%s%s\n' "$BOLD" "${line#\#\#\# }" "$RESET" ;;
+            '---')   printf '%s%s%s\n' "$DIM" "────────────────────────────────────────" "$RESET" ;;
+            *)       render_inline "$line"; printf '\n' ;;
+        esac
+    done < "$file"
+}
+
+main() {
+    if [[ $# -eq 0 ]]; then
+        printf '%sh%s — print a color-coded tutorial for a console command.\n\n' "$BOLD" "$RESET"
+        printf 'Usage: %sh <command>%s   e.g.  %sh rg%s\n\n' "$BOLD" "$RESET" "$GREEN" "$RESET"
+        printf 'Available tutorials:\n'
+        list_tutorials
+        exit 0
+    fi
+
+    local cmd=$1 file="$TUTORIAL_DIR/$1.md"
+    if [[ ! -f "$file" ]]; then
+        printf '%sNo tutorial for %s%s%s yet.%s\n\n' "$RED" "$BOLD" "$cmd" "$RESET$RED" "$RESET" >&2
+        printf 'Available tutorials:\n' >&2
+        list_tutorials >&2
+        exit 1
+    fi
+
+    render "$file"
+}
+
+main "$@"
