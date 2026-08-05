@@ -11,6 +11,7 @@ A comprehensive development environment for macOS, Linux, and WSL. Includes shel
 | [**Git Worktrees**](docs/git-worktrees.md) | Work on multiple branches simultaneously with `wt*` commands |
 | [**Git Aliases**](docs/git-aliases.md) | Shorthand commands for everyday git operations |
 | [**Shell Aliases & Functions**](docs/shell-aliases.md) | Navigation, search, Docker, Kubernetes, system utilities, and more |
+| [**Command Tutorials**](docs/command-tutorials.md) | `h <command>` — color-coded, copy-pasteable cheat sheets in your terminal |
 | [**Vim Configuration**](docs/vim.md) | Plugins, keybindings, and color scheme |
 | [**VS Code Configuration**](docs/vscode.md) | Vim keybindings and editor settings for VS Code |
 
@@ -87,5 +88,6 @@ See the **[docs/](docs/)** folder for detailed guides on each feature:
 - **[Git Worktrees](docs/git-worktrees.md)** — `wta`, `wtl`, `wtc`, `wtr`, `wts`, `wtu`
 - **[Git Aliases](docs/git-aliases.md)** — `ga`, `gb`, `gc`, `gd`, `gs`, `gm`, `gpush`, `gup`, `ghist`, `gt`, `glc`
 - **[Shell Aliases & Functions](docs/shell-aliases.md)** — Navigation, search (`rg`), Docker, Kubernetes, development tools, system utilities
+- **[Command Tutorials](docs/command-tutorials.md)** — `h` prints color-coded command cheat sheets in your terminal
 - **[Vim Configuration](docs/vim.md)** — Plugins, keybindings, status line, color scheme
 - **[VS Code Configuration](docs/vscode.md)** — Vim-style keybindings and editor theme settings

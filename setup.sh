@@ -303,6 +303,10 @@ link vim/.vimrc "$HOME/.vimrc"
 link vim/.gvimrc "$HOME/.gvimrc"
 link vim "$HOME/.vim"
 
+# `h` — color-coded command tutorials. Linked into ~/.local/bin (on PATH per
+# local/.zprofile) so it's runnable as `h <command>`.
+link bin/h "$HOME/.local/bin/h"
+
 # VS Code stores user settings in a different place on every platform
 case "$OS" in
     macos)
