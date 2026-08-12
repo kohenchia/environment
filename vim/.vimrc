@@ -1,3 +1,10 @@
+" Encoding
+" Must come first: the multibyte 'listchars' below fails outright when Vim's
+" encoding is latin1, which is what a Linux/WSL shell with no LANG set gives us.
+
+set encoding=utf-8
+scriptencoding utf-8
+
 " Pathogen
 filetype off
 call pathogen#incubate()
@@ -51,20 +58,6 @@ set list
 set listchars=tab:▸\ ,eol:¬
 set laststatus=2
 set statusline=%m\ %n:\ %F\ (%p%%)\ l\:%l\ c:%c\ b:%b\ (0x%B)
-
-" Clang
-" Probe the usual locations per platform: Xcode Command Line Tools on macOS,
-" Homebrew LLVM, then the distro libclang directories on Linux/WSL. First hit
-" wins. Kept on one line so it does not depend on line continuations.
-
-let s:clang_paths = ['/Library/Developer/CommandLineTools/usr/lib', '/opt/homebrew/opt/llvm/lib', '/usr/local/opt/llvm/lib', '/usr/lib/llvm-18/lib', '/usr/lib/llvm-17/lib', '/usr/lib/llvm-16/lib', '/usr/lib/llvm-15/lib']
-
-for s:clang_path in s:clang_paths
-    if isdirectory(s:clang_path)
-        let g:clang_library_path=s:clang_path
-        break
-    endif
-endfor
 
 " Mouse options
 " if has('mouse')

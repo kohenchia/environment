@@ -4,7 +4,7 @@ Custom Vim and MacVim setup with Pathogen plugin management, the Obsidian2 color
 
 **Files:**
 - `vim/.vimrc` — Main Vim configuration (symlinked to `~/.vimrc`)
-- `vim/.gvimrc` — MacVim-specific settings (symlinked to `~/.gvimrc`)
+- `vim/.gvimrc` — GUI settings for MacVim and GTK gvim (symlinked to `~/.gvimrc`)
 - `vim/` — Plugin directory (symlinked to `~/.vim`)
 
 ---
@@ -33,6 +33,7 @@ The `Cmd-hjkl` mappings work in MacVim for window navigation (in terminal Vim, u
 
 | Setting | Value | Description |
 |---|---|---|
+| Encoding | UTF-8 | Set explicitly — the list characters below are multibyte, and a shell with no `LANG` set would otherwise leave Vim in `latin1` and reject them |
 | Tab width | 4 spaces | `ts=4 sw=4 sts=4` |
 | Expand tabs | Yes | Spaces instead of tabs |
 | Auto-indent | Yes | Preserves indentation on new lines |
@@ -83,17 +84,7 @@ A dark color scheme with a deep blue-gray background:
 
 ## Plugins (via Pathogen)
 
-Plugins are managed by [Pathogen](https://github.com/tpope/vim-pathogen) and stored in `vim/bundle/`.
-
-### clang_complete
-
-C/C++ autocompletion powered by Clang. The Clang library path is probed with `isdirectory()` across the usual per-platform locations — Xcode Command Line Tools (`/Library/Developer/CommandLineTools/usr/lib`) on macOS, Homebrew LLVM, and the distro `llvm`/`libclang` directories on Linux and WSL. The first one that exists wins; if none do, the plugin loads without a configured library path.
-
-To point it somewhere else, set `g:clang_library_path` in `~/.vimrc.local`, which `.vimrc` sources last if it exists. That file is not tracked by this repo — use it for any machine-specific Vim settings.
-
-### vim-vividchalk
-
-[VividChalk](https://github.com/tpope/vim-vividchalk) color scheme (installed but not active — Obsidian2 is the default).
+[Pathogen](https://github.com/tpope/vim-pathogen) is vendored at `vim/autoload/pathogen.vim` and loads anything dropped into `vim/bundle/`, which is empty by default. The two plugins below ship directly in `vim/plugin/` and load without pathogen's help.
 
 ### cscope.vim
 
@@ -128,13 +119,21 @@ Delete all buffers except the current one:
 
 ---
 
-## MacVim Settings (`.gvimrc`)
+## Machine-specific overrides
 
-| Setting | Value |
-|---|---|
-| Font | Menlo, 12pt |
-| Line spacing | 1 |
-| Transparency | 8% |
-| Color scheme | Obsidian2 |
+`.vimrc` sources `~/.vimrc.local` last if it exists. That file is not tracked by this repo — use it for any per-machine Vim settings.
+
+---
+
+## GUI Settings (`.gvimrc`)
+
+| Setting | MacVim | GTK gvim |
+|---|---|---|
+| Font | Menlo, 12pt | Monospace, 12pt |
+| Transparency | 8% | — (MacVim-only option) |
+| Line spacing | 1 | 1 |
+| Color scheme | Obsidian2 | Obsidian2 |
+
+The font and transparency lines are gated on `has('gui_macvim')`: `transparency` does not exist outside MacVim (`E518`), and MacVim's `Font:h<size>` syntax is rejected by GTK gvim (`E596`), so loading them unconditionally would error on Linux and WSLg.
 
 The status line color-change behavior carries over from `.vimrc`.

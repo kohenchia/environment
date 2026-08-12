@@ -12,7 +12,7 @@ Manage Python virtual environments using [uv](https://docs.astral.sh/uv/) with f
 | `vls` | **List** all environments and show which is active |
 | `vrm [name]` | **Remove** a virtual environment |
 
-All commands require `uv` to be installed (`brew install uv`).
+All commands require `uv` to be installed. `setup.sh` installs it on macOS, Linux, and WSL — via the platform's package manager where it's packaged, otherwise via the [upstream installer](https://docs.astral.sh/uv/).
 
 ---
 
