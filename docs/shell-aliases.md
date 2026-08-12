@@ -79,6 +79,22 @@ Use `rg` for searching inside files and `ff`/`fd` for finding files and director
 
 ---
 
+## Fuzzy Finding — fzf
+
+`.zshrc` loads fzf's zsh integration, so these key bindings work on macOS, Linux, and WSL alike:
+
+| Key | Action |
+|---|---|
+| `Ctrl-T` | Paste a fuzzy-picked file path onto the command line |
+| `Ctrl-R` | Fuzzy-search command history |
+| `Alt-C` | `cd` into a fuzzy-picked subdirectory |
+
+Loading prefers `fzf --zsh` (fzf 0.48 and newer). Older packaged versions ship the integration as shell scripts instead, and where those land differs per platform, so `.zshrc` falls back to searching the Homebrew prefix, `/usr/share/doc/fzf/examples` (Debian/Ubuntu), `/usr/share/fzf` (Fedora/Arch), and `~/.fzf/shell` (upstream installer).
+
+fzf also powers the interactive [worktree pickers](git-worktrees.md#interactive-mode).
+
+---
+
 ## Python & Development
 
 | Alias | Command | Description |
@@ -193,7 +209,6 @@ resetaudio
 # Kills the coreaudiod process; macOS restarts it automatically
 # Use when audio output is glitchy or not working
 ```
-
 ---
 
 ## Environment Variables
@@ -203,5 +218,6 @@ resetaudio
 | `ENV_OS` | `macos`, `linux`, `wsl`, or `unknown` | Detected platform; set before `~/.zshrc_work` is sourced |
 | `POWERLEVEL9K_COMMAND_EXECUTION_TIME_THRESHOLD` | `0` | Always show command execution time in prompt |
 | `FZF_DEFAULT_COMMAND` | `rg --files --hidden --glob "!.git/*"` | fzf file listing via ripgrep (only when `rg` is installed) |
+| `FZF_CTRL_T_COMMAND` | same as `FZF_DEFAULT_COMMAND` | File listing for the `Ctrl-T` binding |
 | `NVM_DIR` | `$HOME/.nvm` | Node Version Manager directory (auto-loaded if present) |
 | `PUSHDSILENT` | set | Suppress directory stack messages from `pushd`/`popd` |

@@ -123,6 +123,10 @@ fi
 # ====================================
 # Custom
 
+# Homebrew prefix and ~/.local/bin. Also sourced by .zprofile — see that file
+# for why both do it. Resolves through the ~/.zshrc symlink to find the repo.
+source "${${(%):-%x}:A:h}/.shell-common.zsh"
+
 # ── Platform detection ───────────────────────────────────────────────
 # ENV_OS is one of: macos, linux, wsl, unknown. Used to gate platform-specific
 # aliases and paths below, and available for use in ~/.zshrc_work.
@@ -174,6 +178,28 @@ if command -v rg >/dev/null 2>&1; then
     export FZF_CTRL_T_COMMAND="$FZF_DEFAULT_COMMAND"
 fi
 
+# ── fzf key bindings and completion ──────────────────────────────────
+# Ctrl-T (paste file), Ctrl-R (history), Alt-C (cd). `fzf --zsh` is the modern
+# one-liner (fzf >= 0.48); older packages only ship the shell scripts, and
+# where they land differs per platform, hence the search list.
+if command -v fzf >/dev/null 2>&1; then
+    if fzf --zsh >/dev/null 2>&1; then
+        source <(fzf --zsh)
+    else
+        for _fzf_dir in "$(brew --prefix fzf 2>/dev/null)/shell" \
+                        /usr/share/doc/fzf/examples \
+                        /usr/share/fzf \
+                        "$HOME/.fzf/shell"; do
+            if [[ -r "$_fzf_dir/key-bindings.zsh" ]]; then
+                source "$_fzf_dir/key-bindings.zsh"
+                [[ -r "$_fzf_dir/completion.zsh" ]] && source "$_fzf_dir/completion.zsh"
+                break
+            fi
+        done
+        unset _fzf_dir
+    fi
+fi
+
 # Git aliases
 # These override same-named aliases from the oh-my-zsh git plugin. Ignore
 # unalias errors: which aliases the plugin defines varies between versions.
@@ -184,7 +210,7 @@ alias gb='git branch'
 unalias gc 2>/dev/null
 alias gc='git commit -v -m'  # This will force a commit message to be provided
 unalias gd 2>/dev/null
-alias gd='git diff -w "$@"'
+alias gd='git diff -w'
 alias ghist="git log --pretty=format:'%h %ad | %s%d [%an]' --graph --date=short"
 function glc
 {
@@ -194,7 +220,7 @@ function glc
 unalias gm 2>/dev/null
 alias gm='git merge --no-commit --no-ff'
 unalias gpush 2>/dev/null
-alias gpush='git push -f --tags -u origin "$@"'
+alias gpush='git push -f --tags -u origin'
 unalias gs 2>/dev/null
 alias gs='git status -s'
 unalias gup 2>/dev/null
@@ -531,7 +557,8 @@ function c() {
         eval "$(conda shell.zsh hook)"
     else
         echo "conda not found. You cannot use the c() function to initialize conda."
-        exit 1
+        # `exit` in a zsh function would close the shell, not just the function
+        return 1
     fi
 }
 
@@ -544,7 +571,7 @@ case "$ENV_OS" in
         # System utilities (macOS only)
         alias cf='caffeinate'
         alias cputemp='sudo powermetrics --samplers smc | grep -i "CPU die temperature"'
-        alias resetaudio='sudo kill -9 `ps ax|grep "coreaudio[a-z]" | awk "{print $1}"`'
+        alias resetaudio='sudo killall coreaudiod'
         ;;
     wsl)
         alias vsc='code'   # the WSL shim launches VS Code on the Windows host
@@ -569,7 +596,7 @@ for ruby_prefix in /opt/homebrew/opt/ruby/bin /usr/local/opt/ruby/bin /home/linu
 done
 unset ruby_prefix
 
-export PATH="$HOME/.local/bin:$PATH"
+# ~/.local/bin is on PATH via local/.shell-common.zsh, sourced above.
 
 # Work stuff
 if [[ -e "$HOME/.zshrc_work" ]]; then
@@ -846,6 +873,18 @@ function wtc() {
 }
 
 # ── Worktree tab completions ─────────────────────────────────────────
+#
+# compdef comes from compinit, which oh-my-zsh normally runs for us. setup.sh
+# tolerates a machine where oh-my-zsh could not be installed, so load compinit
+# here rather than let every registration below fail at shell startup.
+if (( ! $+functions[compdef] )); then
+    autoload -Uz compinit && compinit -i
+fi
+
+# Registers a completion, or does nothing if this zsh has no completion system.
+function _wt_compdef() {
+    (( $+functions[compdef] )) && compdef "$@"
+}
 
 function _wt_existing_branches() {
     local repo_dir=~/github/${1}
@@ -882,14 +921,14 @@ function _wta() {
         4) compadd $(_wt_all_branches "${words[2]}") ;;
     esac
 }
-compdef _wta wta
+_wt_compdef _wta wta
 
 function _wtl() {
     case $CURRENT in
         2) _wt_complete_repos ;;
     esac
 }
-compdef _wtl wtl
+_wt_compdef _wtl wtl
 
 function _wtr() {
     case $CURRENT in
@@ -897,7 +936,7 @@ function _wtr() {
         3) compadd $(_wt_existing_branches "${words[2]}") ;;
     esac
 }
-compdef _wtr wtr
+_wt_compdef _wtr wtr
 
 function _wtc() {
     case $CURRENT in
@@ -905,7 +944,7 @@ function _wtc() {
         3) compadd $(_wt_existing_branches "${words[2]}") ;;
     esac
 }
-compdef _wtc wtc
+_wt_compdef _wtc wtc
 
 # ── Worktree symlinks ────────────────────────────────────────────────
 #
@@ -988,7 +1027,7 @@ function _wts() {
         3) compadd $(_wt_existing_branches "${words[2]}") ;;
     esac
 }
-compdef _wts wts
+_wt_compdef _wts wts
 
 function _wtu() {
     # Complete with worktree symlinks in the current directory.
@@ -997,7 +1036,7 @@ function _wtu() {
         3) compadd $(_wt_existing_branches "${words[2]}") ;;
     esac
 }
-compdef _wtu wtu
+_wt_compdef _wtu wtu
 
 export NVM_DIR="$HOME/.nvm"
 if [ -s "$NVM_DIR/nvm.sh" ]; then \. "$NVM_DIR/nvm.sh"; fi # This loads nvm
