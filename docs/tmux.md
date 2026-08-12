@@ -212,19 +212,49 @@ to get wrong:
 The grey paints only where a program hasn't painted its own background — anything that fills its
 screen, vim with a colorscheme for instance, covers its whole pane and the grey won't show there.
 
-**Two hues, two layers.** Green marks the window and yellow marks the pane, so the tab you're on and
-the pane you're in can never read as the same signal. Near-black `colour232` text on all of them is
-what keeps them legible at full saturation.
+---
 
-| | Colour | Hex |
-|---|---|---|
-| Session chip (left of the tab strip) | `colour65` | `5f875f` |
-| Current tab | `colour77` | `5fd75f` |
-| Focused pane — title bar and border | `colour178` | `d7af00` |
-| Unfocused pane background / text | `colour237` / `colour246` | `3a3a3a` / `949494` |
+## A hue per window
 
-Activity on an unfocused tab is `colour109`, deliberately outside both accent hues — a green-ish flag
-there would read as a second, half-lit selection.
+Every window owns a hue, and its tab and the pane bars inside it are two brightnesses of that one
+colour. Any pane on screen tells you which project you're looking at without reading a word, and the
+tab strip doubles as the legend. Sixteen sets; a seventeenth window falls back to grey.
+
+| # | Hue | Tab | Pane | | # | Hue | Tab | Pane |
+|---|---|---|---|---|---|---|---|---|
+| 1 | red | `203` | `167` | | 9 | lime | `155` | `149` |
+| 2 | blue | `75` | `68` | | 10 | pink | `211` | `168` |
+| 3 | green | `77` | `71` | | 11 | teal | `86` | `79` |
+| 4 | yellow | `221` | `179` | | 12 | gold | `227` | `185` |
+| 5 | magenta | `213` | `176` | | 13 | sky | `117` | `110` |
+| 6 | cyan | `87` | `80` | | 14 | violet | `183` | `140` |
+| 7 | orange | `215` | `173` | | 15 | salmon | `209` | `174` |
+| 8 | purple | `141` | `104` | | 16 | mint | `121` | `114` |
+
+The bright shade backs the current tab; the mid shade backs the focused pane's title bar and draws its
+border. Unfocused tabs wear their own mid shade as *text* rather than a background, so the strip stays
+colour-coded with only one entry lit. Everything that isn't a window — session chip, clock, messages,
+the unfocused-pane grey — is deliberately greyscale, since a fixed accent would clash with whichever
+of the sixteen is on screen. Near-black `colour232` text on the lit shades is what keeps them legible
+at full saturation.
+
+Two tmux details make this work without a single hook, both verified against 3.5a:
+
+- **Style options expand formats at draw time.** `pane-active-border-style "fg=#{E:@hue_pane}"` renders
+  identically to a literal `fg=colour167`, so the border colour can follow `#{window_index}` directly.
+  The option stores the unexpanded text, so `show -gv` looks wrong while the rendering is right.
+- **`#{s/…/…/;s/…/…/:var}` chains substitutions left to right**, which makes the index → colour map one
+  flat list instead of sixteen nested conditionals. The `^N$` anchors stop `^1$` swallowing 10-16, and
+  each replacement carries its own `colour` prefix so no later rule can match a value an earlier one
+  produced.
+
+The out-of-range fallback is a trailing `s/^[0-9]+$/colour245/` — anything still a bare number after
+sixteen misses was never in the table. It is *not* written as a numeric guard because **tmux's
+comparison operators compare strings**: `#{>:2,16}` is true, so `#{?#{>:#{window_index},16},…}` sends
+windows 2 through 9 to the fallback and only 1 and 10-16 come out right.
+
+Activity on an unfocused tab is `underscore` with no colour of its own, so the tab keeps its hue
+instead of being repainted into something that reads like a second, half-lit selection.
 
 ---
 
