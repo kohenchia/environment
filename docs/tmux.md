@@ -149,13 +149,82 @@ Cmd+D                       # split right
 claude                      # Claude Code in the right pane
 ```
 
-Pane borders are labelled with whatever is running in them. Claude Code reports itself as `node`, so
-name that pane with **`Cmd+R`** (or `tmux select-pane -T claude`) and the border uses the name
-instead. The label falls back to the running command whenever a pane hasn't been named — tmux seeds
-`pane_title` with the hostname, so `.tmux.conf` compares against `host_short` to tell "unnamed" from
-"named" rather than testing for an empty title.
+Pane borders are labelled with whatever is running in them, and **`Cmd+R`** (or
+`tmux select-pane -T logs`) names a pane explicitly when its command isn't descriptive enough. An
+explicit name wins; otherwise the label falls back to the running command. tmux seeds `pane_title`
+with the hostname rather than leaving it empty, so that's what `.tmux.conf` compares against to tell
+"unnamed" from "named" — testing for an empty title would never work. It compares against `#{host}`
+and *not* `#{host_short}`: the seed is the full name, so on this machine `host_short` yields
+`Kohens-MacBook-Pro` against a `pane_title` of `Kohens-MacBook-Pro.local`, never matches, and every
+unnamed pane ends up labelled with the machine instead of its command.
+
+Anything that sets the terminal title (OSC 0/2) sets `pane_title` too, and tmux can't refuse it.
+Claude Code puts its session name there, so a Claude pane self-labels rather than reading `node` —
+and it will overwrite a name you set with `Cmd+R`.
 
 Names survive shell activity: running commands and `cd`ing around don't clobber them.
+
+The focused pane's label is a lit bar across the pane's full width, with a bright border line round
+the rest of it; unfocused panes get a dim label on a thin grey line:
+
+```
+▓▓ 1 · claude ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
+ > implement the parser…
+
+── 2 · zsh ──────────────────────────
+ ~/github/belle ❯
+```
+
+Three things make that work, all worth knowing before you touch the format:
+
+- **The bar is the label's padding, not the border.** tmux has no "fill this row" primitive for pane
+  borders, and putting a `bg` on `pane-active-border-style` tints all four sides of the frame instead
+  of just the top. So the active label pads itself out past any real terminal width, tmux clips the
+  overflow at the pane's edge, and the padding's background paints the row. The inactive branch is
+  deliberately *not* padded — padding spaces overwrite the border line, which is the point when the
+  bar is lit and would blank the line when it isn't.
+- **`#{pN:…}` has two traps**, both verified against tmux 3.5a. Its direction is the reverse of what
+  the manual claims: `p400` pads on the *right*, leaving text left-aligned, while `p-400`
+  right-justifies. And the width must be a literal — `#{p#{pane_width}:…}` expands to nothing at all,
+  which is why the format pads to a fixed 400 and leans on clipping rather than measuring the pane.
+- **Commas inside `#[…]` would break it.** The format is one `#{?pane_active,…,…}` conditional, and a
+  comma in a style tag (`#[fg=colour232,bold]`) reads as that conditional's argument separator. Write
+  each attribute as its own tag: `#[fg=colour232]#[bold]`.
+
+Titles appear only once a window has more than one pane — a lone pane has no sibling to be
+distinguished from, and with the status line already at the top a lit bar right beneath it reads as a
+doubled header. A `window-layout-changed` hook flips `pane-border-status` between `off` and `top`.
+
+Unfocused panes also sit on a lighter grey with muted text (`window-style`), so the focused pane reads
+as the one hole you're working in rather than one panel among equals. Two things about that are easy
+to get wrong:
+
+- **The active pane must say `terminal`, not `default`.** In a tmux style `default` means *inherit*,
+  and what the active pane inherits from is `window-style` — so `window-active-style "bg=default"`
+  silently greys out the focused pane along with the rest. `terminal` is the terminal's own
+  background, which leaves the focused pane looking untouched and keeps window opacity working. It
+  needs tmux 3.2+, so it's gated on the same version check as `terminal-features` (recorded as
+  `@tmux32`) with a pinned near-black as the fallback.
+- **The grey has to clear the terminal's own background.** Alacritty's default is `#1d1f21`, so
+  `colour235` (`#262626`) is close enough that every pane just looks uniformly grey. `colour237`
+  (`#3a3a3a`) registers at a glance.
+
+The grey paints only where a program hasn't painted its own background — anything that fills its
+screen, vim with a colorscheme for instance, covers its whole pane and the grey won't show there.
+
+**Two hues, two layers.** Green marks the window and yellow marks the pane, so the tab you're on and
+the pane you're in can never read as the same signal. Near-black `colour232` text on all of them is
+what keeps them legible at full saturation.
+
+| | Colour | Hex |
+|---|---|---|
+| Session chip (left of the tab strip) | `colour65` | `5f875f` |
+| Current tab | `colour77` | `5fd75f` |
+| Focused pane — title bar and border | `colour178` | `d7af00` |
+| Unfocused pane background / text | `colour237` / `colour246` | `3a3a3a` / `949494` |
+
+Activity on an unfocused tab is `colour109`, deliberately outside both accent hues — a green-ish flag
+there would read as a second, half-lit selection.
 
 ---
 
