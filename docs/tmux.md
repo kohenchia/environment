@@ -226,6 +226,17 @@ colour on the bar's:
  belle   1 belle ▐ 2 benchmark ▌ 3 shamrock                    20:03
 ```
 
+Below the bar is a blank row, so the coloured strip doesn't sit flush against the pane under it. That's
+`status 2` to buy the row plus `status-format[1]` to paint it — and it *has* to be painted: an empty
+format leaves the row on `status-style`, which makes the bar look two rows thick instead of leaving a
+gap. `#[fill=terminal]` follows Alacritty's own background rather than pinning a grey that would show
+as a band if you ever set a theme, which puts it behind the same tmux 3.2+ gate as
+`window-active-style`. It costs one row of window height.
+
+There is no equivalent for panes. Pane chrome is exactly one row — the border — and everything below it
+is the program's own screen; nothing in tmux's 139 options pads or insets a pane's interior. `status 2`
+works only because the status line is tmux's own real estate.
+
 Going lighter rather than more saturated is what makes it read as selected — the jump in brightness
 against the mid bar is the signal, and a near-white background is where near-black bold text is most
 legible. The caps extend the block half a cell each way and give it a defined edge without needing a
