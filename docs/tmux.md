@@ -259,12 +259,44 @@ Two tmux details make this work without a single hook, both verified against 3.5
   produced.
 
 The out-of-range fallback is a trailing `s/^[0-9]+$/colour245/` — anything still a bare number after
-sixteen misses was never in the table. It is *not* written as a numeric guard because **tmux's
-comparison operators compare strings**: `#{>:2,16}` is true, so `#{?#{>:#{window_index},16},…}` sends
-windows 2 through 9 to the fallback and only 1 and 10-16 come out right.
+sixteen misses was never in the table. It is *not* written as a numeric guard because **`#{>:}` compares
+as strings**: `#{>:2,16}` is true, so `#{?#{>:#{window_index},16},…}` sends windows 2 through 9 to the
+fallback and only 1 and 10-16 come out right. (tmux does have numeric comparison — it's the `e` family,
+`#{e|>:2,16}` — but the substitution chain needs no arithmetic at all.)
 
 Activity on an unfocused tab is `underscore`, carrying no colour of its own — repainting the tab would
 make it read as a second, lit selection.
+
+---
+
+## Claude Code's ✳ on the tab
+
+Claude Code prefixes its **pane** title with `✳` when it's waiting on you (verified: idle at its prompt,
+`pane_title` is `✳ Claude Code`). That's no use when you're in a different window, so the tab strip
+rolls it up, in the same position Claude uses — in front of the name:
+
+```
+ belle  ▐ 1 belle ▌ 2 ✳ benchmark  3 shamrock                  09:53
+```
+
+```tmux
+set -g @pane_ready "#{?#{P:#{?#{m:*✳*,#{pane_title}},x,}},✳ ,}"
+set -g window-status-format " #I #{E:@pane_ready}#W "
+```
+
+`#{P:…}` loops the panes of the window being formatted — not the current window — and emits a token for
+each pane whose title carries the glyph; the outer conditional collapses "any of them" into one marker,
+so a window with three waiting Claudes still shows a single `✳`. `#{m:*✳*,…}` is an fnmatch against the
+title and matches the multibyte glyph without special handling.
+
+It works at all only because `pane_title` is whatever the program set via OSC 0/2 and tmux cannot refuse
+it — the same behaviour that makes a Claude pane self-label in its border. Updates are event-driven, not
+tied to `status-interval`: the marker appears within a second of the title changing and clears the same
+way.
+
+Claude decides when to set that marker partly from focus events, so `set -g focus-events on` (already in
+the config) is what lets it know you're looking elsewhere. Run Claude under a tmux without it and it
+says so on startup.
 
 ---
 
