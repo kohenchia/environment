@@ -164,36 +164,23 @@ and it will overwrite a name you set with `Cmd+R`.
 
 Names survive shell activity: running commands and `cd`ing around don't clobber them.
 
-The focused pane's label is a lit bar across the pane's full width, with a bright border line round
-the rest of it; unfocused panes get a dim label on a thin grey line:
+The label sits on the border line rather than in a filled bar. The status line above already carries
+the window's colour across the whole row, so a second block of it on every pane would be shouting the
+same thing twice. The focused pane's label and the line it sits on take that window's mid shade;
+unfocused panes get a dim grey label on a dim grey line:
 
 ```
-▓▓ 1 · claude ▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓
- > implement the parser…
-
-── 2 · zsh ──────────────────────────
- ~/github/belle ❯
+── 1 · claude ────────────────────┬── 2 · zsh ──────────────────
+ > implement the parser…          │ ~/github/belle ❯
 ```
 
-Three things make that work, all worth knowing before you touch the format:
-
-- **The bar is the label's padding, not the border.** tmux has no "fill this row" primitive for pane
-  borders, and putting a `bg` on `pane-active-border-style` tints all four sides of the frame instead
-  of just the top. So the active label pads itself out past any real terminal width, tmux clips the
-  overflow at the pane's edge, and the padding's background paints the row. The inactive branch is
-  deliberately *not* padded — padding spaces overwrite the border line, which is the point when the
-  bar is lit and would blank the line when it isn't.
-- **`#{pN:…}` has two traps**, both verified against tmux 3.5a. Its direction is the reverse of what
-  the manual claims: `p400` pads on the *right*, leaving text left-aligned, while `p-400`
-  right-justifies. And the width must be a literal — `#{p#{pane_width}:…}` expands to nothing at all,
-  which is why the format pads to a fixed 400 and leans on clipping rather than measuring the pane.
-- **Commas inside `#[…]` would break it.** The format is one `#{?pane_active,…,…}` conditional, and a
-  comma in a style tag (`#[fg=colour232,bold]`) reads as that conditional's argument separator. Write
-  each attribute as its own tag: `#[fg=colour232]#[bold]`.
+One thing to know before you touch that format: **commas inside `#[…]` would break it.** The format is
+one `#{?pane_active,…,…}` conditional, and a comma in a style tag (`#[fg=colour232,bold]`) reads as
+that conditional's argument separator. Write each attribute as its own tag: `#[fg=colour232]#[bold]`.
 
 Titles appear only once a window has more than one pane — a lone pane has no sibling to be
-distinguished from, and with the status line already at the top a lit bar right beneath it reads as a
-doubled header. A `window-layout-changed` hook flips `pane-border-status` between `off` and `top`.
+distinguished from, and the row is better spent on output. A `window-layout-changed` hook flips
+`pane-border-status` between `off` and `top`.
 
 Unfocused panes also sit on a lighter grey with muted text (`window-style`), so the focused pane reads
 as the one hole you're working in rather than one panel among equals. Two things about that are easy
@@ -216,33 +203,45 @@ screen, vim with a colorscheme for instance, covers its whole pane and the grey 
 
 ## A hue per window
 
-Every window owns a hue, and its tab and the pane bars inside it are two brightnesses of that one
-colour. Any pane on screen tells you which project you're looking at without reading a word, and the
-tab strip doubles as the legend. Sixteen sets; a seventeenth window falls back to grey.
+Every window owns a hue. The whole status bar wears it, and the panes inside that window carry it on
+their border lines, so a glance anywhere on screen says which project you're in and the tab strip
+doubles as the legend. Sixteen sets; a seventeenth window falls back to grey.
 
-| # | Hue | Tab | Pane | | # | Hue | Tab | Pane |
+| # | Hue | Bar | Tab | | # | Hue | Bar | Tab |
 |---|---|---|---|---|---|---|---|---|
-| 1 | red | `203` | `167` | | 9 | lime | `155` | `149` |
-| 2 | blue | `75` | `68` | | 10 | pink | `211` | `168` |
-| 3 | green | `77` | `71` | | 11 | teal | `86` | `79` |
-| 4 | yellow | `221` | `179` | | 12 | gold | `227` | `185` |
-| 5 | magenta | `213` | `176` | | 13 | sky | `117` | `110` |
-| 6 | cyan | `87` | `80` | | 14 | violet | `183` | `140` |
-| 7 | orange | `215` | `173` | | 15 | salmon | `209` | `174` |
-| 8 | purple | `141` | `104` | | 16 | mint | `121` | `114` |
+| 1 | red | `167` | `217` | | 9 | lime | `149` | `193` |
+| 2 | blue | `68` | `153` | | 10 | pink | `168` | `218` |
+| 3 | green | `71` | `157` | | 11 | teal | `79` | `158` |
+| 4 | yellow | `179` | `229` | | 12 | gold | `185` | `228` |
+| 5 | magenta | `176` | `219` | | 13 | sky | `110` | `195` |
+| 6 | cyan | `80` | `159` | | 14 | violet | `140` | `183` |
+| 7 | orange | `173` | `223` | | 15 | salmon | `174` | `224` |
+| 8 | purple | `104` | `189` | | 16 | mint | `114` | `194` |
 
-The bright shade backs the current tab; the mid shade backs the focused pane's title bar and draws its
-border. Unfocused tabs wear their own mid shade as *text* rather than a background, so the strip stays
-colour-coded with only one entry lit. Everything that isn't a window — session chip, clock, messages,
-the unfocused-pane grey — is deliberately greyscale, since a fixed accent would clash with whichever
-of the sixteen is on screen. Near-black `colour232` text on the lit shades is what keeps them legible
-at full saturation.
+The mid shade fills the status bar and draws the focused pane's label and border line. The current tab
+is a pale, much lighter block of that same hue, capped either side with a half-block glyph in its own
+colour on the bar's:
+
+```
+ belle   1 belle ▐ 2 benchmark ▌ 3 shamrock                    20:03
+```
+
+Going lighter rather than more saturated is what makes it read as selected — the jump in brightness
+against the mid bar is the signal, and a near-white background is where near-black bold text is most
+legible. The caps extend the block half a cell each way and give it a defined edge without needing a
+Nerd Font (`▐` and `▌` are plain Block Elements, which Menlo and SF Mono both have). Every other
+character on the bar is near-black `colour232`, the one text colour that stays legible across all
+sixteen hues; the unselected tabs are that same text at normal weight. The unfocused-pane grey is the
+only thing left greyscale, since "not focused" shouldn't be a hue at all.
 
 Two tmux details make this work without a single hook, both verified against 3.5a:
 
-- **Style options expand formats at draw time.** `pane-active-border-style "fg=#{E:@hue_pane}"` renders
-  identically to a literal `fg=colour167`, so the border colour can follow `#{window_index}` directly.
-  The option stores the unexpanded text, so `show -gv` looks wrong while the rendering is right.
+- **Style options expand formats at draw time.** Both `status-style "bg=#{E:@hue_pane}"` and
+  `pane-active-border-style "fg=#{E:@hue_pane}"` render identically to a literal colour, so the bar and
+  the border can follow `#{window_index}` directly. The option stores the unexpanded text, so
+  `show -gv` looks wrong while the rendering is right — check these by rendering, not by reading the
+  option back. The `off`-table half of `Cmd+Shift+B` has to restore that format rather than a literal,
+  or the bar comes back grey and stops following the window.
 - **`#{s/…/…/;s/…/…/:var}` chains substitutions left to right**, which makes the index → colour map one
   flat list instead of sixteen nested conditionals. The `^N$` anchors stop `^1$` swallowing 10-16, and
   each replacement carries its own `colour` prefix so no later rule can match a value an earlier one
@@ -253,8 +252,8 @@ sixteen misses was never in the table. It is *not* written as a numeric guard be
 comparison operators compare strings**: `#{>:2,16}` is true, so `#{?#{>:#{window_index},16},…}` sends
 windows 2 through 9 to the fallback and only 1 and 10-16 come out right.
 
-Activity on an unfocused tab is `underscore` with no colour of its own, so the tab keeps its hue
-instead of being repainted into something that reads like a second, half-lit selection.
+Activity on an unfocused tab is `underscore`, carrying no colour of its own — repainting the tab would
+make it read as a second, lit selection.
 
 ---
 
