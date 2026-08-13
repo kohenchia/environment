@@ -29,7 +29,25 @@ dynamic_title = false           # tmux owns the title
 padding = { x = 6, y = 6 }
 
 [font]
-size = 13.0
+size = 14.0
+
+# Line spacing. `offset.y` adds pixels to every cell's height; `offset.x` would
+# do the same for width (letter spacing). Glyphs sit at the *bottom* of their
+# cell by default, so all of that added height would pool above the text —
+# `glyph_offset.y` lifts the glyph by half of it to re-centre. Both are integer
+# pixels, so the pair moves in twos.
+#
+# This is an Alacritty-only concern: tmux works in a character grid and has no
+# notion of fonts or pixel spacing, so there is nothing to set on that side.
+#
+# Box drawing survives the extra spacing. `builtin_box_drawing` defaults to true,
+# meaning Alacritty renders U+2500–U+259F from its own font and stretches those
+# glyphs to the cell — that range covers both tmux's pane borders and the ▐▌ caps
+# in the status bar, so vertical rules stay unbroken rather than showing a gap on
+# every row boundary.
+offset       = { x = 0, y = 2 }
+glyph_offset = { x = 0, y = 1 }
+
 # No family is set on purpose: Alacritty falls back to the system monospace,
 # and naming a font that isn't installed is a hard config error. Powerlevel10k
 # glyphs need a Nerd Font — install one and set `normal.family` here.
