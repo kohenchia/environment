@@ -164,15 +164,20 @@ and it will overwrite a name you set with `Cmd+R`.
 
 Names survive shell activity: running commands and `cd`ing around don't clobber them.
 
-The label sits on the border line rather than in a filled bar. The status line above already carries
-the window's colour across the whole row, so a second block of it on every pane would be shouting the
-same thing twice. The focused pane's label and the line it sits on take that window's mid shade;
-unfocused panes get a dim grey label on a dim grey line:
+The label sits on the border line rather than in a filled bar. The focused pane's label gets a block of
+its window's mid shade behind it — near-black text on the hue, the same treatment as the current tab —
+and the border line carries on either side of it. Unfocused panes get a dim grey label on a dim grey
+line:
 
 ```
-── 1 · claude ────────────────────┬── 2 · zsh ──────────────────
- > implement the parser…          │ ~/github/belle ❯
+──▌1 · claude▐─────────────────────┬── 2 · zsh ──────────────────
+ > implement the parser…           │ ~/github/belle ❯
+   (▌▐ mark where the highlight starts and ends; it's a background, not glyphs)
 ```
+
+The block is only as wide as the label because the format isn't padded. Padding it out to `#{pane_width}`
+is what made this an edge-to-edge bar in an earlier revision — the status line already carries the
+window's colour across a full row, so the pane only needs to say *which pane*, not *which window*.
 
 One thing to know before you touch that format: **commas inside `#[…]` would break it.** The format is
 one `#{?pane_active,…,…}` conditional, and a comma in a style tag (`#[fg=colour232,bold]`) reads as
