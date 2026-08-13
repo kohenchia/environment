@@ -294,7 +294,7 @@ rolls it up, in the same position Claude uses — in front of the name:
 ```
 
 ```tmux
-set -g @pane_ready "#{?#{P:#{?#{m:*✳*,#{pane_title}},x,}},✳ ,}"
+set -g @pane_ready "#{?#{P:#{?#{m:*✳*,#{pane_title}},x,}},#[fg=colour196]✳ #[fg=colour232],}"
 set -g window-status-format " #I #{E:@pane_ready}#W "
 ```
 
@@ -302,6 +302,25 @@ set -g window-status-format " #I #{E:@pane_ready}#W "
 each pane whose title carries the glyph; the outer conditional collapses "any of them" into one marker,
 so a window with three waiting Claudes still shows a single `✳`. `#{m:*✳*,…}` is an fnmatch against the
 title and matches the multibyte glyph without special handling.
+
+**The marker is bright red — `colour196` (`ff0000`) — in the tab and in both pane label styles.** It
+reads strongest against the terminal's near-black and against the pale tab blocks. The one weak case is
+a window whose own hue *is* red (window 1): a bright red glyph on that window's mid-red bar is close in
+tone. `colour124` is the darker alternative if that ever grates.
+
+On the tab the glyph is ours to style. In a pane label it isn't — it arrives inside `pane_title` as plain
+text — so colouring that one character means substituting a styled copy of it in:
+
+```tmux
+set -g @lbl_active "#{s/✳/#[fg=colour196]✳#[fg=colour232]/:#{E:@pane_label}}"
+set -g @lbl_dim    "#{s/✳/#[fg=colour196]✳#[fg=colour245]/:#{E:@pane_label}}"
+```
+
+Two things about that. Style tags in an `s///` replacement survive expansion and *are* interpreted when
+the row is drawn — but they must be written `#[…]`; `##[…]` escapes to a literal hash and prints the tag
+instead of applying it. And each variant has to name the colour it hands back afterwards, which is why
+there are two despite sharing a red: the label continues in `colour232` on a focused pane and `colour245`
+on a dim one.
 
 It works at all only because `pane_title` is whatever the program set via OSC 0/2 and tmux cannot refuse
 it — the same behaviour that makes a Claude pane self-label in its border. Updates are event-driven, not
