@@ -223,8 +223,17 @@ is a pale, much lighter block of that same hue, capped either side with a half-b
 colour on the bar's:
 
 ```
- belle   1 belle ▐ 2 benchmark ▌ 3 shamrock                    20:03
+ belle   1 belle ▐ 2 benchmark ▌ 3 shamrock      Thu Aug 13 10:31:05 AM
 ```
+
+The right side is the date and time in the macOS menu-bar layout. tmux hands `status-right` through
+strftime(3), so it's plain specifiers — `%a %b %d %I:%M:%S %p`. `%d` is zero-padded to match the
+`DDD MMM dd` shape; `%e` instead would render single-digit days as `Aug  3`.
+
+**Seconds are possible, and they cost a redraw a second.** `status-interval` is how often tmux repaints
+the status line, and it's the *only* thing that advances the clock — at the 5s default the seconds would
+jump in fives. So it's set to `1`. Drop the `:%S` and it can go back to `5`. The `✳` marker is unaffected
+either way: that redraw is event-driven, not on the interval.
 
 Below the bar is a blank row, so the coloured strip doesn't sit flush against the pane under it. That's
 `status 2` to buy the row plus `status-format[1]` to paint it — and it *has* to be painted: an empty
@@ -337,19 +346,26 @@ Dragging a pane border with the mouse resizes it; that works out of the box with
 - **Arrow chords are layered by modifier**, which is worth internalising: bare `Cmd` edits the line,
   `Opt` moves by word, `Cmd+Shift` moves pane focus, `Cmd+Opt` moves the pane, `Cmd+Ctrl` resizes it,
   and `Cmd+Ctrl+Shift` reorders tabs.
-- **Every Alacritty window attaches to the same `work` session** (`terminal.shell` in
-  `alacritty.toml`). To get a plain shell instead, comment out that `shell = ...` block.
-
-  One consequence: a *second* Alacritty window (`Cmd+N`) attaches to the same session and therefore
-  **mirrors** the first — switch tabs in one and the other follows. That's tmux behaving correctly,
-  not a bug, and it's invisible if you work in a single window (which is the point of tabs). If you
-  do want independent windows over the same set of project tabs, change the shell command to join a
-  session *group* when one is already attached:
+- **Alacritty does not start tmux for you.** `terminal.shell` is deliberately unset, so a window opens
+  on a plain login shell. Attach when you want the workspace:
 
   ```sh
-  tmux has-session -t work 2>/dev/null && [ -n "$(tmux list-clients -t work)" ] \
-      && exec tmux new-session -t work \; set-option destroy-unattached on \
-      || exec tmux new-session -A -s work
+  tmux new-session -A -s work
+  ```
+
+  Two things follow from that. A raw terminal is a first-class thing — open a window and you're in a
+  shell, with none of the `Cmd` chords intercepted, which is what you want for a nested tmux over ssh
+  or anything that needs `M-<key>` for itself. And **detaching (`C-b d`) returns you to that shell
+  instead of closing the window**, which is not true when tmux *is* the shell: there, ending the tmux
+  client ends the process Alacritty launched, and the window goes with it.
+
+  If you attach the same session from a *second* Alacritty window, the two **mirror** each other —
+  switch tabs in one and the other follows. That's tmux behaving correctly, not a bug, and it's
+  invisible if you work in a single window (which is the point of tabs). For independent windows over
+  the same set of project tabs, join a session *group* instead:
+
+  ```sh
+  tmux new-session -t work \; set-option destroy-unattached on
   ```
 - **`escape-time` is 10ms**, down from tmux's 500ms default. This matters: every chord arrives as
   ESC + key, and a long escape-time makes them feel laggy and ambiguous with a real Escape press.

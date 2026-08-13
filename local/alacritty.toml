@@ -35,17 +35,14 @@ size = 13.0
 # glyphs need a Nerd Font — install one and set `normal.family` here.
 
 [scrolling]
-history = 10000                 # tmux owns scrollback; this is the no-tmux path
+history = 10000                 # what a raw Alacritty window scrolls back; inside tmux, tmux owns it
 
-[terminal]
-# Every window lands straight in the shared `work` session — that's what makes
-# this a pure-tmux workflow. The `||` keeps a broken/missing tmux from leaving
-# you with a terminal that won't open at all.
-shell = { program = "/bin/zsh", args = [
-    "-l",
-    "-c",
-    "exec tmux new-session -A -s work || exec zsh -l",
-] }
+# There is deliberately no `terminal.shell` here. Alacritty starts a plain login
+# shell, which keeps a raw terminal a first-class thing and means detaching from
+# tmux drops you back at that shell rather than closing the window. Attach when
+# you want the workspace:
+#
+#     tmux new-session -A -s work
 
 [keyboard]
 bindings = [
