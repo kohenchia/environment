@@ -127,6 +127,38 @@ Mouse works throughout: click a tab in the status bar to switch to it, click a p
 drag a border to resize, scroll to enter copy mode. Copy-mode yanks reach the macOS clipboard
 through OSC 52 (`set-clipboard on` in tmux, `osc52 = "OnlyCopy"` in Alacritty).
 
+### Clicking a link
+
+**`Shift`+click** opens a URL in the browser. A plain click can't, and that isn't a bug: `mouse on`
+means tmux has asked for mouse reporting, so Alacritty forwards clicks to tmux and its own URL handler
+never sees them — the click just focuses the pane. `Shift` is Alacritty's documented way out:
+
+> When an application running within Alacritty captures the mouse, the `Shift` modifier can be used to
+> suppress mouse reporting. If no action is found for the event, actions for the event without the
+> `Shift` modifier are triggered instead. — `alacritty(5)`
+
+So `Shift`+click reaches Alacritty's hint handler, which matches the URL with its built-in regex and
+runs `open`. Holding `Shift` and hovering underlines the match, which is the quickest way to tell
+whether a given piece of text is going to be recognised.
+
+**`Ctrl+Shift+O`** is the mouse-free route: Alacritty labels every URL on screen with letters from
+`hints.alphabet` (default `jfkdls;ahgurieowpq`), and pressing a label opens that link. It never fights
+tmux for the mouse, and neither this config nor `.tmux.conf` binds that chord.
+
+Both rely on Alacritty's **default** hint, which `local/alacritty.toml` deliberately leaves alone.
+Declaring a `[hints]` table replaces that default outright, URL regex included, so anything added there
+has to re-state the regex or link clicking silently stops working.
+
+One limitation: **a URL that wraps across rows only matches as far as the row end.** tmux redraws each
+row independently, so Alacritty sees a hard line break rather than a wrapped line and the hint stops
+there. Widen or zoom the pane (`Cmd+Shift+Enter`) before clicking a long URL.
+
+None of this involves OSC 8 hyperlinks. Claude Code prints URLs as plain text here — its only OSC 8
+path is gated on a terminal allowlist that Alacritty isn't on, and tmux would drop the sequence anyway
+because `terminal-features` doesn't claim `hyperlinks` and no terminfo entry on this machine advertises
+`Hls`. That's why the Apple Claude Code banner's Docs/Marketplace/Support links aren't clickable while
+ordinary URLs are.
+
 ---
 
 ## The chord off-switch
