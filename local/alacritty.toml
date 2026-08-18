@@ -62,6 +62,18 @@ history = 10000                 # what a raw Alacritty window scrolls back; insi
 #
 #     tmux new-session -A -s work
 
+# There is deliberately no `[hints]` table either. Alacritty's default hint is
+# what makes URLs clickable — it carries the URL regex, `command = "open"`, and
+# `binding = { key = "O", mods = "Control|Shift" }` — and declaring a `[hints]`
+# table replaces that default outright rather than extending it. Add one and the
+# regex goes with it, so URL clicking stops working unless the regex is restated
+# in full.
+#
+# Because `.tmux.conf` sets `mouse on`, tmux owns the click and a plain click
+# never reaches that handler. Shift suppresses mouse reporting for one event, so
+# Shift+click is the gesture that opens a link; Ctrl+Shift+O is the keyboard
+# route. See docs/tmux.md.
+
 [keyboard]
 bindings = [
   # ── Tabs = projects ─────────────────────────────────────────────────────
