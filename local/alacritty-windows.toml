@@ -64,7 +64,8 @@ dynamic_title = false           # tmux owns the title
 padding = { x = 6, y = 6 }
 
 [font]
-size = 13.0
+size = 9.0
+offset = { y = 2 }
 # No family is set on purpose: Alacritty falls back to the system monospace,
 # and naming a font that isn't installed is a hard config error. Powerlevel10k
 # glyphs need a Nerd Font — install one and set `normal.family` here.
