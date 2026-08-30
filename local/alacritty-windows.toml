@@ -175,6 +175,12 @@ bindings = [
   { key = "F", mods = "Alt", chars = "\u001B/" },          # search scrollback
   { key = "B", mods = "Alt|Shift", chars = "\u001BB" },    # chord off-switch
 
+  # Copy/paste. See the trailing comment below for why these are explicit
+  # here instead of left at "Alacritty defaults" like the macOS file does.
+  { key = "V", mods = "Control", action = "Paste" },
+  { key = "V", mods = "Control|Shift", action = "Paste" },
+  { key = "C", mods = "Control|Shift", action = "Copy" },
+
   # Word movement. zsh binds ESC b / ESC f to backward-word / forward-word,
   # the classic meta sequences TUIs understand. Bound to bare Control here,
   # not Alt (Alt+Left/Right is already line editing below) and not Super
@@ -197,9 +203,16 @@ bindings = [
   { key = "Enter", mods = "Alt", action = "ToggleSimpleFullscreen" },
 ]
 
-# Alt+C, Alt+V, Alt+N, Alt+Q, Alt+H, Alt+M and the font-size chords are left
-# at their Alacritty defaults. Copy-mode yanks reach the Windows clipboard via
-# OSC 52 (`terminal.osc52` defaults to "OnlyCopy") plus tmux's set-clipboard.
+# Alt+N, Alt+Q, Alt+H, Alt+M and the font-size chords are left at their
+# Alacritty defaults. Copy/paste is NOT among them, despite what the macOS
+# file's equivalent comment says for Cmd+C/Cmd+V: Alacritty's real default
+# copy/paste chords on Windows are Ctrl+Shift+C / Ctrl+Shift+V (plus
+# Shift+Insert for paste) — Alt+C/Alt+V were never bound to anything, and a
+# blind Cmd→Alt substitution once left this comment claiming otherwise. They
+# are now explicit bindings above (Ctrl+V too, for parity with how paste
+# actually gets pressed on Windows). Copy-mode yanks still reach the Windows
+# clipboard via OSC 52 (`terminal.osc52` defaults to "OnlyCopy") plus tmux's
+# set-clipboard.
 #
 # Alt+1..9 and Alt+T are tmux windows, not OS-level tabs — Alacritty has no
 # native tab feature on Windows to collide with, so this is just the shared
