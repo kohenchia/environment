@@ -1,41 +1,62 @@
 # ══════════════════════════════════════════════════════════════════════════
 # Alacritty (Windows) — the Cmd-chord translation layer for the tmux workspace
 #
-# This is the Windows counterpart of alacritty.toml (macOS). Same keymap,
-# same tmux integration — only [terminal] differs, since Windows launches
+# This is the Windows counterpart of alacritty.toml (macOS): same bindings,
+# same tmux integration, but a deliberately different PHYSICAL keymap — see
+# "Modifier remap" below. [terminal] also differs, since Windows launches
 # into WSL instead of a local shell. There is no shared/imported source
-# between the two files, so a keybinding change made in one must be copied
-# to the other by hand.
+# between the two files, so a change made in one must be copied to the
+# other by hand, translating modifiers per the table below as you go.
 #
 # tmux has no Super/Cmd modifier: it understands only C-, S-, M- and F1–F12.
-# So every Cmd chord below is translated into an ESC-prefixed byte sequence
-# that tmux catches as `M-<key>` in its prefix-free root key table.
+# So every chord below is translated into an ESC-prefixed byte sequence that
+# tmux catches as `M-<key>` in its prefix-free root key table. This part is
+# identical to macOS — only which physical key you hold changes:
 #
-#     Cmd+1           →  ESC 1        →  tmux M-1        →  select-window 1
-#     Cmd+D           →  ESC d        →  tmux M-d        →  split-window -h
-#     Cmd+Opt+Left    →  CSI 1;3D     →  tmux M-Left     →  select-pane -L
+#     Alt+1              →  ESC 1        →  tmux M-1         →  select-window 1
+#     Alt+D               →  ESC d        →  tmux M-d         →  split-window -h
+#     Alt+Shift+Left  →  CSI 1;3D     →  tmux M-Left      →  select-pane -L
 #
-# This is safe *because* `option_as_alt = "None"`: the physical Option key
-# never emits ESC-prefixed bytes, so an `M-<key>` arriving at tmux can only
-# have come from a binding in this file. Nothing in zsh, vim, or Claude Code
-# can collide with it. Flipping option_as_alt on gives up that guarantee.
+# Modifier remap: on macOS this file's Cmd role rides the Command key and
+# its Option role rides the Option key. On Windows, `Command`/`Option` in
+# Alacritty alias to Super/Alt — literally following that would put the
+# frequently-used Cmd role on the Windows key, which is awkward to hold and
+# is where Windows itself intercepts a bunch of chords before Alacritty ever
+# sees them (Super+1..9 is taskbar app switching, Super+D shows the desktop,
+# Super+T/R/K open the taskbar/Run/Cast). So this file does NOT use the
+# Command/Option alias names — every binding below spells out the real
+# modifier it wants, remapped like this:
+#   - Cmd role (was Command/Super)         → Alt
+#   - Option role, arrow-key word movement → Control (not Super: Super+Arrow
+#     is Windows' Aero Snap — bare Super+Left/Right/Up/Down never reaches
+#     Alacritty at all, confirmed in testing)
+#   - Option role, combined with Cmd (move-pane) → Super (safe here: it's
+#     always paired with Alt, and Alt+Super+Arrow isn't an OS shortcut)
+# No two bindings below land on the same (key, modifier-set) pair — checked
+# programmatically after this remap, since a silent collision would just
+# make one binding quietly never fire.
 #
-# "Command" aliases to the Windows/Super key here (Alacritty's Command/Option
-# modifier names are cross-platform, not macOS-only) — so Cmd+<key> below
-# means physically pressing the Windows key. A few of these collide with
-# shortcuts Windows itself intercepts before Alacritty ever sees them, e.g.
-# Super+1..9 (taskbar app switching), Super+D (show desktop), Super+T (focus
-# taskbar), Super+R (Run dialog), Super+K (Cast dialog). Those bindings may
-# silently not fire on Windows; this file does not attempt to work around it.
+# `option_as_alt` below is a no-op on Windows (there's no separate physical
+# Option key to reinterpret — Alt already behaves like Alt), kept only for
+# structural parity with the macOS file. The safety property it buys on
+# macOS — that no *unbound* key can leak an ESC-prefixed byte to tmux's
+# M-<key> table — does NOT fully carry over: Windows' Alt key follows the
+# standard xterm meta-key convention for plain characters, so an Alt+<letter
+# or digit> combo we haven't explicitly bound below (rare, since most are
+# used) will still emit an ESC-prefixed byte. Harmless in practice — nothing
+# in .tmux.conf binds M-<key> for anything this file doesn't already define
+# on purpose — just not the same hard guarantee macOS has.
 #
-# See docs/tmux.md for the full keymap and ~/.tmux.conf for the receiving end.
+# See docs/tmux.md for the full keymap (macOS key names; mentally substitute
+# per the remap table above) and ~/.tmux.conf for the receiving end.
 # ══════════════════════════════════════════════════════════════════════════
 
 [general]
 live_config_reload = true
 
 [window]
-# The whole design rests on this staying "None" — see the header above.
+# No-op on Windows — see "Modifier remap" in the header above. Kept only for
+# structural parity with the macOS file, where it is load-bearing.
 option_as_alt = "None"
 
 decorations = "Full"            # keep the title bar's minimize/maximize controls
@@ -52,101 +73,133 @@ size = 13.0
 history = 10000                 # tmux owns scrollback; this is the no-tmux path
 
 [terminal]
-# Every window launches into WSL (Ubuntu) and lands straight in the shared
-# `work` tmux session — that's what makes this a pure-tmux workflow, same as
-# the macOS config. `--cd ~` starts in the Linux home directory rather than
-# the Windows-mapped one wsl.exe defaults to. The `||` keeps a broken/missing
-# tmux from leaving you with a terminal that won't open at all.
+# Every window launches into WSL (Ubuntu) and attaches to (or creates) a
+# tmux session named after this Windows machine's hostname — `Excalibur`,
+# not the Mac config's fixed `work`, since this file can end up installed on
+# more than one Windows box and each should get its own session. `--cd ~`
+# starts in the Linux home directory rather than the Windows-mapped one
+# wsl.exe defaults to. Detaching from tmux (any way — prefix-d, killing the
+# session, tmux never starting) drops you into a bare interactive `zsh -l`
+# in the SAME window rather than closing it, so you always have the option
+# to work outside tmux; the final `; zsh -l` (not `||`) is what makes that
+# unconditional rather than only-on-failure.
+#
+# Four wsl.exe/tmux quirks bit us in testing, all worth knowing before
+# touching this line:
+#   - Use `--`, not `--exec`: `--exec` re-splits its command on whitespace
+#     before handing it to the Linux side, silently truncating a multi-word
+#     -c argument at the first space (only the first word actually ran).
+#     `--` routes through the default login shell instead, which parses the
+#     whole -c string correctly, spaces and all.
+#   - Don't prefix the tmux/zsh calls with `exec`: replacing the process
+#     image this way raced with the ConPTY↔WSL pty handshake and made the
+#     window close instantly with no output. Calling tmux as a plain child
+#     process (not `exec`'d) is what actually works reliably here.
+#   - The leading `sleep 0.3` is load-bearing, not decoration: launching
+#     `tmux new-session -A -s <name>` as the very first thing the shell does
+#     lost the race with the ConPTY↔WSL pty handshake often enough to be the
+#     norm, not the exception — `-s <name>`/`-A` were silently dropped and
+#     tmux fell back to auto-numbered session names ("0", "1", …), even with
+#     a tmux server already running. Any statement ahead of the tmux call
+#     was enough to dodge it in testing; a short sleep is the simplest one.
+#   - `hostname.exe` (a native Windows binary, reached via WSL interop PATH)
+#     prints the machine name with a trailing CRLF — `tr -d '\r'` strips the
+#     stray `\r` that `$(...)` capture doesn't strip on its own, since it
+#     only trims trailing `\n`. Skipping that leaves a `\r` embedded in the
+#     session name, which is invisible but still a distinct byte to tmux.
 shell = { program = "wsl.exe", args = [
     "-d", "Ubuntu",
     "--cd", "~",
     "--",
     "zsh", "-l", "-c",
-    "exec tmux new-session -A -s work || exec zsh -l",
+    "sleep 0.3; tmux new-session -A -s \"$(hostname.exe | tr -d '\\r')\"; zsh -l",
 ] }
 
 [keyboard]
 bindings = [
   # ── Tabs = projects ─────────────────────────────────────────────────────
-  { key = "1", mods = "Command", chars = "\u001B1" },
-  { key = "2", mods = "Command", chars = "\u001B2" },
-  { key = "3", mods = "Command", chars = "\u001B3" },
-  { key = "4", mods = "Command", chars = "\u001B4" },
-  { key = "5", mods = "Command", chars = "\u001B5" },
-  { key = "6", mods = "Command", chars = "\u001B6" },
-  { key = "7", mods = "Command", chars = "\u001B7" },
-  { key = "8", mods = "Command", chars = "\u001B8" },
-  { key = "9", mods = "Command", chars = "\u001B9" },
-  { key = "0", mods = "Command", chars = "\u001B0" },          # last tab
-  { key = "T", mods = "Command", chars = "\u001Bt" },          # new tab
-  { key = "W", mods = "Command", chars = "\u001Bw" },          # close pane
-  { key = "W", mods = "Command|Shift", chars = "\u001BW" },    # close tab
-  { key = "R", mods = "Command|Shift", chars = "\u001BR" },    # rename tab
-  { key = "R", mods = "Command", chars = "\u001Br" },          # rename pane
+  { key = "1", mods = "Alt", chars = "\u001B1" },
+  { key = "2", mods = "Alt", chars = "\u001B2" },
+  { key = "3", mods = "Alt", chars = "\u001B3" },
+  { key = "4", mods = "Alt", chars = "\u001B4" },
+  { key = "5", mods = "Alt", chars = "\u001B5" },
+  { key = "6", mods = "Alt", chars = "\u001B6" },
+  { key = "7", mods = "Alt", chars = "\u001B7" },
+  { key = "8", mods = "Alt", chars = "\u001B8" },
+  { key = "9", mods = "Alt", chars = "\u001B9" },
+  { key = "0", mods = "Alt", chars = "\u001B0" },          # last tab
+  { key = "T", mods = "Alt", chars = "\u001Bt" },          # new tab
+  { key = "W", mods = "Alt", chars = "\u001Bw" },          # close pane
+  { key = "W", mods = "Alt|Shift", chars = "\u001BW" },    # close tab
+  { key = "R", mods = "Alt|Shift", chars = "\u001BR" },    # rename tab
+  { key = "R", mods = "Alt", chars = "\u001Br" },          # rename pane
 
   # prev/next tab. Cmd+Shift+[ / ] is the iTerm chord. With Shift held, the
   # bracket keys report as the shifted character, so the key names are { and }.
   # Both land on tmux's M-S-Left / M-S-Right.
-  { key = "{", mods = "Command|Shift", chars = "\u001B[1;4D" },
-  { key = "}", mods = "Command|Shift", chars = "\u001B[1;4C" },
+  { key = "{", mods = "Alt|Shift", chars = "\u001B[1;4D" },
+  { key = "}", mods = "Alt|Shift", chars = "\u001B[1;4C" },
 
   # reorder the tab itself
-  { key = "ArrowLeft",  mods = "Command|Control|Shift", chars = "\u001B[1;8D" },
-  { key = "ArrowRight", mods = "Command|Control|Shift", chars = "\u001B[1;8C" },
+  { key = "ArrowLeft",  mods = "Alt|Control|Shift", chars = "\u001B[1;8D" },
+  { key = "ArrowRight", mods = "Alt|Control|Shift", chars = "\u001B[1;8C" },
 
   # ── Panes = tools ───────────────────────────────────────────────────────
-  { key = "D", mods = "Command", chars = "\u001Bd" },          # split right
-  { key = "D", mods = "Command|Shift", chars = "\u001BD" },    # split down
+  { key = "D", mods = "Alt", chars = "\u001Bd" },          # split right
+  { key = "D", mods = "Alt|Shift", chars = "\u001BD" },    # split down
 
   # focus a pane, in every direction
-  { key = "ArrowLeft",   mods = "Command|Shift", chars = "\u001B[1;3D" },
-  { key = "ArrowRight",  mods = "Command|Shift", chars = "\u001B[1;3C" },
-  { key = "ArrowUp",     mods = "Command|Shift", chars = "\u001B[1;3A" },
-  { key = "ArrowDown",   mods = "Command|Shift", chars = "\u001B[1;3B" },
+  { key = "ArrowLeft",   mods = "Alt|Shift", chars = "\u001B[1;3D" },
+  { key = "ArrowRight",  mods = "Alt|Shift", chars = "\u001B[1;3C" },
+  { key = "ArrowUp",     mods = "Alt|Shift", chars = "\u001B[1;3A" },
+  { key = "ArrowDown",   mods = "Alt|Shift", chars = "\u001B[1;3B" },
 
   # move the pane itself, in every direction
-  { key = "ArrowLeft",   mods = "Command|Option", chars = "\u001B[1;6D" },
-  { key = "ArrowRight",  mods = "Command|Option", chars = "\u001B[1;6C" },
-  { key = "ArrowUp",     mods = "Command|Option", chars = "\u001B[1;6A" },
-  { key = "ArrowDown",   mods = "Command|Option", chars = "\u001B[1;6B" },
+  { key = "ArrowLeft",   mods = "Alt|Super", chars = "\u001B[1;6D" },
+  { key = "ArrowRight",  mods = "Alt|Super", chars = "\u001B[1;6C" },
+  { key = "ArrowUp",     mods = "Alt|Super", chars = "\u001B[1;6A" },
+  { key = "ArrowDown",   mods = "Alt|Super", chars = "\u001B[1;6B" },
 
   # resize a pane — hold the chord to keep going (tmux binds these with -r)
-  { key = "ArrowLeft",  mods = "Command|Control", chars = "\u001B[1;7D" },
-  { key = "ArrowRight", mods = "Command|Control", chars = "\u001B[1;7C" },
-  { key = "ArrowUp",    mods = "Command|Control", chars = "\u001B[1;7A" },
-  { key = "ArrowDown",  mods = "Command|Control", chars = "\u001B[1;7B" },
+  { key = "ArrowLeft",  mods = "Alt|Control", chars = "\u001B[1;7D" },
+  { key = "ArrowRight", mods = "Alt|Control", chars = "\u001B[1;7C" },
+  { key = "ArrowUp",    mods = "Alt|Control", chars = "\u001B[1;7A" },
+  { key = "ArrowDown",  mods = "Alt|Control", chars = "\u001B[1;7B" },
 
-  { key = "Enter", mods = "Command|Shift", chars = "\u001Bz" },    # zoom
-  { key = "Space", mods = "Command|Shift", chars = "\u001B " },    # next layout
+  { key = "Enter", mods = "Alt|Shift", chars = "\u001Bz" },    # zoom
+  { key = "Space", mods = "Alt|Shift", chars = "\u001B " },    # next layout
 
   # ── Terminal parity ─────────────────────────────────────────────────────
-  { key = "K", mods = "Command", chars = "\u001Bk" },          # clear + history
-  { key = "F", mods = "Command", chars = "\u001B/" },          # search scrollback
-  { key = "B", mods = "Command|Shift", chars = "\u001BB" },    # chord off-switch
+  { key = "K", mods = "Alt", chars = "\u001Bk" },          # clear + history
+  { key = "F", mods = "Alt", chars = "\u001B/" },          # search scrollback
+  { key = "B", mods = "Alt|Shift", chars = "\u001BB" },    # chord off-switch
 
   # Word movement. zsh binds ESC b / ESC f to backward-word / forward-word,
-  # and they are the classic meta sequences TUIs understand. Alt+arrows would
-  # send CSI 1;3D/C, which zsh reports as undefined-key. tmux deliberately
-  # leaves M-b and M-f unbound so these reach the program in the pane.
-  { key = "ArrowLeft",  mods = "Option", chars = "\u001Bb" },
-  { key = "ArrowRight", mods = "Option", chars = "\u001Bf" },
+  # the classic meta sequences TUIs understand. Bound to bare Control here,
+  # not Alt (Alt+Left/Right is already line editing below) and not Super
+  # (Win+Left/Right is Aero Snap — never reaches Alacritty at all). tmux
+  # deliberately leaves M-b and M-f unbound so these reach the program in
+  # the pane, same as the macOS config.
+  { key = "ArrowLeft",  mods = "Control", chars = "\u001Bb" },
+  { key = "ArrowRight", mods = "Control", chars = "\u001Bf" },
 
   # Line editing. These never reach tmux; they go straight to the shell.
-  { key = "ArrowLeft",  mods = "Command", chars = "\u0001" },  # C-a, line start
-  { key = "ArrowRight", mods = "Command", chars = "\u0005" },  # C-e, line end
-  { key = "Backspace",  mods = "Command", chars = "\u0015" },  # C-u, kill line
+  { key = "ArrowLeft",  mods = "Alt", chars = "\u0001" },  # C-a, line start
+  { key = "ArrowRight", mods = "Alt", chars = "\u0005" },  # C-e, line end
+  { key = "Backspace",  mods = "Alt", chars = "\u0015" },  # C-u, kill line
 
-  # Claude Code's newline. Option is inert here, so Option+Enter can't produce
-  # ESC CR on its own — this restores the familiar chord.
+  # Claude Code's newline. Alt+Enter is already claimed by fullscreen below,
+  # and a bare Enter can't produce ESC CR on its own — Shift+Enter restores
+  # the familiar chord instead.
   { key = "Enter", mods = "Shift", chars = "\u001B\r" },
 
-  { key = "Enter", mods = "Command", action = "ToggleSimpleFullscreen" },
+  { key = "Enter", mods = "Alt", action = "ToggleSimpleFullscreen" },
 ]
 
-# Cmd+C, Cmd+V, Cmd+N, Cmd+Q, Cmd+H, Cmd+M and the font-size chords are left
+# Alt+C, Alt+V, Alt+N, Alt+Q, Alt+H, Alt+M and the font-size chords are left
 # at their Alacritty defaults. Copy-mode yanks reach the Windows clipboard via
 # OSC 52 (`terminal.osc52` defaults to "OnlyCopy") plus tmux's set-clipboard.
 #
-# Cmd+1..9 and Cmd+T are tmux windows, not OS-level tabs — Alacritty has no
+# Alt+1..9 and Alt+T are tmux windows, not OS-level tabs — Alacritty has no
 # native tab feature on Windows to collide with, so this is just the shared
-# keymap carried over from the macOS config.
+# keymap carried over from the macOS config (Cmd role, remapped to Alt).
