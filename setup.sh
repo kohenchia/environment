@@ -346,6 +346,35 @@ link() {
     info "Linked ${1} → ${target}"
 }
 
+# copy_file <repo-relative-source> <target>
+# Like link(), but copies content instead of symlinking. For a target that a
+# native Windows process must read directly, a WSL-created symlink pointing
+# into the Linux filesystem is not resolvable there — it shows up as an
+# opaque junction Windows apps can't open.
+copy_file() {
+    local src="${REPO_DIR}/$1" target="$2"
+
+    if [[ ! -e "$src" ]]; then
+        warn "Skipped ${target} (missing ${1})"
+        return 0
+    fi
+
+    mkdir -p "$(dirname "$target")"
+
+    if [[ -e "$target" ]] && cmp -s "$src" "$target"; then
+        info "${1} → ${target} (already up to date)"
+        return 0
+    fi
+
+    if [[ -e "$target" ]]; then
+        cp -f "$target" "${target}.bak"
+        warn "Backed up ${target} → ${target}.bak"
+    fi
+
+    cp -f "$src" "$target"
+    info "Copied ${1} → ${target}"
+}
+
 # Dotfiles this repo owns, as "repo-relative-source|target". Iterated to link
 # below, and again by --check, so the two can't drift apart.
 #
@@ -371,6 +400,21 @@ if [[ "$OS" == macos ]]; then
     LINKS+=("local/alacritty.toml|$HOME/.config/alacritty/alacritty.toml")
 fi
 
+# Alacritty — WSL only, installed onto the Windows host, since Alacritty runs
+# there as a native Windows process rather than inside WSL. Uses COPIES (see
+# copy_file above), not LINKS: a WSL symlink into the Linux filesystem isn't
+# resolvable by native Windows apps. local/alacritty-windows.toml is the
+# Windows counterpart of local/alacritty.toml — see its header.
+COPIES=()
+if [[ "$OS" == wsl ]]; then
+    WIN_APPDATA="$(cmd.exe /c 'echo %APPDATA%' 2>/dev/null | tr -d '\r')"
+    if [[ -n "$WIN_APPDATA" ]] && WIN_APPDATA_WSL="$(wslpath -u "$WIN_APPDATA" 2>/dev/null)"; then
+        COPIES+=("local/alacritty-windows.toml|${WIN_APPDATA_WSL}/alacritty/alacritty.toml")
+    else
+        warn "Could not resolve Windows %APPDATA% via cmd.exe — skipping Alacritty install"
+    fi
+fi
+
 # VS Code stores user settings in a different place on every platform
 case "$OS" in
     macos)
@@ -389,6 +433,10 @@ esac
 if [[ $CHECK_ONLY -eq 0 ]]; then
     for entry in "${LINKS[@]}"; do
         link "${entry%%|*}" "${entry#*|}"
+    done
+
+    for entry in "${COPIES[@]}"; do
+        copy_file "${entry%%|*}" "${entry#*|}"
     done
 
     if [[ -n "${VSCODE_SKIPPED:-}" ]]; then
@@ -446,6 +494,16 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
             FAILED=1
         fi
     done
+    for entry in "${COPIES[@]}"; do
+        src="${REPO_DIR}/${entry%%|*}" target="${entry#*|}"
+        if [[ -e "$target" ]] && cmp -s "$src" "$target"; then
+            info "${target} → ${entry%%|*}"
+        else
+            err "${target} not up to date with ${entry%%|*}"
+            FAILED=1
+        fi
+    done
+
     if [[ -n "${VSCODE_SKIPPED:-}" ]]; then
         warn "VS Code settings not linked on WSL (they live on the Windows host)"
     fi
