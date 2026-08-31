@@ -18,27 +18,51 @@
 #
 # Never fails: a hook that exits non-zero is noise in the transcript, and a
 # missing marker is not worth interrupting anyone over.
+#
+# TEMPORARY: while the marker is being debugged, every invocation appends what
+# it saw to $LOG — the action, the pane, whether tmux accepted the option, and
+# how the two formats render. Delete the `log` calls once it's confirmed working.
 
 set -u
 
 readonly OPT='@claude_ready'
+readonly LOG="${TMPDIR:-/tmp}/claude-tmux-ready.log"
 
-# Outside tmux there is nothing to mark. $TMUX_PANE is the pane's %ID, which is
-# stable for the life of the pane and unambiguous as a target.
-[[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
-command -v tmux >/dev/null 2>&1 || exit 0
+log() { printf '%s | %s\n' "$(date '+%H:%M:%S')" "$*" >>"$LOG" 2>/dev/null || true; }
 
-case "${1:-}" in
+action="${1:-<none>}"
+
+if [[ -z "${TMUX:-}" || -z "${TMUX_PANE:-}" ]]; then
+    log "$action | NO TMUX ENV: TMUX='${TMUX:-}' TMUX_PANE='${TMUX_PANE:-}'"
+    exit 0
+fi
+if ! command -v tmux >/dev/null 2>&1; then
+    log "$action | tmux not on PATH (PATH=$PATH)"
+    exit 0
+fi
+
+case "$action" in
     set)
         tmux set-option -p -t "$TMUX_PANE" "$OPT" 1 2>/dev/null
+        rc=$?
         ;;
     clear)
         tmux set-option -p -u -t "$TMUX_PANE" "$OPT" 2>/dev/null
+        rc=$?
         ;;
     *)
         printf 'usage: %s set|clear\n' "${0##*/}" >&2
+        log "$action | bad usage"
         exit 0
         ;;
 esac
+
+# Read the option back and render both formats, so the log says whether the
+# option landed AND whether tmux's own expansion produces a marker from it.
+readback="$(tmux show-options -p -t "$TMUX_PANE" "$OPT" 2>&1)"
+tab="$(tmux display-message -p -t "$TMUX_PANE" '#{E:@pane_ready}' 2>&1)"
+lbl="$(tmux display-message -p -t "$TMUX_PANE" '#{E:@lbl_active}' 2>&1)"
+loop="$(tmux display-message -p -t "$TMUX_PANE" '#{P:[#{pane_index}=#{@claude_ready}]}' 2>&1)"
+log "$action | pane=$TMUX_PANE set_rc=$rc | readback='$readback' | tab='$tab' | label='$lbl' | loop='$loop'"
 
 exit 0
