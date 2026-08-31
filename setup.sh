@@ -391,6 +391,9 @@ LINKS=(
     # `h` — color-coded command tutorials. Linked into ~/.local/bin (on PATH per
     # local/.shell-common.zsh) so it's runnable as `h <command>`.
     "bin/h|$HOME/.local/bin/h"
+    # claude-tmux-ready — Claude Code hooks call this to light the ✳ readiness
+    # marker on the tmux tab and pane border. See docs/tmux.md.
+    "bin/claude-tmux-ready|$HOME/.local/bin/claude-tmux-ready"
 )
 
 # Alacritty — macOS only. This config's whole job is translating Cmd chords

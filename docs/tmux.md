@@ -18,6 +18,8 @@ work                                                          14:32
 - `local/.tmux.conf` — the bindings, symlinked to `~/.tmux.conf`
 - `local/alacritty.toml` — the Cmd translation layer, symlinked to
   `~/.config/alacritty/alacritty.toml` (macOS only)
+- `bin/claude-tmux-ready` — sets the ✳ readiness marker from Claude Code's hooks, symlinked to
+  `~/.local/bin/claude-tmux-ready`
 
 ---
 
@@ -315,53 +317,72 @@ make it read as a second, lit selection.
 
 ---
 
-## Claude Code's ✳ on the tab
+## The ✳ readiness marker on the tab
 
-Claude Code prefixes its **pane** title with `✳` when it's waiting on you (verified: idle at its prompt,
-`pane_title` is `✳ Claude Code`). That's no use when you're in a different window, so the tab strip
-rolls it up, in the same position Claude uses — in front of the name:
+When Claude Code finishes and is waiting on you, its pane is marked, and the tab strip rolls that up so
+you can see it from another window — in front of the name:
 
 ```
  belle  ▐ 1 belle ▌ 2 ✳ benchmark  3 shamrock                  09:53
 ```
 
 ```tmux
-set -g @pane_ready "#{?#{P:#{?#{m:*✳*,#{pane_title}},x,}},#[fg=colour196]✳ #[fg=colour232],}"
+set -g @pane_ready "#{?#{P:#{?#{@claude_ready},x,}},#[fg=colour196]✳ #[fg=colour232],}"
 set -g window-status-format " #I #{E:@pane_ready}#W "
 ```
 
 `#{P:…}` loops the panes of the window being formatted — not the current window — and emits a token for
-each pane whose title carries the glyph; the outer conditional collapses "any of them" into one marker,
-so a window with three waiting Claudes still shows a single `✳`. `#{m:*✳*,…}` is an fnmatch against the
-title and matches the multibyte glyph without special handling.
+each marked pane; the outer conditional collapses "any of them" into one marker, so a window with three
+waiting Claudes still shows a single `✳`. Option lookup resolves against the pane the loop is on, so a
+pane that was never marked reads empty and tests false.
+
+### Where the signal comes from
+
+`@claude_ready` is a **pane option**, set and cleared by `bin/claude-tmux-ready` from Claude Code hooks in
+`~/.claude/settings.json`:
+
+| Hook | Meaning | Action |
+|---|---|---|
+| `Stop` | finished responding, waiting on you | `set` |
+| `Notification` | wants permission or input | `set` |
+| `UserPromptSubmit` | you handed it work | `clear` |
+| `SessionEnd` | session over — don't leave a dead pane lit | `clear` |
+
+The script targets `$TMUX_PANE` (the pane's `%ID`, stable for its lifetime), no-ops outside tmux, and
+always exits 0 so a hook never turns into transcript noise.
+
+**This used to read the pane title instead, and that broke.** Claude Code animated `◐`/`◑` in its
+terminal title while busy and fell back to `✳` when idle, so `#{m:*✳*,#{pane_title}}` meant "waiting on
+you". As of **1.9.0** it suppresses that animation under a multiplexer — the `tengu_static_title_under_mux`
+gate, on by default — and emits a constant `✳ <title>` for as long as it runs. The title stopped carrying
+any state, so the old test was lit permanently. Nothing in the title distinguishes the two states now,
+which is why the signal had to move to a hook. `@pane_label` strips the leftover constant `✳` out of the
+title text so it doesn't double up with the real marker.
 
 **The marker is bright red — `colour196` (`ff0000`) — in the tab and in both pane label styles.** It
 reads strongest against the terminal's near-black and against the pale tab blocks. The one weak case is
 a window whose own hue *is* red (window 1): a bright red glyph on that window's mid-red bar is close in
 tone. `colour124` is the darker alternative if that ever grates.
 
-On the tab the glyph is ours to style. In a pane label it isn't — it arrives inside `pane_title` as plain
-text — so colouring that one character means substituting a styled copy of it in:
+In a pane label the marker is prepended conditionally, which is why there are two variants despite
+sharing a red — each has to name the colour it hands back afterwards: the label continues in `colour232`
+on a focused pane and `colour245` on a dim one.
 
 ```tmux
-set -g @lbl_active "#{s/✳/#[fg=colour196]✳#[fg=colour232]/:#{E:@pane_label}}"
-set -g @lbl_dim    "#{s/✳/#[fg=colour196]✳#[fg=colour245]/:#{E:@pane_label}}"
+set -g @lbl_active " #{pane_index} · #{?#{@claude_ready},#[fg=colour196]✳ #[fg=colour232],}#{E:@pane_label} "
+set -g @lbl_dim    " #{pane_index} · #{?#{@claude_ready},#[fg=colour196]✳ #[fg=colour245],}#{E:@pane_label} "
 ```
 
-Two things about that. Style tags in an `s///` replacement survive expansion and *are* interpreted when
-the row is drawn — but they must be written `#[…]`; `##[…]` escapes to a literal hash and prints the tag
-instead of applying it. And each variant has to name the colour it hands back afterwards, which is why
-there are two despite sharing a red: the label continues in `colour232` on a focused pane and `colour245`
-on a dim one.
+Style tags must be written `#[…]`; `##[…]` escapes to a literal hash and prints the tag instead of
+applying it.
 
-It works at all only because `pane_title` is whatever the program set via OSC 0/2 and tmux cannot refuse
-it — the same behaviour that makes a Claude pane self-label in its border. Updates are event-driven, not
-tied to `status-interval`: the marker appears within a second of the title changing and clears the same
-way.
+Updates are event-driven, not tied to `status-interval`: the marker appears as soon as the hook runs and
+clears the same way. Because the hook sets a pane option rather than relying on Claude's own output, it
+also no longer depends on `focus-events` — though that stays on for the rest of the config.
 
-Claude decides when to set that marker partly from focus events, so `set -g focus-events on` (already in
-the config) is what lets it know you're looking elsewhere. Run Claude under a tmux without it and it
-says so on startup.
+If the marker ever stops tracking, check the two halves separately: `tmux show -p -t <pane> @claude_ready`
+tells you whether the hook is landing, and `./setup.sh --check` confirms `claude-tmux-ready` is linked
+into `~/.local/bin`.
 
 ---
 
