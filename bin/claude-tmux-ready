@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# claude-tmux-ready — mark the calling tmux pane as waiting on you, or clear it.
+#
+#   claude-tmux-ready set     Claude is done and wants input
+#   claude-tmux-ready clear   Claude is working, or the session ended
+#
+# Driven by Claude Code hooks (Stop / Notification / UserPromptSubmit /
+# SessionEnd) in ~/.claude/settings.json. It sets a pane-scoped @claude_ready
+# option that ~/.tmux.conf reads to draw the ✳ marker on the tab and the pane
+# border.
+#
+# Why a hook and not the pane title: Claude Code used to animate ◐/◑ in its
+# terminal title while busy and fall back to ✳ when idle, so matching ✳ in
+# pane_title meant "waiting on you". As of 1.9.0 it suppresses that animation
+# under a multiplexer and emits a constant "✳ <title>" the whole time it runs,
+# so the title no longer says anything about state. This does.
+#
+# Never fails: a hook that exits non-zero is noise in the transcript, and a
+# missing marker is not worth interrupting anyone over.
+
+set -u
+
+readonly OPT='@claude_ready'
+
+# Outside tmux there is nothing to mark. $TMUX_PANE is the pane's %ID, which is
+# stable for the life of the pane and unambiguous as a target.
+[[ -n "${TMUX:-}" && -n "${TMUX_PANE:-}" ]] || exit 0
+command -v tmux >/dev/null 2>&1 || exit 0
+
+case "${1:-}" in
+    set)
+        tmux set-option -p -t "$TMUX_PANE" "$OPT" 1 2>/dev/null
+        ;;
+    clear)
+        tmux set-option -p -u -t "$TMUX_PANE" "$OPT" 2>/dev/null
+        ;;
+    *)
+        printf 'usage: %s set|clear\n' "${0##*/}" >&2
+        exit 0
+        ;;
+esac
+
+exit 0
