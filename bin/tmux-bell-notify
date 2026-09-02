@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+#
+# tmux-bell-notify — post a macOS notification for a tmux window that rang the
+# bell. Called from the `alert-bell` hook in ~/.tmux.conf:
+#
+#   set-hook -g alert-bell 'run-shell -b "tmux-bell-notify \"#{window_name}\""'
+#
+# Spawned by the tmux server, which your shell started — so it runs outside the
+# sandbox that denies anything Claude Code spawns access to the tmux socket.
+# That denial is why the marker cannot be driven by a Claude Code hook; see
+# docs/tmux.md.
+#
+# Never fails: a broken notification must not make the tmux server complain on
+# every bell.
+
+set -u
+
+window="${1:-A window}"
+
+command -v osascript >/dev/null 2>&1 || exit 0
+
+# `display notification` posts as Script Editor, which macOS may need allowed
+# once under System Settings → Notifications.
+osascript -e "display notification \"${window} — waiting on you\" with title \"Claude Code\"" \
+    >/dev/null 2>&1 || true
+
+exit 0
