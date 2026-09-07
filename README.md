@@ -102,7 +102,7 @@ See the **[docs/](docs/)** folder for detailed guides on each feature:
 
 - **[Python Environments](docs/python-environments.md)** — `ve`, `vc`, `vd`, `vls`, `vrm`
 - **[Git Worktrees](docs/git-worktrees.md)** — `wta`, `wtl`, `wtc`, `wtr`, `wts`, `wtu`
-- **[Git Aliases](docs/git-aliases.md)** — `ga`, `gb`, `gc`, `gd`, `gs`, `gm`, `gpush`, `gup`, `ghist`, `gt`, `glc`
+- **[Git Aliases](docs/git-aliases.md)** — `gsw` for branch switching, plus `ga`, `gb`, `gc`, `gd`, `gs`, `gm`, `gpush`, `gup`, `ghist`, `gt`, `glc`
 - **[Shell Aliases & Functions](docs/shell-aliases.md)** — Navigation, search (`rg`), Docker, Kubernetes, development tools, system utilities
 - **[Command Tutorials](docs/command-tutorials.md)** — `h` prints color-coded command cheat sheets in your terminal
 - **[tmux Workspace](docs/tmux.md)** — Projects as tabs, tools as panes, `Cmd`-chord navigation in Alacritty
