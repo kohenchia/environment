@@ -133,6 +133,14 @@ source "${${(%):-%x}:A:h}/.shell-common.zsh"
 case "$(uname -s 2>/dev/null)" in
     Darwin)
         export ENV_OS=macos
+        # Shadow setproctitle with a no-op in every Python process. Its macOS
+        # path broadcasts each rename through LaunchServices to every GUI app,
+        # and pytest-xdist renames workers per test — enough to freeze the
+        # desktop. See pyshims/setproctitle/__init__.py.
+        case ":${PYTHONPATH:-}:" in
+            *":${${(%):-%x}:A:h:h}/pyshims:"*) ;;
+            *) export PYTHONPATH="${${(%):-%x}:A:h:h}/pyshims${PYTHONPATH:+:$PYTHONPATH}" ;;
+        esac
         ;;
     Linux)
         # WSL kernels advertise "microsoft" in /proc/version
