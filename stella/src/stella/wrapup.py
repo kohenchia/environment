@@ -1,8 +1,9 @@
-"""The wrap-up sweep: close the sessions and windows of finished teams that have nothing left for the owner.
+"""Wrap-up readiness, and the optional sweep that closes finished teams that have nothing left for the owner.
 
-Wrapping up used to depend on Stella remembering to do it. This is deterministic and runs from the
-scheduler about once a minute (and as `stella wrapup [--dry-run]`). A team Stella launched is wrapped up
-when ALL of these hold:
+The owner decides when a session is wrapped up (`stella wrap` from inside it, `/stella:wrap-up`). This module
+says which finished teams are ready and why the others are not (`stella wrapup --dry-run`, the brief). With
+`wrapup_auto = true` the scheduler also closes the ready ones about once a minute; that is off by default.
+A team Stella launched is ready when ALL of these hold:
 
 * its status is done (or ended, when it was closed by hand with its order closed) and it was not reaped yet
 * its archetype does not set `keep_open` in teams.toml (the owner keeps talking to such a session)
@@ -255,14 +256,15 @@ def pending_lines(st: state.State, now: dt.datetime | None = None) -> list[str]:
     """For the brief and the per-turn hook: each finished team still open, with its one reason."""
     now = now or ledger.now()
     try:
-        vs = [v for v in evaluate(st, now) if not v.ok]
+        vs = [v for v in evaluate(st, now) if not (v.ok and settings().wrapup_auto)]
     except Exception:  # noqa: BLE001 - a broken check must not break the brief
         return []
-    return [f"- {v.team} ({v.status}{', ' + _ago(now - v.since) + ' ago' if v.since else ''}): {v.reason}" for v in vs]
+    return [f"- {v.team} ({v.status}{', ' + _ago(now - v.since) + ' ago' if v.since else ''}): {v.reason or 'clean, ready to wrap up when the owner says so'}" for v in vs]
 
 
-HEADER = ("Finished, not wrapped up (the sweep closes a team by itself once its reason clears; you handle"
-          " only these: e.g. push unpushed commits through the push prompt, then the next sweep closes it):\n")
+HEADER = ("Finished, not wrapped up (the owner decides when a session is wrapped up, with `/stella:wrap-up` in"
+          " the session or `stella reap <team>`; never close one on your own. Fix a listed reason when asked,"
+          " e.g. push unpushed commits through the push prompt):\n")
 
 
 # ---------------------------------------------------------------- closing
@@ -333,3 +335,41 @@ def report(wrapped: list[Verdict], kept: list[Verdict], dry_run: bool) -> str:
     for v in kept:
         lines.append(f"kept open {v.team} ({v.status}): {v.reason}")
     return "\n".join(lines) or "no finished teams"
+
+
+# ---------------------------------------------------------------- the owner wraps up one session
+
+
+def wrap_current(delay: float = 3, dry_run: bool = False) -> str:
+    """The owner's decision: close the session this is called from. Records the team (when it is one) as
+    wrapped up, reports anything unpushed or uncommitted (the work stays on disk), and closes the tmux
+    window a few seconds later, so the reply that ran this can finish."""
+    pane = os.environ.get("TMUX_PANE")
+    tm = os.environ.get("TMUX", "")
+    if not pane or not tm:
+        return "not inside tmux: nothing to close; type /exit to end this session."
+    sock = tm.split(",", 1)[0]
+    srv = tmuxctl.Server(["tmux", "-S", sock], sock, "caller")
+    window = srv.run("display-message", "-p", "-t", pane, "#{window_id}", check=False).stdout.strip()
+    if not window:
+        return "could not find this session's tmux window (is tmux blocked by the command sandbox?)"
+    team = os.environ.get("STELLA_TEAM")
+    st = state.fold()
+    t = st.teams.get(team or "")
+    notes = []
+    if t:
+        for top, only in repos_of(t).items():
+            problem = repo_problem(top, only)
+            if problem:
+                notes.append(problem)
+    if dry_run:
+        return f"would close window {window}" + (f" and record team {team} as wrapped up" if t else "") + (
+            "; note: " + "; ".join(notes) if notes else "")
+    if t:
+        ledger.append("ack", by="owner", key=f"team:{t.name}:{t.status}")
+        ledger.append("reaped", by="owner", team=t.name)
+        ledger.append("wrapped_up", by="owner", team=t.name, checked=["the owner asked"], notes=notes or None)
+    subprocess.Popen(["sh", "-c", f"sleep {delay}; tmux -S '{sock}' kill-window -t '{window}'"], stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    return (f"window {window} closes in {delay:g}s" + (f"; team {t.name} recorded as wrapped up" if t else "")
+            + ("; still open in the repos: " + "; ".join(notes) if notes else ""))

@@ -157,8 +157,8 @@ def summary(p: Pending) -> str:
 
 def instruction() -> str:
     return (f"Review your open follow-ups and the fleet (`{CALL} brief`, `{CALL} fleet`), act on what is"
-            f" unblocked, and tell {settings().owner} briefly. The wrap-up sweep closes clean finished teams by"
-            f" itself; you handle only the exceptions the brief lists under \"Finished, not wrapped up\".")
+            f" unblocked, and tell {settings().owner} briefly. Finished teams stay open until"
+            f" {settings().owner} wraps them up; the brief lists them under \"Finished, not wrapped up\".")
 
 
 def line(p: Pending) -> str:

@@ -134,30 +134,23 @@ the owner has seen an item.
 
 ### Wrapping up finished teams
 
-You no longer have to remember this. The scheduler's wrap-up sweep (about once a minute; `stella wrapup`)
-closes a finished team's record, session and tmux window, verifies the window is gone, closes its orders
-and acknowledges its finished notice, when all hold: the team is done; nothing is asked of the owner; it
-has stayed done for the grace period (`wrapup_grace_minutes`, default 5, restarted when the owner types to
-it); its session is idle; its repos have nothing unpushed and no uncommitted changes; no follow-up waits on
-it; no push it raised is unanswered. It raises one quiet "wrapped up: ..." notification. A team whose
-archetype sets `keep_open = true` in teams.toml is never wrapped up (the owner keeps talking to it).
+The owner decides when a session is wrapped up; never close one on your own. A finished team stays open
+until he says so. He can do it from inside the session with `/stella:wrap-up` (`stella wrap`), or ask you
+("wrap up"): then run `~/.local/bin/stella reap <team>...`, which records the team, closes its session and
+tmux window, and prints "closed" only if the window is verified gone. Closing the record alone is not wrapping
+up (correction #472: `stella reap` printed "closed" while windows stayed open, because the command sandbox
+blocks tmux). Read its output; if it says tmux is unreachable or the window is still open, do not claim it is
+closed: tell the owner which windows remain and that they need to run `stella reap` from a shell where tmux is
+reachable. Verify with `tmux list-windows -a -F '#{window_name}'`.
 
-Your part is only the exceptions. The brief and your per-turn context list them under "Finished, not
-wrapped up", each with its one reason. Act on the reason, and the next sweep closes the team:
+The brief and your per-turn context list the finished teams under "Finished, not wrapped up", each with the
+reason it is not ready (grace period, unpushed commits, uncommitted changes, needs-you, a follow-up or deferred
+push waiting, keep_open, busy) or "ready to wrap up". Use it to answer "what can I wrap up?" and to warn before
+a wrap-up that would leave unpushed work. When asked, push unpushed commits through the push prompt first.
+Teams with `keep_open = true` in teams.toml are ones he keeps talking to after done. `wrapup_auto = true` in
+the config would make the scheduler wrap up ready teams by itself; it is off, by his decision.
 
-| Reason | What you do |
-| --- | --- |
-| grace period | Nothing; it clears by itself |
-| unpushed commits | Push them (the push prompt asks the owner); a declined push stays open and is reported as such |
-| uncommitted changes | Ask the team (`stella tell`) to commit or discard, or tell the owner |
-| needs-you / follow-up waits | Relay the question; do the follow-up and close it |
-| busy / tmux not reachable | Wait; if tmux is blocked by the sandbox, ask the owner to run `stella wrapup` in a terminal |
-| keep_open | Nothing; the owner closes it |
-
-"Wrap up" typed by the owner for a team the sweep keeps open: check with `stella wrapup --dry-run`, tell
-the owner the reason, and close it by hand only if they confirm (`stella reap <team>`, then verify with
-`tmux list-windows -a -F '#{window_name}'`; "closed" is only trustworthy if reap does not say tmux is
-unreachable or the window is still open, correction #472).
+Reply with what is closed (verified), and what is still open and why.
 
 ## Priorities and focus
 

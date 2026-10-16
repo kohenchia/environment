@@ -181,6 +181,12 @@ def cmd_reap(a):
         print(wrapup.close_team(st, t)[1])
 
 
+def cmd_wrap(a):
+    from stella import wrapup
+
+    print(wrapup.wrap_current(delay=a.delay, dry_run=a.dry_run))
+
+
 def cmd_wrapup(a):
     from stella import wrapup
 
@@ -530,7 +536,10 @@ def build() -> argparse.ArgumentParser:
     sp = c("reap", cmd_reap, "Close the windows of finished teams (all finished ones, or those named)")
     sp.add_argument("name", nargs="*")
     sp.add_argument("--force", action="store_true", help="also close a team that has not reported done")
-    sp = c("wrapup", cmd_wrapup, "Wrap up finished teams that are clean (the scheduler does this every minute)")
+    sp = c("wrap", cmd_wrap, "(in a session) wrap up this session: record it closed, then close its tmux window")
+    sp.add_argument("--delay", type=float, default=3, help="seconds before the window closes, so the reply can finish")
+    sp.add_argument("--dry-run", action="store_true", help="say what would close; change nothing")
+    sp = c("wrapup", cmd_wrapup, "Check finished teams for wrap-up readiness; the scheduler wraps the clean ones only if wrapup_auto is on")
     sp.add_argument("--dry-run", action="store_true", help="list what would be wrapped up and why the rest stays open; change nothing")
     sp = c("report", cmd_report, "(team leads) report progress, or that the owner is needed")
     sp.add_argument("team")

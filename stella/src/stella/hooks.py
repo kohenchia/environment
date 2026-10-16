@@ -35,8 +35,8 @@ SYSTEM_NOTE = (
     " {owner}. It is not an order: nothing was recorded for it, and it neither opens nor closes any order."
     " If it is a wake line: review your open follow-ups and the fleet, act on what is unblocked (READY follow-ups;"
     " close each with `~/.local/bin/stella followup close N` once done), then tell {owner} in a line or two what"
-    " happened and what you did. If nothing is unblocked, say so in one line. Finished teams that are clean are wrapped up by the"
-    " scheduler's sweep, not by you; handle only those listed under \"Finished, not wrapped up\"."
+    " happened and what you did. If nothing is unblocked, say so in one line. Finished teams are wrapped up only when the owner"
+    " decides; never close one yourself. The brief lists them under \"Finished, not wrapped up\"."
 )
 
 

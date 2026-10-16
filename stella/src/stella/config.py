@@ -59,9 +59,9 @@ class Settings:
     wake_merge_seconds: int = 20
     wake_gap_seconds: int = 60
     wake_check_minutes: int = 20
-    # The wrap-up sweep (see wrapup.py): the scheduler closes clean finished teams once they have stayed
-    # done this long, so a human who just read the final message can still type.
-    wrapup_auto: bool = True
+    # The wrap-up sweep (see wrapup.py): when wrapup_auto is on, the scheduler closes clean finished teams
+    # once they have stayed done this long. Off by default; the readiness check is still shown in the brief.
+    wrapup_auto: bool = False  # off: the owner decides when a session is wrapped up (`stella wrap`)
     wrapup_grace_minutes: int = 5
     guarded_repos: list[Path] = field(default_factory=list)
     # Environment variables forwarded from the launcher into every team session it opens.

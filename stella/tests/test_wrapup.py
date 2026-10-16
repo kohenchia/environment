@@ -194,7 +194,7 @@ def test_brief_lists_the_reason(env, led):
 def test_wake_line_names_the_sweep(env):
     from stella import wake  # noqa: PLC0415
 
-    assert "wrap-up sweep" in wake.instruction()
+    assert "Finished, not wrapped up" in wake.instruction()
 
 
 def test_attention_still_lists_a_team_that_cannot_be_wrapped(env, led):
@@ -256,3 +256,28 @@ def test_busy_session_is_left_open(env, led, window):
     out = env.run("wrapup", env={"TMUX": f"{sock},0,0"}).stdout
     assert "busy" in out
     assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
+
+
+def test_auto_sweep_is_off_by_default(env):
+    from stella.config import Settings
+
+    assert Settings().wrapup_auto is False
+
+
+def test_wrap_closes_this_window_and_records_the_team(env, led, window):
+    import time
+
+    wid, sock, tm = window("#!/bin/sh\nsleep 600\n")
+    led.team(done_ago=10, window=wid, socket=sock)
+    pane = tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0]
+    e = {"TMUX": f"{sock},0,0", "TMUX_PANE": pane, "STELLA_TEAM": "alpha"}
+    assert "would close" in env.run("wrap", "--dry-run", env=e).stdout
+    assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
+    assert "closes in" in env.run("wrap", "--delay", "0.5", env=e).stdout
+    assert "wrapped_up" in _types(env)
+    time.sleep(2)
+    assert "alpha" not in tm("list-windows", "-a", "-F", "#{window_name}").stdout
+
+
+def test_wrap_outside_tmux_says_so(env):
+    assert "not inside tmux" in env.run("wrap").stdout
