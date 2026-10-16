@@ -47,12 +47,22 @@ def test_a_push_from_a_guarded_repo_asks_the_owner(env, repo, cmd):
     assert _pretool(env, cmd, repo) == "ask"
 
 
-def test_the_prompt_names_the_repo_and_branch(env, repo):
+def test_the_prompt_names_the_repo_branch_commits_and_where_the_diff_is(env, repo):
     _commit(env, repo)
     reason = _pretool_out(env, "git push origin main", repo)["permissionDecisionReason"]
-    assert reason.startswith("Push dotfiles?")
-    assert "main is 1 commit(s) ahead of origin/main" in reason and "change" in reason and "1 file changed" in reason
-    assert "outstanding list" in reason and "git push origin main" in reason
+    first, *rest = reason.splitlines()
+    assert first == "Push dotfiles -> main (1 commit)"
+    assert rest[0] == "  · change" and rest[-1].startswith("Diff: ")
+    assert "FORCE" not in reason and "outstanding" not in reason
+    # no tmux server in tests, so the diff is in a file
+    patch = env.store / "push-diff.patch"
+    assert f"Diff: {patch}" == rest[-1] and "+x" in patch.read_text()
+
+
+def test_a_force_push_says_so_on_the_first_line(env, repo):
+    _commit(env, repo)
+    reason = _pretool_out(env, "git push --force origin main", repo)["permissionDecisionReason"]
+    assert reason.splitlines()[0] == "Push dotfiles -> main (1 commit) FORCE"
 
 
 def test_a_push_by_path_from_elsewhere_asks(env, repo):
@@ -65,7 +75,7 @@ def test_a_push_from_a_worktree_asks(env, repo):
     wt = env.tmp / "wt"
     env.git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
     out = _pretool_out(env, "git push origin feature", wt)
-    assert out["permissionDecision"] == "ask" and "feature is" in out["permissionDecisionReason"]
+    assert out["permissionDecision"] == "ask" and "feature (0 commits, new branch)" in out["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("cmd", [

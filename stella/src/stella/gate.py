@@ -222,33 +222,69 @@ def _touched(pushes: list[tuple[list[str], str, Path]], command: str) -> dict[Pa
     return touched
 
 
-def _summary(where: Path) -> str:
-    """What a push from `where` would send: the target, the commits (newest first) and the diffstat."""
+def _remote_range(where: Path) -> tuple[str | None, bool]:
+    """The revision range of what a push from `where` would send, and whether the branch is already on the
+    remote. A branch that is not falls back to the default branch; with neither, the range is None."""
     d = where if where.is_dir() else where.parent
+    upstream = _git_out(d, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    branch = _git_out(d, "rev-parse", "--abbrev-ref", "HEAD")
+    for i, ref in enumerate((upstream, f"origin/{branch}", "origin/main", "origin/master")):
+        if ref and _git_out(d, "rev-parse", "--verify", "--quiet", f"refs/remotes/{ref}"):
+            return f"{ref}...HEAD", i < 2
+    return None, False
 
-    def git(*args: str) -> str:
-        try:
-            r = subprocess.run(["git", "-C", str(d), *args], capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.TimeoutExpired):
-            return ""
-        return r.stdout.strip() if r.returncode == 0 else ""
 
-    branch = git("rev-parse", "--abbrev-ref", "HEAD") or "?"
-    upstream = git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-    if not upstream and git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"):
-        upstream = f"origin/{branch}"
-    if not upstream:
-        return f"{branch} is not on the remote yet"
-    count = git("rev-list", "--count", f"{upstream}..HEAD") or "?"
-    lines = [f"{branch} is {count} commit(s) ahead of {upstream}:"]
-    subjects = git("log", "--format=%h %s", "--max-count=5", f"{upstream}..HEAD").splitlines()
-    lines += [f"  {s[:90]}" for s in subjects]
+def _summary(where: Path, force: bool) -> str:
+    """The push in a few lines: where it goes, then the commits (newest first, at most 5)."""
+    d = where if where.is_dir() else where.parent
+    branch = _git_out(d, "rev-parse", "--abbrev-ref", "HEAD") or "?"
+    rng, on_remote = _remote_range(d)
+    mark = " FORCE" if force else ""
+    if rng is None:
+        return f"{branch} (new branch){mark}"
+    ahead = rng.replace("...", "..")
+    count = _git_out(d, "rev-list", "--count", ahead) or "?"
+    what = f"{count} commit{'' if count == '1' else 's'}"
+    lines = [f"{branch} ({what}{'' if on_remote else ', new branch'}){mark}"]
+    subjects = _git_out(d, "log", "--format=%s", "--max-count=5", ahead).splitlines()
+    lines += [f"  · {s[:80]}" for s in subjects]
     if count.isdigit() and int(count) > len(subjects):
-        lines.append(f"  … and {int(count) - len(subjects)} more")
-    stat = git("diff", "--shortstat", f"{upstream}...HEAD")
-    if stat:
-        lines.append(f"  {stat}")
+        lines.append(f"  and {int(count) - len(subjects)} more")
     return "\n".join(lines)
+
+
+DIFF_WINDOW = "push-diff"
+
+
+def _diff_command(where: Path) -> str:
+    """Shell command that prints the full diff of a push from `where`, in colour."""
+    d = where if where.is_dir() else where.parent
+    rng, _ = _remote_range(d)
+    git = f"git -C {shlex.quote(str(d))} -c color.ui=always"
+    return f"{git} diff {shlex.quote(rng)}" if rng else f"{git} log -p --max-count=5"
+
+
+def show_diff(touched: dict[Path, Path]) -> str:
+    """Put the diff of each push where the owner can reach it while the prompt is up; returns the pointer for
+    the prompt. A background tmux window (reused, never focused); if tmux is unreachable, a file."""
+    cmds = "; ".join(f"echo '=== {alias(r)} ==='; {_diff_command(w)}" for r, w in sorted(touched.items()))
+    try:
+        from stella import tmuxctl
+
+        srv = tmuxctl.find_server()
+        if srv:
+            old = tmuxctl.find_window(srv, DIFF_WINDOW)
+            if old:
+                srv.run("kill-window", "-t", old, check=False, timeout=3)
+            tmuxctl.new_window(srv, DIFF_WINDOW, str(next(iter(touched.values()))), f"({cmds}) | less -R")
+            return f"window {DIFF_WINDOW}"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    out = store_dir() / "push-diff.patch"
+    r = subprocess.run(["sh", "-c", cmds.replace("color.ui=always", "color.ui=never")], capture_output=True, text=True, timeout=10)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(r.stdout)
+    return f"{out}"
 
 
 def _git_out(where: Path, *args: str) -> str:
@@ -333,13 +369,8 @@ def check_bash(command: str, cwd: str) -> Verdict:
                if not is_approved(r, w) and not (plain and _nothing_to_send(w))}
     if not touched:
         return Verdict()
-    names = ", ".join(alias(r) for r in sorted(touched))
-    details = "\n".join((f"{alias(r)}: " if len(touched) > 1 else "") + _summary(w) for r, w in sorted(touched.items()))
-    shown = " ".join(command.split())
-    shown = shown if len(shown) <= 120 else shown[:119] + "…"
-    return Verdict("ask", f"Push {names}?\n{details}\n"
-                          f"Yes pushes, and this head is not asked about again. No holds it back: Stella keeps it on your outstanding list and can show the full diff.\n"
-                          f"({shown})")
+    body = "\n".join(f"{alias(r)} -> {_summary(w, not plain)}" for r, w in sorted(touched.items()))
+    return Verdict("ask", f"Push {body}\nDiff: {show_diff(touched)}")
 
 
 # ---------------------------------------------------------------- git hooks

@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import os
 import sys
+import subprocess
 from pathlib import Path
 
 from stella import brief, ledger, state
@@ -409,6 +410,13 @@ def cmd_gate(a):
         print(f"{r}:\n  " + ("\n  ".join(lines) or "nothing to do"))
 
 
+def cmd_diff(a):
+    from stella import gate
+
+    repo = gate.resolve_alias(a.repo) if a.repo else Path.cwd()
+    subprocess.run(["sh", "-c", gate._diff_command(repo)])
+
+
 def cmd_git_hook(a):
     from stella import gate
 
@@ -591,6 +599,8 @@ def build() -> argparse.ArgumentParser:
     sp = c("gate", cmd_gate, "Guarded repos: install the leak-guard commit hooks and remove the old push gate"
            " (install), or check them (status). A push from a Claude session asks the owner first")
     sp.add_argument("action", choices=["install", "status"])
+    sp.add_argument("repo", nargs="?")
+    sp = c("diff", cmd_diff, "Show the full diff of what a push of this repo (default: the current one) would send")
     sp.add_argument("repo", nargs="?")
     sp = c("git-hook", cmd_git_hook, "(git) hook entry point")
     sp.add_argument("name")
