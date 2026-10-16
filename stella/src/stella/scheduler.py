@@ -195,11 +195,15 @@ def stop_daemon() -> str:
 def _credentials_match() -> bool:
     """A catch-up pass runs its jobs with the query binary, inside this session's sandbox, which may
     bill this session's own credentials whatever environment it is given. So only a session whose
-    pass_env variables agree with the switch may run one; another session (or the daemon) will."""
+    pass_env variables agree with the switch may run one; another session (or the daemon) will.
+    This only guards who runs the pass; it never changes the switch."""
     from stella import passenv
 
-    m = passenv.mode()
-    return not settings().pass_env or m is None or passenv.from_environment() == m
+    names = settings().pass_env
+    if not names:
+        return True
+    has = all(os.environ.get(k) for k in names)
+    return has == (passenv.effective() == "on")
 
 
 def catch_up_if_needed() -> None:

@@ -24,7 +24,7 @@ def env_claude(env, fake_claude):  # noqa: F811
     p.chmod(0o755)
     secrets = env.tmp / "secrets"
     secrets.mkdir()
-    env.write_config(claude_bin=str(p), pass_env=["DEMO_TOKEN"], pass_env_dir=str(secrets))
+    env.write_config(claude_bin=str(p), claude_query_bin="false", pass_env=["DEMO_TOKEN"], pass_env_dir=str(secrets))
     return fake_claude, secrets
 
 
@@ -67,7 +67,7 @@ def test_on_reads_the_value_from_the_file_when_the_caller_lacks_it(env, tmux, en
 def test_on_without_any_value_refuses_to_launch(env, env_claude):
     r = env.run("pass-env", "on", check=False)
     assert r.returncode != 0 and "DEMO_TOKEN has no value" in (r.stdout + r.stderr)
-    assert "switch: not set" in env.run("pass-env").stdout  # the failed switch left nothing behind
+    assert "switch: off (never set" in env.run("pass-env").stdout  # the failed switch left nothing behind
 
 
 def test_scheduler_waits_rather_than_run_on_the_wrong_credentials(env, env_claude):
@@ -82,12 +82,14 @@ def test_scheduler_waits_rather_than_run_on_the_wrong_credentials(env, env_claud
     assert any(e.get("key") == "scheduler:pass-env" for e in env.events())
 
 
-def test_unset_switch_follows_the_caller(env, env_claude):
+def test_unset_switch_is_off_whatever_the_caller_has(env, env_claude):
+    _, secrets = env_claude
+    (secrets / "DEMO_TOKEN").write_text("v")
     env.say("A", "S, build u")
-    r = env.run("launch", "builder", "--order", "1", "--name", "u", "--dry-run")
-    assert "unset DEMO_TOKEN" in r.stdout
-    r = env.run("launch", "builder", "--order", "1", "--name", "u2", "--dry-run", env={"DEMO_TOKEN": "x"})
-    assert "unset DEMO_TOKEN" not in r.stdout
+    for caller in (None, {"DEMO_TOKEN": "x"}):
+        r = env.run("launch", "builder", "--order", "1", "--name", "u", "--dry-run", env=caller)
+        assert "unset DEMO_TOKEN" in r.stdout
+    assert any(e["type"] == "pass_env" and e["mode"] == "off" and e["by"] == "default" for e in env.events())
 
 
 @pytest.mark.parametrize("switch, caller, expected", [("off", "fromcaller", "unset"), ("on", None, "fromfile")])
@@ -173,23 +175,59 @@ def test_catch_up_waits_for_a_session_on_the_same_credentials(env, env_claude):
 
 
 @needs_tmux
-def test_run_says_when_it_turns_the_switch_off(env, tmux, env_claude):  # noqa: F811
+@pytest.mark.parametrize("switch, caller", [("on", None), ("on", "x"), ("off", None), ("off", "x")])
+def test_plain_run_leaves_the_switch_alone(env, tmux, env_claude, switch, caller):  # noqa: F811
     _, secrets = env_claude
     (secrets / "DEMO_TOKEN").write_text("v")
-    env.run("pass-env", "on")
-    r = env.run("run", env=tmux, check=False)
-    assert "pass_env is now OFF" in r.stdout
+    env.run("pass-env", switch)
+    env.run("run", env={**tmux, **({"DEMO_TOKEN": caller} if caller else {})}, check=False)
+    assert f"switch: {switch}" in env.run("pass-env").stdout
+    env.run("scheduler", "--stop")
+
+
+@needs_tmux
+def test_run_with_a_flag_sets_the_switch(env, tmux, env_claude):  # noqa: F811
+    _, secrets = env_claude
+    (secrets / "DEMO_TOKEN").write_text("v")
+    env.run("run", "--pass-env", "on", env=tmux, check=False)
+    assert "switch: on" in env.run("pass-env").stdout
+    env.run("run", "--pass-env", "off", "--fresh", env=tmux, check=False)
     assert "switch: off" in env.run("pass-env").stdout
     env.run("scheduler", "--stop")
 
 
 @needs_tmux
-def test_run_can_keep_the_switch_on(env, tmux, env_claude):  # noqa: F811
-    _, secrets = env_claude
-    (secrets / "DEMO_TOKEN").write_text("v")
-    env.run("run", "--pass-env", "on", env=tmux, check=False)
-    assert "switch: on" in env.run("pass-env").stdout
+def test_run_with_no_switch_recorded_defaults_to_off_and_says_so(env, tmux, env_claude):  # noqa: F811
+    r = env.run("run", env={**tmux, "DEMO_TOKEN": "x"}, check=False)
+    assert "never set" in r.stdout and "OFF" in r.stdout
+    assert "switch: off" in env.run("pass-env").stdout
     env.run("scheduler", "--stop")
+
+
+def test_status_lists_each_session_without_a_value(env, env_claude):
+    _, secrets = env_claude
+    (secrets / "DEMO_TOKEN").write_text("topsecret")
+    env.run("pass-env", "on")
+    out = env.run("pass-env").stdout
+    assert "sessions (token read" in out and "topsecret" not in out
+
+
+def test_in_use_reads_names_from_a_process_environment(monkeypatch):
+    import os
+    import types
+
+    from stella import passenv
+
+    monkeypatch.setattr(passenv, "settings", lambda: types.SimpleNamespace(pass_env=["DEMO_TOKEN"]))
+    with_t = subprocess.Popen(["sleep", "5"], env={**os.environ, "DEMO_TOKEN": "s3cret"})
+    without = subprocess.Popen(["sleep", "5"], env={k: v for k, v in os.environ.items() if k != "DEMO_TOKEN"})
+    try:
+        assert passenv.in_use(with_t.pid) == "project"
+        assert passenv.in_use(without.pid) == "personal"
+        assert passenv.in_use(None) is None
+    finally:
+        with_t.kill()
+        without.kill()
 
 
 def test_scheduler_alerts_once_while_waiting(env, env_claude):

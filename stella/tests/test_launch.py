@@ -83,7 +83,8 @@ def test_lead_reports_and_done_reach_attention(env, tmux, fake_claude):
 
 def test_session_end_without_done_is_flagged(env, tmux, fake_claude):
     env.say("A", "S, build z")
-    env.run("launch", "builder", "--order", "1", "--name", "bz", env=tmux)
+    seq = max(e["seq"] for e in env.events() if e["type"] == "order")
+    env.run("launch", "builder", "--order", str(seq), "--name", "bz", env=tmux)
     env.hook("session-end", {"session_id": "L", "reason": "other"}, env={"STELLA_TEAM": "bz"})
     assert "exited unexpectedly" in env.run("attention").stdout
 
@@ -114,10 +115,15 @@ def test_launch_forwards_only_pass_env_variables(env, tmux, fake_claude):
     p = env.tmp / "claude-env"
     p.write_text(ENV_CLAUDE.format(out=fake_claude))
     p.chmod(0o755)
-    env.write_config(claude_bin=str(p), pass_env=["DEMO_TOKEN"])
+    secrets = env.tmp / "secrets"
+    secrets.mkdir()
+    (secrets / "DEMO_TOKEN").write_text("t0ken")
+    env.write_config(claude_bin=str(p), claude_query_bin="false", pass_env=["DEMO_TOKEN"], pass_env_dir=str(secrets))
+    env.run("pass-env", "on")
     env.say("A", "S, build z")
-    env.run("launch", "builder", "--order", "1", "--name", "bz",
-            env={**tmux, "DEMO_TOKEN": "t0ken", "DEMO_OTHER": "nope"})
+    seq = max(e["seq"] for e in env.events() if e["type"] == "order")
+    env.run("launch", "builder", "--order", str(seq), "--name", "bz",
+            env={**tmux, "DEMO_TOKEN": "fromcaller", "DEMO_OTHER": "nope"})
     assert _wait(fake_claude / "passed.txt").split() == ["t0ken", "unset"]
     script = (env.store / "launch" / "bz.sh").read_text()
     assert "t0ken" not in script

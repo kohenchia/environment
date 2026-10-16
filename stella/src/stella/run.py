@@ -119,7 +119,6 @@ def _run_here(argv: list[str], srv) -> int:
 
 def run(fresh: bool = False, pass_env: str | None = None) -> str | int:
     store_dir().mkdir(parents=True, exist_ok=True)
-    sched = scheduler.ensure_daemon()
     interactive = sys.stdin.isatty() and sys.stdout.isatty()
     srv = tmuxctl.find_server()
     current = running()
@@ -128,13 +127,15 @@ def run(fresh: bool = False, pass_env: str | None = None) -> str | int:
             passenv.set_mode(pass_env, by="run")
             return (f"Stella is already running; pass_env is now {pass_env} for new sessions. To move her and"
                     " running teams onto it: `stella pass-env --respawn`.")
+        sched = scheduler.ensure_daemon()
         where = current.get("window") or current.get("pane")
         if interactive and srv and where:
             srv.run("select-window", "-t", where, check=False)
         return f"Stella is already running (pid {current['pid']}{', ' + where if where else ''}). {sched}"
     if current and fresh:
         stop(keep_scheduler=True)
-    switched = _set_pass_env(pass_env)
+    switched = _set_pass_env(pass_env)  # before the daemon starts: it would record the default first
+    sched = scheduler.ensure_daemon()
     argv = _argv(fresh)
     if interactive:
         print(sched)
@@ -152,20 +153,20 @@ def run(fresh: bool = False, pass_env: str | None = None) -> str | int:
 
 
 def _set_pass_env(explicit: str | None) -> str | None:
-    """Started with the shared credentials, everything runs on them; started without, nothing
-    does, unless told otherwise. Returns a line to show when that changed the switch."""
+    """Only an explicit --pass-env changes the switch; a plain `stella run` reads it. Returns
+    a line to show when the switch changed or was read for the first time."""
     names = settings().pass_env
     if not names:
         return None
     before = passenv.mode()
-    m = explicit or passenv.from_environment()
-    passenv.set_mode(m, by="run")
-    if before == m or explicit:
-        return None
-    if m == "off":
-        return (f"pass_env is now OFF: this terminal has no {', '.join(names)}, so Stella, her teams and the"
-                " scheduler use your own credentials. `stella run --pass-env on` keeps them on the shared ones.")
-    return f"pass_env is now ON ({', '.join(names)}): Stella, her teams and the scheduler use it."
+    if explicit:
+        passenv.set_mode(explicit, by="run")
+        return None if before == explicit else f"pass_env is now {explicit.upper()} ({', '.join(names)})."
+    if before is None:
+        passenv.effective()
+        return ("pass_env was never set: it is OFF, so Stella, her teams and the scheduler use your own credentials."
+                " `stella pass-env on` switches them to the project ones.")
+    return None
 
 
 def _command(argv: list[str], creds: dict[str, str | None]) -> str:

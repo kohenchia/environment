@@ -114,10 +114,12 @@ Write the design into `--text` together with the task:
 
 The `pass_env` setting names variables (typically a token that bills a shared quota instead of the
 owner's). One switch says whether they are in use, and every session you start follows it: team windows,
-your own session, the scheduler's headless runs. `stella run` sets it from the environment it was started
-in. Never add the variables to a launch any other way.
+your own session, the scheduler's headless runs. The terminal decides nothing: the switch changes only
+through `stella pass-env on|off` and `stella run --pass-env on|off`; a plain `stella run` reads it and leaves
+it alone, and a switch never set is off. When on, values come from `pass_env_dir`, never from the caller's
+environment; when off, the variables are unset in the window. Never add the variables to a launch any other way.
 
-- `~/.local/bin/stella pass-env` shows the switch and where each value would come from.
+- `~/.local/bin/stella pass-env` shows the switch, where each value would come from, and per live session whether it runs on the project or personal token (read from the process's environment by name; no value is shown).
 - When the owner says their own quota has run out (or asks to switch back):
   `~/.local/bin/stella pass-env on --respawn` (or `off`). That restarts every running team, and then you, in
   place, each resuming its conversation; a tool call in flight is interrupted, so say so first. With

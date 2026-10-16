@@ -6,7 +6,7 @@ import datetime as dt
 import json
 import subprocess
 
-from stella import ledger, state, tmuxctl
+from stella import ledger, passenv, state, tmuxctl
 from stella.config import settings
 
 
@@ -31,6 +31,7 @@ def rows() -> tuple[list[dict], str | None]:
     out = []
     seen = set()
     now = ledger.now()
+    launched = {e.get("team"): e.get("pass_env") for e in ledger.events() if e["type"] in {"launch", "respawned"} and e.get("pass_env")}
     for t in sorted(st.teams.values(), key=lambda t: t.seq, reverse=True):
         if t.status == "done" and t.acked:
             continue
@@ -45,6 +46,7 @@ def rows() -> tuple[list[dict], str | None]:
             "team_status": t.status, "session_status": (s or {}).get("status", "not running"),
             "window": t.window, "window_state": win_state, "cwd": t.directory,
             "age": _age(t.ts, now), "last_report": t.last_report, "pid": (s or {}).get("pid"),
+            "credentials": _credentials((s or {}).get("pid"), launched.get(t.name)),
         })
     for s in live:
         if s.get("name") in seen:
@@ -54,8 +56,20 @@ def rows() -> tuple[list[dict], str | None]:
             "name": s.get("name") or s.get("sessionId", "")[:8], "launched_by_stella": False,
             "session_status": s.get("status"), "kind": s.get("kind"), "cwd": s.get("cwd"),
             "age": _age(started, now) if started else "", "pid": s.get("pid"),
+            "credentials": _credentials(s.get("pid"), None),
         })
     return out, err
+
+
+def _credentials(pid, launched_with: str | None) -> str:
+    """'project' or 'personal', read from the session's own environment (names only, never a value);
+    when that can't be read, from how it was launched, marked '(launch)'; else '?'."""
+    if not settings().pass_env:
+        return ""
+    seen = passenv.in_use(pid)
+    if seen:
+        return seen
+    return {"on": "project (launch)", "off": "personal (launch)"}.get(launched_with or "", "?")
 
 
 def _age(ts, now) -> str:
@@ -64,12 +78,14 @@ def _age(ts, now) -> str:
 
 
 def table(rs: list[dict]) -> str:
-    lines = [f"{'name':<30} {'by S':<5} {'status':<22} {'age':<5} cwd / last report"]
+    show = any(r.get("credentials") for r in rs)
+    lines = [f"{'name':<30} {'by S':<5} {'status':<22} {'age':<5} " + (f"{'token':<18} " if show else "") + "cwd / last report"]
     for r in rs:
         status = r.get("team_status") or ""
         status = f"{status}/{r['session_status']}" if status else str(r.get("session_status"))
         if r.get("window_state"):
             status += f" [{r['window_state']}]"
         tail = r.get("last_report") or r.get("cwd") or ""
-        lines.append(f"{r['name'][:30]:<30} {'yes' if r['launched_by_stella'] else '':<5} {status[:22]:<22} {r.get('age', ''):<5} {str(tail)[:70]}")
+        lines.append(f"{r['name'][:30]:<30} {'yes' if r['launched_by_stella'] else '':<5} {status[:22]:<22} {r.get('age', ''):<5} "
+                     + (f"{r.get('credentials', ''):<18} " if show else "") + f"{str(tail)[:70]}")
     return "\n".join(lines)

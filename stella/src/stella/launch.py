@@ -178,7 +178,7 @@ def launch(
         via = "background session (no tmux server found); reach it with `claude attach " + name + "`"
     ev = ledger.append(
         "launch", by="cli", team=name, archetype=archetype, order=order_seq, dir=directory,
-        window=window, socket=sock, via=via, mode=mode, auto_push=auto_push, session=os.environ.get("STELLA_SESSION_ID"),
+        window=window, socket=sock, via=via, mode=mode, auto_push=auto_push, pass_env=passenv.effective(), session=os.environ.get("STELLA_SESSION_ID"),
     )
     return Launched(name, window, via, directory, script, ev)
 

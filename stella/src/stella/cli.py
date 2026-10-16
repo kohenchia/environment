@@ -288,17 +288,26 @@ def cmd_stop(a):
 
 
 def cmd_pass_env(a):
-    from stella import launch, passenv, run
+    from stella import config, launch, passenv, run
 
     if a.action in {"on", "off"}:
         passenv.set_mode(a.action, by="cli")
     print(passenv.status())
+    if config.settings().pass_env:
+        from stella import fleet
+
+        rows, err = fleet.rows()
+        print("sessions (token read from each process's environment, names only):")
+        for r in rows:
+            print(f"  {r['name'][:30]:<30} {r.get('credentials') or '?'}")
+        if err:
+            print(f"  (session list unavailable: {err})")
     if not a.respawn:
         if a.action in {"on", "off"}:
             print("Sessions started from now on follow it. Running teams keep their credentials until"
                   " restarted: `~/.local/bin/stella pass-env --respawn` (or name teams with --team).")
         return
-    why = f"Restarted with pass_env {passenv.mode() or 'following the caller'}."
+    why = f"Restarted with pass_env {passenv.effective()}."
     for line in ([launch.respawn(n, why) for n in a.team] if a.team else launch.respawn_all(why)):
         print(line)
     if a.team:
@@ -557,7 +566,7 @@ def build() -> argparse.ArgumentParser:
     sp = c("run", cmd_run, "Run Stella: her own session, where every message is to her (and the scheduler in the background)")
     sp.add_argument("--fresh", action="store_true", help="start a new conversation (nothing is lost: state is on disk)")
     sp.add_argument("--pass-env", choices=["on", "off"],
-                    help="set the pass_env switch instead of taking it from this environment")
+                    help="set the pass_env switch (without it, `stella run` reads the switch and leaves it alone)")
     sp = c("stop", cmd_stop, "Stop Stella: her session and the background scheduler (launched teams keep running)")
     sp.add_argument("--keep-scheduler", action="store_true", help="stop only her session")
     sp = c("pass-env", cmd_pass_env, "Show or switch whether sessions Stella starts get the pass_env variables;"
