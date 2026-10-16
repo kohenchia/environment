@@ -460,7 +460,7 @@ def test_an_answer_to_some_other_question_approves_nothing(env, repo):
 
 
 def test_defer_is_remembered_as_asked_so_the_stop_hook_records_the_deferral(env, repo):
-    _commit(env, repo)
+    _commit(env, repo, by="S1")
     _answer(env, repo, _question(env, repo), {"answers": {"Q": "Defer"}})
     r = env.run("hook", "stop", input=json.dumps({"session_id": "S1", "cwd": str(repo), "last_assistant_message": "NEXT FOR YOU: x"}))
     assert "not pushed, deferred" in json.loads(r.stdout)["systemMessage"]

@@ -245,16 +245,23 @@ def context(st: state.State, sid: str, t: state.Team | None, idx: dict | None = 
     return Ctx(sessions=provenance.who(st, sid, t).sessions, index=idx if idx is not None else index())
 
 
+def _repo_top(d: str) -> Path | None:
+    """The git checkout a directory is in, found by walking up to the nearest `.git` (a file for a worktree): no process."""
+    p = Path(d)
+    home = Path(os.path.expanduser("~")).resolve()
+    for q in (p, *p.parents):
+        if q in {home, Path("/")}:
+            return None
+        if (q / ".git").exists():
+            return None if store_dir() in {q, *q.parents} or q in store_dir().parents else q
+    return None
+
+
 def footprint(ctx: Ctx) -> set[Path]:
     """The git checkouts this session wrote a file in (derived from the index, so a repo only read is never one)."""
-    from stella import wrapup
-
-    dirs = {os.path.dirname(p) for p, (sid, _) in ctx.index.items() if ctx.mine(sid)}
     tops: set[Path] = set()
-    for d in sorted(dirs):
-        if any(d == str(t) or d.startswith(str(t) + "/") for t in tops):
-            continue
-        top = wrapup.toplevel(Path(d))
+    for d in {os.path.dirname(p) for p, (sid, _) in ctx.index.items() if ctx.mine(sid)}:
+        top = _repo_top(d)
         if top:
             tops.add(top.resolve())
     return tops

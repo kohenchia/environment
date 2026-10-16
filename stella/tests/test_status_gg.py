@@ -142,8 +142,9 @@ def test_unpushed_commits_get_the_push_block_with_the_rule_then_next_for_you(env
 
 def test_every_blocker_is_one_numbered_item(env, led, repo):
     led.team(dir=str(repo))
-    _commit(env, repo)
+    _commit(env, repo, by=SESS)
     (repo / "wip.txt").write_text("x\n")
+    _writes(env, SESS, repo / "wip.txt")
     led.add("report", ago=1, team="alpha", text="which database?", needs_you=True)
     _stop(env, "x", repo)  # the push block comes first; the facts follow on the next stop
     out = _stop(env, DONE, repo)["reason"]

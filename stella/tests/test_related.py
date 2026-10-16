@@ -5,7 +5,7 @@ import datetime as dt
 import json
 
 from test_gate import _writes
-from test_status_gg import SESS, _stop
+from test_status_gg import DONE, SESS, _stop
 from test_wrapup import _repo, _sweep, led  # noqa: F401 - fixtures
 
 DONE = "Done.\n\n" + "━" * 40 + "\n🟩 **ALL DONE** — ready to wrap up. Type `gg`."

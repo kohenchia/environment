@@ -7,10 +7,9 @@ import subprocess
 from conftest import BIN
 from test_gate import _alive, _commit
 from test_finish import _stop as _fstop
-from test_status_gg import SESS, _stop
+from test_status_gg import DONE, DONE_STELLA, SESS, _stop
 from test_wrapup import led  # noqa: F401 - fixtures
 
-DONE = "Done.\nALL DONE: ready to wrap up. Type gg."
 
 
 def _run_hooked(env, repo, sid, git_args, team=None, tool_id="t1", cmd=None):
@@ -146,10 +145,10 @@ def test_a_bystander_is_not_blocked_by_commits_of_another_effort_in_its_repo(env
     _team(led, "tracker", repo)
     _commit(env, repo, by="sess-docs", team="docs")
     assert "would wrap up tracker" in env.run("wrapup", "tracker", "--dry-run").stdout
-    assert _stop(env, DONE, repo) == {}  # the Stop hook of the bystander neither blocks nor asks it to push
+    assert _stop(env, "Done.\n\n" + DONE, repo) == {}  # the Stop hook of the bystander neither blocks nor asks it to push
     att = env.run("attention").stdout
     assert "unowned: dotfiles main 1 unpushed commit (from the docs effort, closed 2h ago)" in att
-    assert f"stella push -C {repo}" in att
+    assert f"stella push --plan -C {repo}" in att
 
 
 def test_the_owner_is_blocked_by_its_own_unpushed_commit_and_it_names_exactly_that(env, led, repo):
@@ -217,8 +216,8 @@ def test_a_commit_in_a_worktree_belongs_to_whoever_made_it_there(env, repo, tmp_
     _commit(env, wt, name="w.txt", by=SESS)
     _commit(env, repo, name="theirs.txt", by="other")
     out = _fstop(env, wt, sid=SESS)
-    assert out["decision"] == "block" and f"push -C {wt.resolve()}" in out["reason"] and "1 unpushed commit" in out["reason"]
-    assert f"push -C {repo.resolve()}" not in out["reason"]
+    assert out["decision"] == "block" and f"push --plan -C {wt.resolve()}" in out["reason"] and "1 unpushed commit" in out["reason"]
+    assert f"push --plan -C {repo.resolve()}" not in out["reason"]
 
 
 def test_a_team_commit_made_before_a_resume_still_blocks_the_resumed_session(env, led, repo):
@@ -249,5 +248,5 @@ def test_stellas_own_attention_list_carries_the_unowned_items(env, led, repo):
     _team(led, "tracker", repo)
     sha = _commit(env, repo)
     led.add("push_deferred", ago=5, team="tracker", repo="dotfiles", path=str(repo), sha=sha, branch="main", session="sess-tracker")
-    out = _stop(env, "Nothing.\nALL DONE: nothing needs you.", repo, sid="stella-s", extra={ENV: "1"})
+    out = _stop(env, "Nothing.\n\n" + DONE_STELLA, repo, sid="stella-s", extra={ENV: "1"})
     assert out["decision"] == "block" and "unowned: dotfiles main 1 unpushed commit" in out["reason"]
