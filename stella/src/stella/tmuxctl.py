@@ -80,9 +80,9 @@ def new_window(srv: Server, name: str, directory: str, command: str, env: dict[s
         "new-window", "-d", "-P", "-F", "#{window_id}", "-t", f"={session}:", "-n", name, "-c", directory,
         *env_args, command,
     ).stdout.strip()
-    # A clean exit (status 0, e.g. /quit) closes the window; a crash keeps the dead pane so its last
-    # output can be read.
-    srv.run("set-option", "-w", "-t", out, "remain-on-exit", "failed", check=False)
+    # No remain-on-exit: the launch script itself waits after a crash (see launch.py), so a shell the owner
+    # opens next to the lead closes normally on `exit`, whatever the last command's status was.
+    srv.run("set-option", "-w", "-t", out, "remain-on-exit", "off", check=False)
     return out
 
 

@@ -62,8 +62,14 @@ def write_script(script: Path, name: str, directory: str, mode: str, order_seq: 
         f"export STELLA_TEAM={shlex.quote(name)}\n"
         + (f"export STELLA_ORDER={order_seq}\n" if order_seq else "")
         + "".join(f"unset {k}\n" for k, v in creds.items() if v is None)
-        + f"exec {shlex.quote(s.claude_bin)} --name {shlex.quote(name)} --permission-mode {shlex.quote(mode)}"
+        + f"{shlex.quote(s.claude_bin)} --name {shlex.quote(name)} --permission-mode {shlex.quote(mode)}"
         f" --append-system-prompt-file {shlex.quote(str(prompt_file))} {' '.join(shlex.quote(a) for a in claude_args)}\n"
+        # A clean exit (/quit) closes the window. A crash waits for a key so its last output can be read.
+        # This is done here, not with tmux's remain-on-exit, because that option is per window and would
+        # also keep any shell the owner opens beside the lead after a failing command and `exit`.
+        'rc=$?\n'
+        'if [ "$rc" -ne 0 ]; then printf "\\n[stella] claude exited with status %s. Press Enter to close.\\n" "$rc"; read -r _; fi\n'
+        'exit "$rc"\n'
     )
     script.chmod(0o755)
 

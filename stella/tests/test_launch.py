@@ -147,3 +147,15 @@ def test_needs_you_report_reminds_the_team_to_say_it_in_the_window(env):
     out = env.run("report", "br", "which database?", "--needs-you").stdout
     assert "must state the request in full" in out
     assert "must state" not in env.run("report", "br", "built half").stdout
+
+
+def test_launch_script_waits_after_a_crash_but_not_after_a_clean_exit(env, tmux, fake_claude):
+    env.say("A", "S, build w")
+    env.run("launch", "builder", "--order", "1", "--name", "bw", env=tmux)
+    script = (env.store / "launch" / "bw.sh").read_text()
+    assert "exec " not in script.split("rc=$?")[0].splitlines()[-1]
+    assert 'rc=$?' in script and 'read -r _' in script and script.rstrip().endswith('exit "$rc"')
+    sock = tmux["TMUX"].split(",")[0]
+    opt = subprocess.run(["tmux", "-S", sock, "show-options", "-w", "-t", "work:bw", "remain-on-exit"],
+                         capture_output=True, text=True).stdout
+    assert "off" in opt
