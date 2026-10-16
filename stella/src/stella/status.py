@@ -36,7 +36,7 @@ RULE = (
     " `NEXT FOR YOU: <the one or two things only the owner can do or decide: a question, a decision, a deferred push,"
     " a review to post>`, `ALL DONE: ready to wrap up. Type gg.` (only when nothing is unpushed, uncommitted, deferred or"
     " open for the owner), or `WORKING: <what is still running>` (only when the turn ends while background work continues)."
-    " In plain words, no list after it."
+    " In plain words, no list after it. (`gg` wraps up just this session; `tyfp` wraps up every session that is done.)"
 )
 
 
@@ -63,6 +63,7 @@ class Blocker:
     kind: str  # push | deferred | dirty | asking | attention
     text: str  # one clause: what is open
     ask: str  # what the owner is asked, for the NEXT FOR YOU line
+    command: str = ""  # for a push: the push that raises the prompt
 
 
 # ---------------------------------------------------------------- facts
@@ -122,7 +123,8 @@ def blockers(st: state.State, sid: str, cwd: str, own: bool = False, t: state.Te
             continue  # deferred ones are listed above (or dropped by the owner)
         branch = gate._git_out(where, "rev-parse", "--abbrev-ref", "HEAD")
         out.append(Blocker("push", f"{_plural(n, 'unpushed commit')} in {root.name} ({branch})",
-                           f"approve the push of {root.name} {branch} ({_plural(n, 'commit')})"))
+                           f"approve the push of {root.name} {branch} ({_plural(n, 'commit')})",
+                           f"git -C {root} push -u origin {branch}"))
     return out
 
 

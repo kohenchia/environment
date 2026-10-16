@@ -39,6 +39,7 @@ from stella import ledger, notify, state, tmuxctl
 from stella.config import BIN, settings, store_dir
 
 GIT_TIMEOUT = 10
+REQUEST_STALE = 120  # seconds a queued `gg` stays valid
 FINISHED = {"done", "ended"}
 
 
@@ -49,6 +50,12 @@ class Verdict:
     ok: bool
     reason: str = ""  # why it stays open (first failing condition)
     checked: list[str] = field(default_factory=list)  # what held, when ok
+    blockers: list = field(default_factory=list)  # status.Blocker, when `tyfp` found any
+
+    @property
+    def push_only(self) -> bool:
+        """Its only blocker is an unpushed commit: the push prompt can clear it."""
+        return bool(self.blockers) and all(b.kind == "push" for b in self.blockers)
     repos: list[str] = field(default_factory=list)
     since: dt.datetime | None = None
     gone: bool = False  # no window and no process any more
@@ -193,7 +200,25 @@ def is_gone(t: state.Team, live: set[str] | None) -> bool:
     return live is not None and bool(t.window) and t.status in {"running", "needs-you", "ended"} and t.name not in live
 
 
-def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.datetime, gone: bool = False) -> Verdict:
+def window_of(srv: tmuxctl.Server, t: state.Team) -> str | None:
+    """The team's window id, only when that window really is the team's: it exists and carries the team's name. A window id
+    recorded before a tmux restart may belong to something else now; then this is None and nothing is closed."""
+    if not t.window:
+        return None
+    r = srv.run("list-windows", "-a", "-F", "#{window_id}\t#{window_name}", check=False)
+    for line in r.stdout.splitlines():
+        wid, _, wname = line.partition("\t")
+        if wid == t.window:
+            base = re.sub(r"[^a-z0-9-]+", "-", wname.lower()).strip("-")
+            return wid if wname == t.name or base == t.name or t.name.startswith(base + "-") else None
+    return None
+
+
+def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.datetime, gone: bool = False,
+                  explicit: bool = False, typed_in: bool = False) -> Verdict:
+    """`explicit` is `tyfp` / `stella sweep --now`: the owner said so, so no grace period, `keep_open` and adopted teams count,
+    an adopted session (which never reports done) is wrapped when idle and clean, and the gg blockers apply too.
+    `typed_in` is the session the word was typed in: busy by definition, so its idleness is not asked."""
     v = Verdict(t.name, "gone" if gone else t.status, False, gone=gone)
 
     def no(reason: str) -> Verdict:
@@ -201,13 +226,15 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
         return v
 
     grace = dt.timedelta(minutes=settings().wrapup_grace_minutes)
-    if t.archetype in keep_open and not gone:
+    if t.archetype == "adopted" and not gone and not explicit:
+        return no("adopted: started by hand, closed only by gg or the owner's word")
+    if t.archetype in keep_open and not gone and not explicit:
         return no("keep_open: its session stays open for you to talk to")
     if t.asking:
         return no(f"needs-you: {' '.join((t.last_report or '').split())[:80]}")
     if t.status == "needs-you" and not gone:
         return no("needs-you")
-    if t.status == "running" and not gone:
+    if t.status == "running" and not gone and not (explicit and (t.archetype == "adopted" or typed_in)):
         return no("still running")
     if gone:
         pass  # treated as ended: nothing is running, and a gone window cannot be closed or asked
@@ -218,7 +245,7 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
         if o and o.status == "open":
             return no(f"closed by hand with order #{o.seq} still open")
     v.since = max([x for x in (t.ts, t.touched) if x])
-    if now - v.since < grace:
+    if now - v.since < grace and not explicit:
         return no(f"grace period: {_ago(now - v.since)} of {settings().wrapup_grace_minutes}m")
     waiting = [f for f in st.open_followups() if t.name in f.after]
     if waiting:
@@ -231,8 +258,16 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
         srv, window = _window(t.name, t)
         if srv is None:
             return no("tmux is not reachable from here, so its window cannot be checked or closed")
-        if window and t.status == "done" and not session_idle(srv, window):
+        if explicit and window and window_of(srv, t) != window:
+            return no(f"its window {window} does not look like its own (id reused?); left alone")
+        if window and (t.status == "done" or explicit) and not typed_in and not session_idle(srv, window):
             return no("its session is busy or not at its prompt")
+    if explicit:
+        from stella import status
+
+        v.blockers = status.blockers(st, "", t.directory or "", own=False, t=t)
+        if v.blockers:
+            return no("; ".join(b.text for b in v.blockers))
     repos = repos_of(t)
     for top, only in repos.items():
         problem = repo_problem(top, only)
@@ -243,6 +278,7 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
     v.checked = [
         f"status {v.status}" + (f" (the ledger still says {t.status})" if gone else ""),
         "no open question",
+        "the owner typed tyfp (no grace period)" if explicit else
         f"stayed {v.status} {_ago(now - v.since)} (grace {settings().wrapup_grace_minutes}m)",
         "window and process gone" if gone else "session idle" if window else "no open window",
         f"repos clean and pushed: {', '.join(Path(p).name for p in v.repos) or 'none touched'}",
@@ -362,8 +398,16 @@ def sweep(dry_run: bool = False, now: dt.datetime | None = None, gone_only: bool
                           orders=carried or None)
             wrapped.append(v)
     if wrapped and not dry_run:
-        notify.notify("Stella", "wrapped up: " + ", ".join(v.team for v in wrapped), quiet=True)
+        notify.notify("Stella", "wrapped up: " + ", ".join(_named(st, v) for v in wrapped), quiet=True)
     return wrapped, kept
+
+
+def _named(st: state.State, v: Verdict) -> str:
+    """A team with the window the sweep closed for it, so the notice names every window that went."""
+    t = st.teams.get(v.team)
+    if v.gone or not (t and t.window):
+        return f"{v.team} (no window left to close)"
+    return f"{v.team} (window {t.window})"
 
 
 def report(wrapped: list[Verdict], kept: list[Verdict], dry_run: bool) -> str:
@@ -431,7 +475,7 @@ def wrap_session(sid: str, cwd: str, delay: float = 3, dry_run: bool = False) ->
     if not in_stella_server(sock):
         return Wrap(False, "gg: this tmux server is not Stella's; nothing closed. Type /exit to end this session.")
     st = state.fold()
-    t = st.teams.get(os.environ.get("STELLA_TEAM") or "")
+    t = st.teams.get(os.environ.get("STELLA_TEAM") or "") or state.team_for_session(st, sid)
     bl = status.blockers(st, sid, cwd, own=False, t=t)
     if bl:
         return Wrap(False, _blocked(bl), bl)
@@ -500,13 +544,40 @@ def _queue_dir() -> Path:
     return store_dir() / "gg"
 
 
+def verify_pane(srv: tmuxctl.Server, req: dict):
+    """The pane dict when `req["pane"]` still holds the very session that asked (its Claude process, `claude_pid`, runs under
+    that pane and is not another session's) and no other Claude session shares its window; else a string saying why not.
+    A pane id alone proves nothing: tmux ids restart with the server, and a pid can be reused."""
+    from stella import fleet, windows
+
+    panes = windows._panes(srv)
+    p = next((x for x in panes if x["pane_id"] == req.get("pane")), None)
+    if not p:
+        return f"pane {req.get('pane')} is gone"
+    procs = windows._procs()
+    cp = req.get("claude_pid")
+    if not cp or cp not in procs or not windows._is_claude(procs[cp][1]) or cp not in windows._descendants(p["pane_pid"], procs):
+        return f"pane {req.get('pane')} no longer holds the session that asked"
+    for a in fleet.sessions()[0]:
+        if a.get("pid") == cp and a.get("sessionId") and req.get("sid") and a["sessionId"] != req["sid"]:
+            return f"pane {req.get('pane')} now holds another session"
+    for q in panes:
+        if q["window_id"] == p["window_id"] and q["pane_id"] != p["pane_id"] and any(
+                x in procs and windows._is_claude(procs[x][1]) for x in windows._descendants(q["pane_pid"], procs)):
+            return f"window {p['window_id']} also holds another Claude session"
+    return p
+
+
 def _queue(sid: str, cwd: str, sock: str, pane: str, t: state.Team | None) -> Wrap:
-    from stella import scheduler
+    import time
+
+    from stella import scheduler, windows
 
     d = _queue_dir()
     d.mkdir(parents=True, exist_ok=True)
     (d / f"{re.sub(r'[^A-Za-z0-9]', '_', sock + pane)}.json").write_text(json.dumps(
-        {"sock": sock, "pane": pane, "sid": sid, "cwd": cwd, "team": t.name if t else None}))
+        {"sock": sock, "pane": pane, "sid": sid, "cwd": cwd, "team": t.name if t else None,
+         "claude_pid": windows.claude_ancestor(), "ts": time.time()}))
     if not scheduler.running_pid():
         return Wrap(False, "gg: nothing blocks it, but this session cannot reach tmux and the scheduler is not running to close"
                            " it; run `stella run` in a terminal, or type /exit.")
@@ -514,26 +585,39 @@ def _queue(sid: str, cwd: str, sock: str, pane: str, t: state.Team | None) -> Wr
 
 
 def process_requests() -> list[str]:
-    """Scheduler side of `_queue`: re-check, then record and close each queued window, verified. A failure is an alert."""
+    """Scheduler side of `_queue`: for each queued request, verify the pane still holds the session that typed `gg`, re-check
+    the blockers, then record and close THAT window only, verified. Anything off is an alert and closes nothing. It never
+    runs the sweep. Also registers the sessions queued for adoption."""
+    import time
+
+    from stella import adopt, status, tyfp
+
     out = []
+    try:
+        tyfp.process_requests()
+    except Exception as e:  # noqa: BLE001
+        print(f"tyfp error: {type(e).__name__}: {e}", flush=True)
+    try:
+        adopt.process_requests()
+    except Exception as e:  # noqa: BLE001
+        print(f"adopt error: {type(e).__name__}: {e}", flush=True)
     for f in sorted(_queue_dir().glob("*.json")):
         try:
             req = json.loads(f.read_text())
         except (OSError, ValueError):
             req = None
         f.unlink(missing_ok=True)
-        if not req:
-            continue
-        from stella import status
-
+        if not req or time.time() - req.get("ts", 0) > REQUEST_STALE:
+            continue  # a stale request never closes anything
         srv = tmuxctl.Server(["tmux", "-S", req["sock"]], req["sock"], "recorded")
-        window = srv.run("display-message", "-p", "-t", req["pane"], "#{window_id}", check=False).stdout.strip()
-        st = state.fold()
-        t = st.teams.get(req.get("team") or "")
         key = f"gg:{req['pane']}"
-        if not window:
-            ledger.append("alert", by="wrapup", key=key, text=f"gg: could not find the window of pane {req['pane']}; nothing closed")
+        pane = verify_pane(srv, req)
+        if isinstance(pane, str):
+            ledger.append("alert", by="wrapup", key=key, text=f"gg: nothing closed, {pane}")
             continue
+        window = pane["window_id"]
+        st = state.fold()
+        t = st.teams.get(req.get("team") or "") or state.team_for_session(st, req.get("sid") or "")
         bl = status.blockers(st, req.get("sid") or "", req.get("cwd") or "", own=False, t=t)
         if bl:
             ledger.append("alert", by="wrapup", key=key, text=_blocked(bl) + f" (window {window})")

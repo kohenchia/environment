@@ -31,7 +31,7 @@ def _fleet(env, tmux):  # noqa: F811
 def test_clean_gone_team_is_wrapped_up_unless_it_needs_you(env, led, tmux, status):  # noqa: F811
     r = _repo(env)
     _gone_team(led, "vanished", r, status)
-    out = env.run("wrapup", env=tmux).stdout
+    out = env.run("sweep", env=tmux).stdout
     if status == "needs-you":
         assert "kept open vanished (gone): needs-you: which database?" in out
         assert "wrapped_up" not in _types(env)
@@ -47,7 +47,7 @@ def test_gone_team_with_uncommitted_work_is_listed_with_the_reason_and_not_disca
     r = _repo(env)
     (r / "skill.md").write_text("unsaved idea\n")
     _gone_team(led, "model-routing-2", r, "needs-you")
-    out = env.run("wrapup", env=tmux).stdout
+    out = env.run("sweep", env=tmux).stdout
     assert "kept open model-routing-2 (gone)" in out
     assert (r / "skill.md").read_text() == "unsaved idea\n"
     brief = env.run("brief", env=tmux).stdout
@@ -64,7 +64,7 @@ def test_gone_team_with_unpushed_commits_is_kept(env, led, tmux):  # noqa: F811
     env.git(r, "add", ".")
     env.git(r, "commit", "-q", "-m", "local only")
     _gone_team(led, "unpushed", r)
-    assert "1 unpushed commit" in env.run("wrapup", env=tmux).stdout
+    assert "1 unpushed commit" in env.run("sweep", env=tmux).stdout
 
 
 def test_a_live_team_is_not_gone_even_when_its_window_was_renamed(env, led, tmux, env_claude):  # noqa: F811
@@ -73,7 +73,7 @@ def test_a_live_team_is_not_gone_even_when_its_window_was_renamed(env, led, tmux
     _lines(out / "passed.txt", 1)
     sock = tmux["TMUX"].split(",")[0]
     subprocess.run(["tmux", "-S", sock, "rename-window", "-t", "work:alive", "other-name"], check=True)
-    swept = env.run("wrapup", env=tmux).stdout
+    swept = env.run("sweep", env=tmux).stdout
     assert "alive" not in swept
     row = next(line for line in _fleet(env, tmux).splitlines() if line.startswith("alive"))
     assert "gone" not in row
@@ -82,7 +82,7 @@ def test_a_live_team_is_not_gone_even_when_its_window_was_renamed(env, led, tmux
 def test_nothing_is_gone_when_tmux_cannot_be_reached(env, led):
     r = _repo(env)
     _gone_team(led, "vanished", r)
-    out = env.run("wrapup").stdout  # no tmux server in this environment: it cannot be told
+    out = env.run("sweep").stdout  # no tmux server in this environment: it cannot be told
     assert "vanished" not in out and "wrapped_up" not in _types(env)
 
 
@@ -99,5 +99,5 @@ def test_a_window_left_holding_the_owners_shell_is_not_gone(env, led, tmux):  # 
     _gone_team(led, "shelled", r)
     sock = tmux["TMUX"].split(",")[0]
     subprocess.run(["tmux", "-S", sock, "new-window", "-d", "-t", "work:", "-n", "shelled", "sleep 60"], check=True)
-    assert "shelled" not in env.run("wrapup", env=tmux).stdout
+    assert "shelled" not in env.run("sweep", env=tmux).stdout
     assert "wrapped_up" not in _types(env)

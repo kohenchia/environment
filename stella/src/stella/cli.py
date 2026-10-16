@@ -216,14 +216,25 @@ def cmd_wrap(a):
 def cmd_wrapup(a):
     from stella import wrapup
 
-    if a.process_requests:
+    if a.process_requests:  # internal: what the scheduler does for a `gg` typed where tmux is unreachable
         print("\n".join(f"closed {w}" for w in wrapup.process_requests()))
         return
     if a.close_window:  # internal: the detached helper of `gg` / `stella wrap`
         return wrapup.close_window(a.close_window, a.delay)
-    if a.team:
-        for name in a.team:
-            print(wrapup.wrap_team(name, dry_run=a.dry_run).message)
+    if not a.team:
+        raise SystemExit("stella wrapup needs the team to wrap up: `stella wrapup <team>` closes that one team. "
+                         "To check every finished team (the automatic sweep) run `stella sweep`.")
+    for name in a.team:
+        print(wrapup.wrap_team(name, dry_run=a.dry_run).message)
+
+
+def cmd_sweep(a):
+    from stella import wrapup
+
+    if a.now:
+        from stella import tyfp
+
+        print(tyfp.run(None, None, dry_run=a.dry_run).text())
         return
     wrapped, kept = wrapup.sweep(dry_run=a.dry_run)
     print(wrapup.report(wrapped, kept, a.dry_run))
@@ -546,11 +557,16 @@ def cmd_install(a):
 
 EPILOG = """\
 gg: type exactly `gg` (alone, any case) as a prompt in any Claude session in the Stella tmux server and that session
-wraps itself up, the same as /stella:wrap-up, `stella wrap` and `stella wrapup <team>`. It first checks that nothing is
+wraps ONLY itself up, the same as /stella:wrap-up, `stella wrap` and `stella wrapup <team>`. It never runs the all-teams sweep (`stella sweep`). It first checks that nothing is
 unpushed, uncommitted, deferred or waiting on the owner; if something is, it does not close, says what in one line and,
 for an unpushed commit, raises the push prompt. If clean, it closes the session and its window (verified), closes the
 team's orders and writes `wrapped_up`. keep_open teams (review) close too. In a session that is not a team it closes
 just that window. In Stella's own session it is refused: she is never wrapped up.
+
+tyfp: type exactly `tyfp` as a prompt in any session in the Stella tmux server and EVERY session that is done is wrapped up
+(`gg` wraps up only the session it is typed in). Same checks as gg for each, no grace period, keep_open and adopted sessions
+included; busy, running, blocked sessions and Stella's own stay. One report: `wrapped up: <names>` and `left open: <name>:
+<reason>`; for a session blocked only by an unpushed commit the push prompt is raised. The session it was typed in goes last.
 
 status line: every turn of every session in the Stella tmux server ends with exactly one last line:
 `NEXT FOR YOU: <what only the owner can do or decide>`, `ALL DONE: ready to wrap up. Type gg.`, or
@@ -631,12 +647,15 @@ def build() -> argparse.ArgumentParser:
     sp = c("wrap", cmd_wrap, "(in a session) wrap up this session after the `gg` checks: record it closed, then close its tmux window")
     sp.add_argument("--delay", type=float, default=3, help="seconds before the window closes, so the reply can finish")
     sp.add_argument("--dry-run", action="store_true", help="say what would close; change nothing")
-    sp = c("wrapup", cmd_wrapup, "Check finished teams for wrap-up readiness (the scheduler wraps the clean ones only if wrapup_auto is on); with team names, wrap those up now, as `gg` does")
-    sp.add_argument("team", nargs="*", help="wrap up these teams now (same checks as `gg`: nothing unpushed, uncommitted, deferred or waiting on the owner; keep_open does not matter)")
-    sp.add_argument("--dry-run", action="store_true", help="list what would be wrapped up and why the rest stays open; change nothing")
+    sp = c("wrapup", cmd_wrapup, "Wrap up the ONE named team now, as `gg` does for the session it is typed in (same checks; nothing else is touched)")
+    sp.add_argument("team", nargs="*", help="the team to wrap up (nothing unpushed, uncommitted, deferred or waiting on the owner; keep_open does not matter)")
+    sp.add_argument("--dry-run", action="store_true", help="say what would close; change nothing")
     sp.add_argument("--close-window", help=argparse.SUPPRESS)  # internal: SOCKET|WINDOW, closed after --delay and verified
     sp.add_argument("--delay", type=float, default=3, help=argparse.SUPPRESS)
-    sp.add_argument("--process-requests", action="store_true", help=argparse.SUPPRESS)  # internal: what the scheduler does for `gg`
+    sp.add_argument("--process-requests", action="store_true", help=argparse.SUPPRESS)
+    sp = c("sweep", cmd_sweep, "The AUTOMATIC sweep over EVERY finished team (not `gg`, which wraps up one session): records gone teams, and closes the clean finished ones only if wrapup_auto is on")
+    sp.add_argument("--dry-run", action="store_true", help="list what would be wrapped up and why the rest stays open; change nothing")
+    sp.add_argument("--now", action="store_true", help="the owner's explicit sweep, what `tyfp` types: every clean, idle session at once, no grace period, keep_open and adopted ones included; busy, running and blocked ones stay (with the reason)")
     sp = c("report", cmd_report, "(team leads) report progress, or that the owner is needed")
     sp.add_argument("team")
     sp.add_argument("message")

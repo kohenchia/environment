@@ -38,8 +38,10 @@ def rows() -> tuple[list[dict], str | None]:
     for t in sorted(st.teams.values(), key=lambda t: t.seq, reverse=True):
         if t.acked:  # wrapped up or reaped
             continue
-        s = by_name.get(t.name)
+        s = by_name.get(t.name) or next((x for x in live if x.get("sessionId") in t.sessions), None)  # an adopted one keeps its own name
         seen.add(t.name)
+        if s:
+            seen.add(s.get("name"))
         win_state = ""
         if srv and t.window:
             win_state = "window closed" if not tmuxctl.window_exists(srv, t.window) else (
@@ -48,7 +50,7 @@ def rows() -> tuple[list[dict], str | None]:
         if gone:
             win_state = "gone"
         out.append({
-            "name": t.name, "launched_by_stella": True, "archetype": t.archetype, "order": t.order,
+            "name": t.name, "launched_by_stella": True, "adopted": t.archetype == "adopted", "archetype": t.archetype, "order": t.order,
             "team_status": t.status, "session_status": (s or {}).get("status", "not running"),
             "window": t.window, "window_state": win_state, "cwd": t.directory,
             "age": _age(t.ts, now), "last_report": t.last_report, "pid": (s or {}).get("pid"),
@@ -94,6 +96,6 @@ def table(rs: list[dict]) -> str:
         elif r.get("window_state"):
             status += f" [{r['window_state']}]"
         tail = r.get("last_report") or r.get("cwd") or ""
-        lines.append(f"{r['name'][:30]:<30} {'yes' if r['launched_by_stella'] else '':<5} {status[:22]:<22} {r.get('age', ''):<5} "
+        lines.append(f"{r['name'][:30]:<30} {'adopt' if r.get('adopted') else 'yes' if r['launched_by_stella'] else '':<5} {status[:22]:<22} {r.get('age', ''):<5} "
                      + (f"{r.get('credentials', ''):<18} " if show else "") + f"{str(tail)[:70]}")
     return "\n".join(lines)

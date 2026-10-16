@@ -21,5 +21,11 @@ prompt, through the same code as below.
 3. When it closed, reply with one short line saying the window is closing. Do not start other work: the window
    is about to go.
 
+`gg` wraps up only the session it is typed in. Typing exactly `tyfp` alone does the same for every session that is
+done: each clean, idle one is wrapped up (also `keep_open` and adopted ones), the busy, running, blocked and Stella's own
+stay, and one report says `wrapped up: <names>` and `left open: <name>: <reason>`. For a session blocked only by an
+unpushed commit, the hook asks you to run that push so the prompt appears; do so, never tell the owner to run it. The
+automatic sweep is a different command (`stella sweep`); never run it for either word.
+
 `stella wrap --dry-run` shows what would close without changing anything. From outside, Stella uses
 `stella wrapup <team>`: the same checks, and the window is verified gone.

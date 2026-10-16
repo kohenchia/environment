@@ -6,7 +6,15 @@ import time
 
 import pytest
 from test_gate import _commit
-from test_wrapup import _repo, _types, led, window  # noqa: F401 - fixtures
+from test_wrapup import _repo, _types, led  # noqa: F401 - fixtures
+from test_wrapup import window as _bw  # noqa: F401
+
+
+@pytest.fixture
+def window(_bw):
+    """Windows whose command is a script named claude-*, so the process tree holds a "Claude" as in real life."""
+    return lambda script, name="alpha": _bw(script, name, True)
+
 
 SESS = "sess-alpha"
 TEAM = {"STELLA_TEAM": "alpha"}
@@ -148,6 +156,15 @@ def _wait_gone(tm, name="alpha", secs=5):
     return False
 
 
+def _claude_pid(tm, pane):
+    """The pid of the fake Claude (a script named claude-*) running in the pane, as the scheduler would see it."""
+    from stella import windows
+
+    procs = windows._procs()
+    root = int(tm("display-message", "-p", "-t", pane, "#{pane_pid}").stdout.strip())
+    return next(p for p in windows._descendants(root, procs) if windows._is_claude(procs[p][1]))
+
+
 def _setup(env, led, window, archetype="builder", status="done", **kw):
     r = _repo(env)
     wid, sock, tm = window("#!/bin/sh\nsleep 600\n")
@@ -286,7 +303,7 @@ def test_gg_from_a_sandbox_that_cannot_reach_tmux_is_queued_for_the_scheduler(en
     assert out["decision"] == "block" and "scheduler" in out["reason"] and "could not find" not in out["reason"]
     [req] = list((env.store / "gg").glob("*.json"))
     assert "wrapped_up" not in _types(env)  # nothing recorded until the window can really be closed
-    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane}))  # the scheduler reaches the real pane
+    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane, "claude_pid": _claude_pid(tm, pane)}))  # the scheduler reaches the real pane
     env.run("wrapup", "--process-requests", env={"TMUX": f"{sock},0,0"})
     assert _wait_gone(tm) and "wrapped_up" in _types(env) and not list((env.store / "gg").glob("*.json"))
 
@@ -295,8 +312,304 @@ def test_a_queued_gg_is_rechecked_when_the_scheduler_gets_to_it(env, led, window
     r, wid, sock, tm, pane = _setup(env, led, window)
     _gg(env, _gg_env(env, sock, "%999", **TEAM), cwd=r)
     [req] = list((env.store / "gg").glob("*.json"))
-    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane}))
+    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane, "claude_pid": _claude_pid(tm, pane)}))
     (r / "wip.txt").write_text("x\n")
     env.run("wrapup", "--process-requests", env={"TMUX": f"{sock},0,0"})
     assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
     assert "uncommitted changes in proj" in env.run("attention").stdout
+
+
+# ---------------------------------------------------------------- gg closes only the session it was typed in
+
+
+def _names(tm):
+    return set(tm("list-windows", "-a", "-F", "#{window_name}").stdout.split())
+
+
+def _three(env, led, window):
+    """Three clean finished teams in three windows of one server, the sweep able to close any of them."""
+    env.write_config(wrapup_auto=True)
+    wins = {}
+    for name in ("alpha", "beta", "gamma"):
+        r = _repo(env, name)
+        wid, sock, tm = window("#!/bin/sh\nsleep 600\n", name)
+        led.team(name=name, dir=str(r), window=wid, socket=sock, done_ago=10)
+        wins[name] = (r, wid, tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0])
+    return sock, tm, wins
+
+
+def test_gg_in_one_of_three_windows_closes_only_that_one_and_records_only_that_team(env, led, window):
+    sock, tm, wins = _three(env, led, window)
+    r, wid, pane = wins["beta"]
+    out = _gg(env, _gg_env(env, sock, pane, STELLA_TEAM="beta"), cwd=r, sid="sess-beta")
+    assert "wrapped up" in out["reason"]
+    assert _wait_gone(tm, "beta")
+    time.sleep(1)
+    assert {"alpha", "gamma"} <= _names(tm)  # the others, though the sweep could close them, stay
+    assert [e["team"] for e in env.events() if e["type"] in {"wrapped_up", "reaped"}] == ["beta", "beta"]
+
+
+def test_gg_never_runs_or_triggers_the_sweep():
+    import inspect
+
+    from stella import adopt, hooks, wrapup
+
+    for fn in (wrapup.wrap_session, wrapup.wrap_team, wrapup.process_requests, wrapup.close_window, wrapup.finish_wrap,
+               hooks._gg, adopt.process_requests):
+        src = inspect.getsource(fn)
+        assert "sweep(" not in src and "evaluate(" not in src, fn.__name__
+
+
+def test_bare_wrapup_is_not_the_sweep(env):
+    r = env.run("wrapup", check=False)
+    assert r.returncode != 0 and "stella sweep" in (r.stderr + r.stdout)
+    assert "ONE named team" in env.run("wrapup", "--help").stdout and "EVERY finished team" in env.run("sweep", "--help").stdout
+
+
+def _queued(env, led, window, **patch):
+    """A gg queued by a sandboxed hook in window beta; then rewritten the way the scheduler would find the real world."""
+    sock, tm, wins = _three(env, led, window)
+    r, wid, pane = wins["beta"]
+    _gg(env, _gg_env(env, sock, "%999", STELLA_TEAM="beta"), cwd=r, sid="sess-beta")
+    [req] = list((env.store / "gg").glob("*.json"))
+    data = {**json.loads(req.read_text()), "pane": pane, "claude_pid": _claude_pid(tm, pane), **patch}
+    req.write_text(json.dumps(data))
+    return sock, tm, wins, data
+
+
+def _process(env, sock):
+    env.run("wrapup", "--process-requests", env={"TMUX": f"{sock},0,0"})
+
+
+def test_a_queued_close_kills_the_verified_window_and_no_other(env, led, window):
+    sock, tm, wins, _ = _queued(env, led, window)
+    _process(env, sock)
+    assert _wait_gone(tm, "beta") and {"alpha", "gamma"} <= _names(tm)
+    assert [e["team"] for e in env.events() if e["type"] == "wrapped_up"] == ["beta"]
+
+
+def test_a_queued_close_for_a_pane_that_holds_another_session_closes_nothing(env, led, window):
+    sock, tm, wins = _three(env, led, window)
+    r, wid, pane_b = wins["beta"]
+    pane_a = wins["alpha"][2]
+    _gg(env, _gg_env(env, sock, "%999", STELLA_TEAM="beta"), cwd=r, sid="sess-beta")
+    [req] = list((env.store / "gg").glob("*.json"))
+    # beta's session is gone and its pane id now belongs to alpha's window: the pid it recorded is not under that pane
+    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane_a, "claude_pid": _claude_pid(tm, pane_b)}))
+    _process(env, sock)
+    time.sleep(0.7)
+    assert {"alpha", "beta", "gamma"} <= _names(tm) and "wrapped_up" not in _types(env)
+    assert "no longer holds the session that asked" in env.run("attention").stdout
+
+
+@pytest.mark.parametrize("patch", [{"pane": "%12345"}, {"claude_pid": None}, {"claude_pid": 1}, {"ts": 1}])
+def test_each_way_a_queued_request_can_be_wrong_closes_nothing(env, led, window, patch):
+    sock, tm, wins, _ = _queued(env, led, window, **patch)
+    _process(env, sock)
+    time.sleep(0.5)
+    assert {"alpha", "beta", "gamma"} <= _names(tm)
+    assert "wrapped_up" not in _types(env)
+
+
+def test_a_window_that_also_holds_another_claude_is_not_closed(env, led, window):
+    sock, tm, wins, _ = _queued(env, led, window)
+    p = env.tmp / "claude-second.sh"
+    p.write_text("#!/bin/sh\nsleep 600\n")
+    p.chmod(0o755)
+    tm("split-window", "-d", "-t", wins["beta"][1], str(p))
+    time.sleep(0.5)
+    _process(env, sock)
+    assert "beta" in _names(tm) and "also holds another Claude session" in env.run("attention").stdout
+
+
+def test_the_sweeps_notice_names_the_window_it_closed(env, led, window, monkeypatch):
+    from stella import state, wrapup
+
+    monkeypatch.setenv("STELLA_STORE", str(env.store))
+    monkeypatch.setenv("STELLA_CONFIG", str(env.config))
+    sock, tm, wins = _three(env, led, window)
+    st = state.fold()
+    assert wrapup._named(st, wrapup.Verdict("beta", "done", True)) == f"beta (window {wins['beta'][1]})"
+    assert wrapup._named(st, wrapup.Verdict("beta", "gone", True, gone=True)) == "beta (no window left to close)"
+
+
+# ---------------------------------------------------------------- adopting hand-started sessions
+
+
+def _hand(env, window, name="review"):
+    r = _repo(env, "wt")
+    wid, sock, tm = window("#!/bin/sh\nsleep 600\n", name)
+    (env.store / "stella-session.json").write_text(json.dumps({"socket": sock}))
+    pane = tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0]
+    return r, wid, sock, tm, pane
+
+
+def test_a_hand_started_session_is_adopted_under_its_window_name_on_its_first_prompt(env, window):
+    r, wid, sock, tm, pane = _hand(env, window)
+    e = _gg_env(env, sock, pane)
+    assert "decision" not in _gg(env, e, "hello", cwd=r, sid="hand-1")
+    ev = [x for x in env.events() if x["type"] == "launch"][0]
+    assert ev["team"] == "review" and ev["archetype"] == "adopted" and ev["window"] == wid and ev["socket"] == sock
+    n = len(env.events())
+    _gg(env, e, "again", cwd=r, sid="hand-1")
+    assert len(env.events()) == n  # asked once per session
+
+
+def test_an_adopted_session_is_never_closed_by_the_sweep_but_wrapup_and_gg_close_it(env, led, window):
+    env.write_config(wrapup_auto=True)
+    r, wid, sock, tm, pane = _hand(env, window)
+    e = _gg_env(env, sock, pane)
+    _gg(env, e, "hello", cwd=r, sid="hand-1")
+    led.seq = max(x["seq"] for x in env.events())
+    led.add("done", team="review", text="reviewed")
+    out = env.run("sweep", env={"TMUX": f"{sock},0,0"}).stdout
+    assert "kept open review" in out and "adopted" in out
+    assert "review" in _names(tm) and "wrapped_up" not in _types(env)
+    assert "wrapped up review" in env.run("wrapup", "review", env={"TMUX": f"{sock},0,0"}).stdout
+    assert "review" not in _names(tm)
+
+
+def test_gg_closes_an_adopted_session_and_records_it(env, window):
+    r, wid, sock, tm, pane = _hand(env, window)
+    e = _gg_env(env, sock, pane)
+    _gg(env, e, "hello", cwd=r, sid="hand-1")
+    out = _gg(env, e, "gg", cwd=r, sid="hand-1")
+    assert "wrapped up" in out["reason"] and _wait_gone(tm, "review")
+    assert [x["team"] for x in env.events() if x["type"] == "wrapped_up"] == ["review"]
+
+
+def test_an_adoption_queued_by_a_sandboxed_hook_is_registered_by_the_scheduler_after_the_check(env, window):
+    r, wid, sock, tm, pane = _hand(env, window)
+    _gg(env, _gg_env(env, sock, "%999"), "hello", cwd=r, sid="hand-1")
+    assert "launch" not in _types(env)
+    [req] = list((env.store / "adopt").glob("*.json"))
+    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane, "claude_pid": _claude_pid(tm, pane)}))
+    _process(env, sock)
+    assert [x["team"] for x in env.events() if x["type"] == "launch"] == ["review"]
+    # a request whose pane does not hold that session adopts nothing
+    _gg(env, _gg_env(env, sock, "%999"), "hello", cwd=r, sid="hand-2")
+    [req] = list((env.store / "adopt").glob("*.json"))
+    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane, "claude_pid": 1}))
+    _process(env, sock)
+    assert len([x for x in env.events() if x["type"] == "launch"]) == 1
+
+
+# ---------------------------------------------------------------- tyfp: every session that is done
+
+
+def _fleet(env, led, window):
+    """Windows: ok1, ok2 (clean, idle), busy (a screen that is working), blocked (uncommitted), keep (a keep_open archetype),
+    pushy (an unpushed commit), and the session the word is typed in (typer, clean)."""
+    env.extension(teams='[team.reviewer]\nsummary = "s"\nwhen = "w"\nkeep_open = true\n')
+    from test_wrapup import BUSY, PROMPT
+
+    w = {}
+    for name, script, arch in (("ok1", PROMPT, "builder"), ("ok2", PROMPT, "builder"), ("busy", BUSY, "builder"),
+                               ("blocked", PROMPT, "builder"), ("keep", PROMPT, "reviewer"), ("pushy", PROMPT, "builder"),
+                               ("typer", "#!/bin/sh\nsleep 600\n", "builder")):
+        r = _repo(env, name)
+        wid, sock, tm = window(script, name)
+        led.team(name=name, archetype=arch, dir=str(r), window=wid, socket=sock, done_ago=10)
+        pane = tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0]
+        w[name] = (r, wid, pane)
+    (w["blocked"][0] / "wip.txt").write_text("x\n")
+    _commit(env, w["pushy"][0])
+    (env.store / "stella-session.json").write_text(json.dumps({"socket": sock}))
+    return sock, tm, w
+
+
+def test_tyfp_closes_exactly_the_clean_idle_ones_and_reports_once(env, led, window):
+    sock, tm, w = _fleet(env, led, window)
+    r, wid, pane = w["typer"]
+    out = _gg(env, _gg_env(env, sock, pane, STELLA_TEAM="typer", STELLA_CLAUDE_PID=str(_claude_pid(tm, pane))), " TYFP ", cwd=r, sid="sess-typer")
+    assert out["hookSpecificOutput"]["additionalContext"]  # the unpushed one raises the push prompt through the session
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "wrapped up: " in ctx and "ok1" in ctx and "ok2" in ctx and "keep" in ctx and "typer" in ctx
+    assert "left open: busy: its session is busy" in ctx
+    assert "left open: blocked: uncommitted changes in blocked" in ctx
+    assert "left open: pushy: 1 unpushed commit in pushy" in ctx
+    assert f"git -C {w['pushy'][0]} push -u origin main" in ctx and f"git -C {w['blocked'][0]} push" not in ctx
+    time.sleep(2.5)
+    left = _names(tm) - {"zsh", "sh", "bash"}
+    assert {"busy", "blocked", "pushy"} <= left and not ({"ok1", "ok2", "keep", "typer"} & left)
+    assert sorted(e["team"] for e in env.events() if e["type"] == "wrapped_up") == ["keep", "ok1", "ok2", "typer"]
+
+
+def test_tyfp_with_only_a_report_to_give_never_reaches_the_model(env, led, window):
+    sock, tm, w = _fleet(env, led, window)
+    for name in ("pushy", "blocked", "busy"):
+        tm("kill-window", "-t", w[name][1])
+        led.add("reaped", team=name)
+    r, wid, pane = w["typer"]
+    out = _gg(env, _gg_env(env, sock, pane, STELLA_TEAM="typer", STELLA_CLAUDE_PID=str(_claude_pid(tm, pane))), "tyfp", cwd=r, sid="sess-typer")
+    assert out["decision"] == "block" and out["reason"].startswith("wrapped up: ")
+
+
+def test_tyfp_leaves_the_typed_in_session_when_it_is_blocked_and_never_closes_stella(env, led, window):
+    sock, tm, w = _fleet(env, led, window)
+    r, wid, pane = w["typer"]
+    (r / "wip.txt").write_text("x\n")
+    out = _gg(env, _gg_env(env, sock, pane, STELLA_TEAM="typer"), "tyfp", cwd=r, sid="sess-typer")
+    assert "left open: typer: uncommitted changes in typer" in out["hookSpecificOutput"]["additionalContext"]
+    time.sleep(1.5)
+    assert "typer" in _names(tm)
+    own = _gg(env, _gg_env(env, sock, w["ok1"][2], STELLA_SELF="1"), "tyfp", cwd=r, sid="stella-s")
+    assert "typer" in _names(tm) and "ok1" not in _names(tm)  # her session ran it; she was never a candidate
+
+
+def test_tyfp_from_a_sandboxed_hook_goes_through_the_scheduler(env, led, window, monkeypatch):
+    import threading
+
+    sock, tm, w = _fleet(env, led, window)
+    r, wid, pane = w["typer"]
+    for name in ("pushy", "blocked", "busy", "keep", "ok2"):
+        tm("kill-window", "-t", w[name][1])
+        led.add("reaped", team=name)
+    monkeypatch.setattr("stella.tyfp.WAIT", 20)
+
+    def scheduler():  # waits for the hook's request, fixes the pane identity it could not know, then processes it
+        end = time.time() + 15
+        while time.time() < end:
+            reqs = list((env.store / "tyfp").glob("*.json"))
+            if reqs:
+                f = reqs[0]
+                f.write_text(json.dumps({**json.loads(f.read_text()), "pane": pane, "claude_pid": _claude_pid(tm, pane)}))
+                env.run("wrapup", "--process-requests", env={"TMUX": f"{sock},0,0"})
+                return
+            time.sleep(0.2)
+
+    th = threading.Thread(target=scheduler)
+    th.start()
+    out = _gg(env, _gg_env(env, sock, "%999", STELLA_TEAM="typer"), "tyfp", cwd=r, sid="sess-typer")
+    th.join()
+    assert out["decision"] == "block" and "ok1" in out["reason"] and "typer" in out["reason"]
+    assert _wait_gone(tm, "ok1")
+
+
+def test_sweep_now_is_the_same_thing_from_the_command_line(env, led, window):
+    sock, tm, w = _fleet(env, led, window)
+    out = env.run("sweep", "--now", "--dry-run", env={"TMUX": f"{sock},0,0"}).stdout
+    assert "ok1" in out.splitlines()[0] and "left open: busy" in out and "left open: pushy" in out
+    assert "ok1" in _names(tm)  # a dry run
+    env.run("sweep", "--now", env={"TMUX": f"{sock},0,0"})
+    assert "ok1" not in _names(tm) and "busy" in _names(tm)
+
+
+def test_a_window_id_that_now_belongs_to_another_window_is_never_killed(env, led, window):
+    sock, tm, w = _fleet(env, led, window)
+    # the ledger remembers ok1 in window @N; after a tmux restart that id is a window of another name
+    led.add("launch", team="ok1", archetype="builder", order=1, dir=str(w["ok1"][0]), window=w["busy"][1], socket=sock)
+    led.add("done", team="ok1", text="x")
+    env.run("sweep", "--now", env={"TMUX": f"{sock},0,0"})
+    assert "busy" in _names(tm)
+
+
+def test_gg_and_tyfp_are_documented_side_by_side(env):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for f in ("README.md", "plugin/skills/wrap-up/SKILL.md", "plugin/skills/stella/SKILL.md"):
+        t = (root / f).read_text()
+        assert "`gg`" in t and "`tyfp`" in t, f
+    h = env.run("--help").stdout
+    assert "tyfp" in h and "gg" in h

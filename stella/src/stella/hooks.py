@@ -25,7 +25,7 @@ import re
 import sys
 import traceback
 
-from stella import address, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, wake, wrapup
+from stella import address, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -79,6 +79,10 @@ def prompt(data: dict) -> None:
     team = os.environ.get("STELLA_TEAM")
     if status.is_gg(text):
         return _gg(data)
+    if tyfp.is_tyfp(text):
+        return _tyfp(data)
+    if not own and not team and _in_stella_tmux() and not sessions.load(sid).get("adopt_asked"):
+        _adopt(data, sid)
     addressed = own or address.is_addressed(text)
     sess = sessions.load(sid)
 
@@ -153,6 +157,51 @@ def prompt(data: dict) -> None:
 def _in_stella_tmux() -> bool:
     sock = os.environ.get("TMUX", "").split(",", 1)[0]
     return bool(sock and os.environ.get("TMUX_PANE") and wrapup.in_stella_server(sock))
+
+
+def _adopt(data: dict, sid: str) -> None:
+    """A session started by hand in the Stella tmux server becomes a team (archetype `adopted`) on its first prompt."""
+    from stella import adopt, windows
+
+    sess = sessions.load(sid)
+    sess["adopt_asked"] = True
+    sessions.save(sid, sess)
+    try:
+        adopt.adopt(sid, data.get("cwd") or os.getcwd(), os.environ["TMUX"].split(",", 1)[0], os.environ["TMUX_PANE"],
+                    windows.claude_ancestor())
+    except Exception:  # noqa: BLE001 - never trouble the prompt
+        traceback.print_exc(file=sys.stderr)
+
+
+def _tyfp(data: dict) -> None:
+    """The owner typed `tyfp`: wrap up every session that is done (the explicit sweep), report once, here."""
+    sid, cwd = data.get("session_id") or "", data.get("cwd") or os.getcwd()
+    tm, pane = os.environ.get("TMUX", ""), os.environ.get("TMUX_PANE", "")
+    sock = tm.split(",", 1)[0]
+    if not (tm and pane):
+        return _block_prompt("not inside tmux: nothing to sweep.")
+    if not wrapup.in_stella_server(sock):
+        return _block_prompt("tyfp: this tmux server is not Stella's; nothing closed.")
+    req = {"sock": sock, "pane": pane, "sid": sid, "cwd": cwd, "team": os.environ.get("STELLA_TEAM"), "own": run.is_self(),
+           "claude_pid": windows.claude_ancestor()}
+    try:
+        reachable = bool(tmuxctl.Server(["tmux", "-S", sock], sock, "caller").run(
+            "display-message", "-p", "-t", pane, "#{window_id}", check=False).stdout.strip())
+        if reachable:
+            rep = tyfp.run(sock, req, delay=float(os.environ.get("STELLA_GG_DELAY") or 2))
+            res = {"text": rep.text(), "pushes": rep.pushes}
+        else:  # the hook's sandbox cannot reach tmux: the scheduler can
+            res = tyfp.ask(req) or {"text": "tyfp: nothing done: this session cannot reach tmux and the scheduler did not answer;"
+                                            " start it with `stella run` in a terminal.", "pushes": []}
+    except Exception as e:  # noqa: BLE001
+        return _block_prompt(f"tyfp failed ({type(e).__name__}: {e}); nothing more closed.")
+    if not res["pushes"]:
+        return _block_prompt(res["text"])
+    cmds = "\n".join(f"- {c}" for c in dict.fromkeys(res["pushes"]))
+    _emit("UserPromptSubmit",
+          f"The owner typed `tyfp` (wrap up every session that is done). Report to them exactly this, then raise the pushes below:\n"
+          f"{res['text']}\n\nThe sessions above whose only blocker is an unpushed commit: run each push now, so Claude Code shows them"
+          f" its prompt (never ask in chat, never tell them to run anything):\n{cmds}\nThen end with the status line.")
 
 
 def _block_prompt(reason: str) -> None:
@@ -337,7 +386,8 @@ def stop(data: dict) -> None:
     reason = res.block
     if own or team or _in_stella_tmux():
         try:
-            t = state.fold().teams.get(team or "")
+            st = state.fold()
+            t = st.teams.get(team or "") or state.team_for_session(st, data["session_id"])
             line = status.stop_reason(data, data["session_id"], own, t, push_block=bool(res.block))
         except Exception:  # noqa: BLE001 - a broken check must not trap the session
             line = None

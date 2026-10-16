@@ -144,7 +144,11 @@ three go through the same checks (nothing unpushed, uncommitted, deferred or wai
 nothing closes and one line says what), then record the team, close its orders, and close its session and tmux
 window, printing "wrapped up" only if the window is verified gone. `gg` closes `keep_open` teams too, since he
 said so, and a hand-opened session's window; `gg` in your own session is refused, you are never wrapped up.
-`stella reap` remains the unconditional kill for a finished team. Closing the record alone is not wrapping
+`stella reap` remains the unconditional kill for a finished team. The owner can also type `tyfp` alone in any session:
+that wraps up EVERY session that is done (`gg` only the one it is typed in), same checks, no grace period, `keep_open`
+and adopted ones included, with one report of what closed and what stayed and why (`stella sweep --now` does it from a
+terminal). `stella wrapup <team>` is one named team; `stella sweep` (no `--now`) is the automatic sweep. A session the
+owner started by hand is adopted as a team on its first prompt; the automatic sweep never closes it. Closing the record alone is not wrapping
 up (correction #472: `stella reap` printed "closed" while windows stayed open, because the command sandbox
 blocks tmux). Read its output; if it says tmux is unreachable or the window is still open, do not claim it is
 closed: tell the owner which windows remain and that they need to run `stella reap` from a shell where tmux is

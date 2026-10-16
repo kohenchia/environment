@@ -92,6 +92,27 @@ You decide when a session is done. Nothing closes sessions automatically unless 
   wrapped up, closes its orders, and closes the session and its tmux window (verified gone; an alert is raised
   if it stays). It closes `keep_open` teams (review) too, since you said so. In a session that is not a team it
   closes just that window after the same checks. In Stella's own session it is refused with one line.
+* **`gg` and `tyfp`, side by side.** Both are typed alone (any case, trimmed) as a prompt in any session in the Stella
+  tmux server, are handled by the hook, and never reach the model.
+
+  | | `gg` | `tyfp` |
+  | --- | --- | --- |
+  | Wraps up | only the session it is typed in | every session that is done |
+  | Checks | nothing unpushed, uncommitted, deferred or waiting on you | the same, for each session; plus idle at its prompt |
+  | Closes | this session and its window (also `keep_open` and hand-started ones) | each clean, idle one (also `keep_open`, adopted; no grace period) |
+  | Never touches | Stella's own session | busy or running sessions, blocked ones, Stella's own |
+  | You get | one line if blocked (the push prompt for an unpushed commit) | one report: `wrapped up: <names>`, `left open: <name>: <reason>`; push prompts for sessions blocked only by an unpushed commit; the session you typed it in goes last |
+
+  `stella wrapup <team>` is the same as `gg` for one named team, from outside. `stella sweep` (no argument) is the
+  automatic sweep over every finished team: it records teams whose window and process are gone and, only with
+  `wrapup_auto = true` (off by default), closes clean finished ones after the grace period; its notice names every
+  window it closed. `gg` never runs it. `stella sweep --now` is what `tyfp` does, from a terminal.
+* **Adopted sessions:** a Claude session you started by hand in the Stella tmux server is registered on its first prompt
+  under its window name (archetype `adopted`), so `stella tell`, `stella fleet`, `stella pass-env --respawn`, `gg`,
+  `tyfp` and `stella wrapup <team>` work on it like on a launched one. The automatic sweep never closes it.
+* **A hook cannot reach tmux** (the command sandbox blocks it), so `gg`, `tyfp` and the adoption are queued for the
+  scheduler (started from a terminal), which acts only after checking that the pane still holds the session that asked
+  (its Claude process runs under that pane and no other Claude shares the window). Keep it running (`stella run`).
 * **In a session:** type `/stella:wrap-up` (or run `stella wrap`); from outside, `stella wrapup <team>`. Same
   checks and closing as `gg`, one code path.
 * **Resume picker:** `claude --resume` hides a transcript whose first `entrypoint` is `sdk-cli` (a `claude -p` run), even if it was later resumed by hand. `stella reopen` and the nightly job rewrite that origin to `cli` (`stella fix-resume [name|id]` does it on demand; a transcript touched in the last minute is skipped). Sessions are listed under the directory they started in, by name.

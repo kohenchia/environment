@@ -158,6 +158,24 @@ def _classify(t: Target, st, me: dict, srv) -> None:
             return
 
 
+def claude_ancestor(pid: int | None = None, procs=None) -> int | None:
+    """The pid of the Claude process this process runs under (a hook is its descendant), if any."""
+    if not pid and os.environ.get("STELLA_CLAUDE_PID", "").isdigit():  # set where the process tree cannot be walked (tests)
+        return int(os.environ["STELLA_CLAUDE_PID"])
+    procs = procs if procs is not None else _procs()
+    p = pid or os.getpid()
+    for _ in range(40):
+        if p not in procs:
+            return None
+        ppid, argv = procs[p]
+        if p != (pid or os.getpid()) and _is_claude(argv):
+            return p
+        if ppid <= 1:
+            return None
+        p = ppid
+    return None
+
+
 def live_teams(srv=None) -> set[str] | None:
     """The names of the teams that still have a lead alive in a tmux pane (by its `--name` or its window's
     name, whatever the window is called) or a window of that name. None when that cannot be told: no tmux server reachable from here, or

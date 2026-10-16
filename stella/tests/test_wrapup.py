@@ -50,7 +50,7 @@ def _types(env):
 
 
 def _sweep(env, *flags):
-    return env.run("wrapup", *flags).stdout
+    return env.run("sweep", *flags).stdout
 
 
 def _repo(env, name="proj", remote=True):
@@ -230,11 +230,11 @@ def window(env):
     tm("new-session", "-d", "-s", "work")
     line = "─" * 40
 
-    def make(script):
-        p = env.tmp / "fake.sh"
+    def make(script, name="alpha", claude=False):
+        p = env.tmp / (f"claude-{name}.sh" if claude else "fake.sh")
         p.write_text(script)
         p.chmod(0o755)
-        wid = tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=work:", "-n", "alpha", "-e", f"LINE={line}", str(p)).stdout.strip()
+        wid = tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=work:", "-n", name, "-e", f"LINE={line}", str(p)).stdout.strip()
         import time
 
         time.sleep(0.5)
@@ -248,7 +248,7 @@ def test_idle_session_window_is_closed_and_verified(env, led, window):
     r = _repo(env)
     wid, sock, tm = window(PROMPT)
     led.team(dir=str(r), window=wid, socket=sock)
-    out = env.run("wrapup", env={"TMUX": f"{sock},0,0"}).stdout
+    out = env.run("sweep", env={"TMUX": f"{sock},0,0"}).stdout
     assert "wrapped up alpha" in out and "session idle" in out
     assert "alpha" not in tm("list-windows", "-a", "-F", "#{window_name}").stdout
 
@@ -257,7 +257,7 @@ def test_busy_session_is_left_open(env, led, window):
     r = _repo(env)
     wid, sock, tm = window(BUSY)
     led.team(dir=str(r), window=wid, socket=sock)
-    out = env.run("wrapup", env={"TMUX": f"{sock},0,0"}).stdout
+    out = env.run("sweep", env={"TMUX": f"{sock},0,0"}).stdout
     assert "busy" in out
     assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
 

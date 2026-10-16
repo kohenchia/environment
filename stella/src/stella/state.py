@@ -160,6 +160,13 @@ class State:
         return sorted(items, key=lambda a: a.seq, reverse=True)
 
 
+def team_for_session(st: State, sid: str) -> Team | None:
+    """The team a Claude session id belongs to (a lead, or an adopted session), if any."""
+    if not sid:
+        return None
+    return next((t for t in st.teams.values() if not t.acked and (t.session_id == sid or sid in t.sessions)), None)
+
+
 def fold(since_events=None) -> State:
     st = State()
     for ev in since_events if since_events is not None else ledger.events():
