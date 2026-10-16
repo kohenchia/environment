@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+#
+# tmux-sidebar — the tab list as a vertical column down the left of every window.
+#
+# tmux has no vertical window list of its own, so each window carries one narrow
+# pane (marked `@sidebar`) that runs `tmux-sidebar run`, which draws
+# `tmux list-windows`. Navigation is untouched: the Cmd chords still call
+# select-window / previous-window, and the list just reflects the result.
+#
+#   tmux-sidebar run          draw the list (the sidebar pane's own process)
+#   tmux-sidebar ensure [W]   give window W (default: current) a sidebar if it lacks one
+#   tmux-sidebar ensure-all   the same for every window
+#   tmux-sidebar dock [W]     put W's sidebar back at the far left, full height, fixed width
+#   tmux-sidebar toggle       turn sidebars on/off everywhere (also swaps the top-bar tabs back in)
+#
+# Called from hooks in ~/.tmux.conf, so it runs under the tmux server, outside the
+# sandbox that denies Claude Code access to the tmux socket. See docs/tmux.md.
+#
+# Plain bash 3.2 (macOS /bin/bash): no associative arrays, no fractional read -t.
+
+set -u
+
+# Cut and pad by characters, not bytes: ✳ and the bar glyphs are multi-byte, and
+# the server may have started this without a UTF-8 locale.
+case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8* | *utf8*) ;;
+    *) export LC_ALL=en_US.UTF-8 ;;
+esac
+
+width="$(tmux show -gv @sidebar_width 2>/dev/null)"
+width="${width:-24}"
+
+
+sidebar_pane_of() {
+    tmux list-panes -t "$1" -F '#{pane_id} #{@sidebar}' 2>/dev/null | awk '$2 == 1 { print $1; exit }'
+}
+
+enabled() { [[ "$(tmux show -gv @sidebar_enabled 2>/dev/null)" == 1 ]]; }
+
+ensure() {
+    local win="${1:-}"
+    enabled || return 0
+    [[ -n "$win" ]] || win="$(tmux display -p '#{window_id}')"
+    [[ -n "$(sidebar_pane_of "$win")" ]] && return 0
+    # -d: the new pane must not take focus, or Stella's send-keys / respawn-pane,
+    # which address a window and so reach its active pane, would hit the sidebar.
+    # -f -b -h: full height, before (left of) everything else.
+    local pane
+    pane="$(tmux split-window -d -f -b -h -l "$width" -t "$win" -P -F '#{pane_id}' \
+        "exec tmux-sidebar run" 2>/dev/null)" || return 0
+    tmux set -p -t "$pane" @sidebar 1
+    tmux set -w -t "$win" @sidebar_on 1
+    # Its own look: always the same dark column, focused or not.
+    tmux set -p -t "$pane" window-style 'fg=colour250,bg=colour234'
+    tmux set -p -t "$pane" window-active-style 'fg=colour250,bg=colour234'
+}
+
+dock() {
+    local win="${1:-}" pane
+    [[ -n "$win" ]] || win="$(tmux display -p '#{window_id}')"
+    pane="$(sidebar_pane_of "$win")"
+    [[ -n "$pane" ]] || return 0
+    # Already where it belongs? Then do nothing, which is also what stops the
+    # layout-changed hook from calling itself.
+    [[ "$(tmux display -p -t "$pane" '#{pane_at_left}#{pane_at_top}#{pane_at_bottom}#{pane_width}')" == "111$width" ]] && return 0
+    # Beside the right edge or in the wrong row, it needs moving; merely the wrong
+    # width (a layout cycle or a terminal resize) is just resized.
+    if [[ "$(tmux display -p -t "$pane" '#{pane_at_left}#{pane_at_top}#{pane_at_bottom}')" == 111 ]]; then
+        tmux resize-pane -t "$pane" -x "$width" 2>/dev/null
+        return 0
+    fi
+    local other
+    other="$(tmux list-panes -t "$win" -F '#{pane_id} #{@sidebar}' | awk '$2 != 1 { print $1; exit }')"
+    [[ -n "$other" ]] || return 0
+    tmux join-pane -d -f -b -h -l "$width" -s "$pane" -t "$other" 2>/dev/null
+}
+
+toggle() {
+    if enabled; then
+        tmux set -g @sidebar_enabled 0
+        tmux list-panes -a -F '#{pane_id} #{@sidebar}' | awk '$2 == 1 { print $1 }' | while read -r p; do
+            tmux kill-pane -t "$p"
+        done
+        tmux set -g @tabs_in_bar 1
+        tmux display-message "sidebar OFF"
+    else
+        tmux set -g @sidebar_enabled 1
+        tmux set -g @tabs_in_bar 0
+        tmux list-windows -a -F '#{window_id}' | while read -r w; do ensure "$w"; done
+        tmux display-message "sidebar ON"
+    fi
+    tmux refresh-client -S 2>/dev/null
+    return 0
+}
+
+# ── the renderer ──────────────────────────────────────────────────────────
+
+# "colour217" → 217; anything else falls back to grey.
+colour_n() { local n="${1#colour}"; [[ "$n" =~ ^[0-9]+$ ]] && echo "$n" || echo 245; }
+
+draw() {
+    local cols="$1" out="" idx name active bell hue_tab hue_pane line label pad
+    local esc=$'\e'
+    while IFS='|' read -r idx name active bell hue_tab hue_pane; do
+        hue_tab="$(colour_n "$hue_tab")"
+        hue_pane="$(colour_n "$hue_pane")"
+        label=" ${idx} "
+        [[ "$bell" == 1 ]] && label+="✳ "
+        label+="$name"
+        # Pad to the full width so a shorter name cannot leave the previous one's
+        # tail on screen, then cut: ${#} counts characters, which is what we want.
+        printf -v pad '%*s' "$cols" ''
+        label="${label}${pad}"
+        label="${label:0:$((cols - 2))}"
+        if [[ "$active" == 1 ]]; then
+            # Same look as the old current tab: pale block of the window's hue,
+            # near-black bold text, a half-block cap on the left.
+            line="${esc}[38;5;${hue_pane}m▐${esc}[0m${esc}[1;38;5;232;48;5;${hue_tab}m${label}${esc}[0m"
+        elif [[ "$bell" == 1 ]]; then
+            line="${esc}[38;5;${hue_pane}m▎${esc}[0m${esc}[38;5;196m${label}${esc}[0m"
+        else
+            line="${esc}[38;5;${hue_pane}m▎${esc}[0m${esc}[38;5;250m${label}${esc}[0m"
+        fi
+        out+="${line}"$'\n'
+    done < <(tmux list-windows -F '#{window_index}|#{window_name}|#{window_active}|#{window_bell_flag}|#{E:@hue_tab}|#{E:@hue_pane}' 2>/dev/null)
+    printf '%s' "$out"
+}
+
+run() {
+    # SGR mouse reporting: tmux forwards clicks to a pane that asks for them, with
+    # coordinates relative to the pane, so no root MouseDown binding is needed.
+    printf '\e[?25l\e[?1000h\e[?1006h'
+    trap 'printf "\e[?1000l\e[?1006l\e[?25h"' EXIT
+    local last="" cur cols key seq btn x y panes me
+    me="$TMUX_PANE"
+    while :; do
+        # Last pane left in the window? Then the sidebar has nothing to sit beside.
+        panes="$(tmux display -p -t "$me" '#{window_panes}' 2>/dev/null)" || exit 0
+        [[ "$panes" -le 1 ]] && exit 0
+        cols="$(tmux display -p -t "$me" '#{pane_width}' 2>/dev/null || echo "$width")"
+        cur="$(draw "$cols")"
+        if [[ "$cur" != "$last$cols" ]]; then
+            printf '\e[H\e[J%s' "$cur"
+            last="$cur"
+        fi
+        key=""
+        IFS= read -rsn1 -t 1 key || continue
+        [[ "$key" == $'\e' ]] || continue
+        seq=""
+        while IFS= read -rsn1 -t 1 key; do
+            seq+="$key"
+            [[ "$key" == M || "$key" == m ]] && break
+        done
+        # \e[<0;X;YM — a left-button press at column X, row Y (1-based).
+        if [[ "$seq" =~ ^\[\<0\;([0-9]+)\;([0-9]+)M$ ]]; then
+            y="${BASH_REMATCH[2]}"
+            click "$y" "$me"
+        fi
+    done
+}
+
+click() {
+    local row="$1" me="$2" target
+    # Row N is the Nth window in list-windows order.
+    target="$(tmux list-windows -F '#{window_id}' | sed -n "${row}p")"
+    [[ -n "$target" ]] || return 0
+    # The click focused this pane; give focus back before leaving, so the sidebar
+    # is never what a window comes back to.
+    tmux last-pane -t "$me" 2>/dev/null || tmux select-pane -t "$me" -R 2>/dev/null
+    tmux select-window -t "$target"
+}
+
+case "${1:-}" in
+    run)        run ;;
+    ensure)     ensure "${2:-}" ;;
+    ensure-all) tmux list-windows -a -F '#{window_id}' | while read -r w; do ensure "$w"; done ;;
+    dock)       dock "${2:-}" ;;
+    toggle)     toggle ;;
+    *)          echo "usage: tmux-sidebar run|ensure [window]|ensure-all|dock [window]|toggle" >&2; exit 2 ;;
+esac

@@ -394,6 +394,9 @@ LINKS=(
     # tmux-bell-notify — the tmux alert-bell hook calls this to post a macOS
     # notification for a window that rang the bell. See docs/tmux.md.
     "bin/tmux-bell-notify|$HOME/.local/bin/tmux-bell-notify"
+    # tmux-sidebar — the vertical tab list down the left of every window, created
+    # and kept docked by hooks in ~/.tmux.conf. See docs/tmux.md.
+    "bin/tmux-sidebar|$HOME/.local/bin/tmux-sidebar"
 )
 
 # Alacritty — macOS only. This config's whole job is translating Cmd chords

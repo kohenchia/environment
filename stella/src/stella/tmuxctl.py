@@ -101,7 +101,8 @@ def find_window(srv: Server, name: str) -> str | None:
 
 
 def window_dead(srv: Server, window: str) -> bool:
-    r = srv.run("list-panes", "-t", window, "-F", "#{pane_dead}", check=False)
+    # The tmux sidebar (bin/tmux-sidebar) is a pane of every window and is never dead; look past it.
+    r = srv.run("list-panes", "-t", window, "-f", "#{!=:#{@sidebar},1}", "-F", "#{pane_dead}", check=False)
     return r.returncode != 0 or r.stdout.strip().startswith("1")
 
 

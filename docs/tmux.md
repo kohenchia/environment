@@ -419,6 +419,47 @@ notification permission. If neither appears, Claude isn't belling: confirm `pref
 
 ---
 
+## The sidebar: tabs as a vertical list
+
+The tab strip lives down the left of every window instead of along the top:
+
+```
+┌────────────────────────────────────────────────────────┐
+│ main                                Thu Oct 16 10:31 AM│  ← top bar: session + clock only
+├──────────────┬─────────────────────────────────────────┤
+│▐ 1 stella    │                                         │
+│▎ 2 review    │          your panes, as before          │
+│▎ 3 ✳ wakeup  │                                         │
+│▎ 4 notes     │                                         │
+└──────────────┴─────────────────────────────────────────┘
+```
+
+**Every shortcut is unchanged.** `Cmd+1`…`9`, `Cmd+0`, `Cmd+T`, `Cmd+Shift+[` `]`, `Cmd+Shift+R`
+and `Cmd+Shift+W` still drive `select-window` and friends; the list follows. Each row keeps its hue,
+the current window is the pale block, and the ✳ "waiting on you" marker sits in front of the name.
+Clicking a row jumps to that window.
+
+How it works: tmux has no vertical window list, so each window carries one narrow pane (flagged
+`@sidebar`) running `bin/tmux-sidebar run`, which redraws `tmux list-windows`. An `after-new-window`
+hook adds it to new windows, `window-layout-changed` docks it back to the far left at `@sidebar_width`
+(24), and reloading the config adds it to windows that already exist. It never takes focus.
+
+| Thing | Behaviour |
+|---|---|
+| `C-b b` | Toggle sidebars everywhere. Off puts the tabs back in the top bar. |
+| `Cmd+Shift+←` | Stops at the leftmost tool pane; it will not step into the sidebar |
+| `Cmd+Opt+←` | Will not swap a pane with the sidebar |
+| `Cmd+Shift+Space` | Cycles layouts of the tool panes; the sidebar stays put |
+| `Cmd+Shift+Enter` | Zooming a pane hides the sidebar until you unzoom |
+| Pane labels | Numbered from the first tool pane, not the sidebar |
+| Last tool pane closed | The sidebar sees it is alone and exits, closing the window |
+
+Costs: 24 columns of every window, one extra process per window that polls tmux once a second, and
+`#{window_panes}` is one higher than it used to be, so anything that counts panes sees the sidebar.
+Stella's `window_dead` already looks past it.
+
+---
+
 ## Rearranging panes
 
 `Cmd+Opt+←↑↓→` swaps the current pane with its neighbour in that direction, and the focus travels
