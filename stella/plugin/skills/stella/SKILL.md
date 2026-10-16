@@ -88,6 +88,19 @@ Write the design into `--text` together with the task:
 - Leads report with `~/.local/bin/stella report` and `~/.local/bin/stella done`; finishing raises a desktop notification and
   an attention item. The owner may also type to a lead directly; the hook records it so you know.
 
+### Which credentials sessions run on (`pass_env`)
+
+The `pass_env` setting names variables (typically a token that bills a shared quota instead of the
+owner's). One switch says whether they are in use, and every session you start follows it: team windows,
+your own session, the scheduler's headless runs. `stella run` sets it from the environment it was started
+in. Never add the variables to a launch any other way.
+
+- `~/.local/bin/stella pass-env` shows the switch and where each value would come from.
+- When the owner says their own quota has run out (or asks to switch back):
+  `~/.local/bin/stella pass-env on --respawn` (or `off`). That restarts every running team, and then you, in
+  place, each resuming its conversation; a tool call in flight is interrupted, so say so first. With
+  `--team <name>` only those teams restart and you keep running.
+
 ## What needs the owner
 
 `~/.local/bin/stella attention` is the list: finished teams, teams waiting on the owner, stale orders (open for a

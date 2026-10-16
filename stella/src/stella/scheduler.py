@@ -60,8 +60,20 @@ def due(now: dt.datetime, last_done: str | None) -> list[dt.date]:
 
 
 def tick(now: dt.datetime | None = None, claude: str | None = None) -> list[str]:
+    from stella import passenv
+
+    from stella import state
+
     now = now or ledger.now()
     st = _load()
+    if not due(now, st.get("last_done")):
+        return []
+    try:
+        passenv.resolve()
+    except SystemExit as e:  # don't run on the wrong credentials, and don't mark the day done
+        if "scheduler:pass-env" not in state.fold().alerts:  # once, not every minute
+            ledger.append("alert", by="scheduler", key="scheduler:pass-env", text=f"scheduler waiting: {e}")
+        return []
     did = []
     for d in due(now, st.get("last_done")):
         daily.run_daily(d, claude=claude)
@@ -162,6 +174,16 @@ def stop_daemon() -> str:
     return f"Stopped the scheduler (pid {pid})."
 
 
+def _credentials_match() -> bool:
+    """A catch-up pass runs its jobs with the query binary, inside this session's sandbox, which may
+    bill this session's own credentials whatever environment it is given. So only a session whose
+    pass_env variables agree with the switch may run one; another session (or the daemon) will."""
+    from stella import passenv
+
+    m = passenv.mode()
+    return not settings().pass_env or m is None or passenv.from_environment() == m
+
+
 def catch_up_if_needed() -> None:
     """Called from the SessionStart hook: if no scheduler is running and a run is
     overdue, start one catch-up pass in the background. Never blocks the session."""
@@ -169,6 +191,8 @@ def catch_up_if_needed() -> None:
         return
     try:
         if running_pid() or not due(ledger.now(), _load().get("last_done")):
+            return
+        if not _credentials_match():
             return
         stamp = store_dir() / "catch-up.stamp"
         if stamp.exists() and time.time() - stamp.stat().st_mtime < CATCH_UP_EVERY:

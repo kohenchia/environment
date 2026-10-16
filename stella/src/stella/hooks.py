@@ -171,7 +171,8 @@ def session_start(data: dict) -> None:
         _emit("SessionStart", text)
         return
     if team:
-        if source == "startup":
+        known = state.fold().teams.get(team) if source == "resume" else None
+        if source == "startup" or (known and known.session_id != sid):  # a resume may get a new id
             ledger.append("started", by="hook", team=team, session=sid)
         elif source == "compact":
             from stella.config import store_dir
@@ -184,6 +185,10 @@ def session_start(data: dict) -> None:
 def session_end(data: dict) -> None:
     team = os.environ.get("STELLA_TEAM")
     if not team or os.environ.get("STELLA_HEADLESS") == "1":
+        return
+    from stella import launch
+
+    if launch.respawning(team):  # killed on purpose by `stella respawn`; a new process has taken over
         return
     st = state.fold()
     t = st.teams.get(team)

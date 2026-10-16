@@ -61,6 +61,10 @@ def describe(ev: dict) -> str:
         return f"#{ev['seq']} correction: {_clip(ev.get('text', ''))}"
     if t == "push":
         return f"#{ev['seq']} pushed {ev.get('repo')} {ev.get('sha', '')[:7]} to {ev.get('ref')}"
+    if t == "pass_env":
+        return f"#{ev['seq']} {ev.get('text', 'pass_env ' + str(ev.get('mode')))}, set by {ev.get('by')}"
+    if t == "respawned":
+        return f"#{ev['seq']} restarted {ev.get('team')} (pass_env {ev.get('pass_env') or 'not set'}), conversation resumed"
     if t == "alert":
         return f"#{ev['seq']} alert: {_clip(ev.get('text', ''))}"
     return f"#{ev['seq']} {t}"

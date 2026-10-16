@@ -13,7 +13,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from stella import ledger, registry, state, tmuxctl
+from stella import ledger, passenv, registry, state, tmuxctl
 from stella.config import CALL, settings, store_dir
 
 _NAME = re.compile(r"[^a-z0-9-]+")
@@ -48,6 +48,24 @@ How this team works:
 - When the order is complete (or cannot be completed): `{stella} done {name} "<what was done, where the outputs are, anything left open>"`. Do this before you stop.
 - Ask {owner} first before anything outward-facing or hard to reverse: posting, pushing, writing to external systems, triggering pipelines, deleting.
 {extra}""".rstrip() + "\n"
+
+
+def write_script(script: Path, name: str, directory: str, mode: str, order_seq: int | None, claude_args: list[str],
+                 creds: dict[str, str | None]) -> None:
+    """The window's command. pass_env variables that are off are unset here (a tmux server's
+    environment may carry them); values that are on come in through tmux -e and never touch disk."""
+    s = settings()
+    prompt_file = store_dir() / "launch" / f"{name}.prompt.md"
+    script.write_text(
+        "#!/bin/sh\n"
+        f"cd {shlex.quote(directory)} || exit 1\n"
+        f"export STELLA_TEAM={shlex.quote(name)}\n"
+        + (f"export STELLA_ORDER={order_seq}\n" if order_seq else "")
+        + "".join(f"unset {k}\n" for k, v in creds.items() if v is None)
+        + f"exec {shlex.quote(s.claude_bin)} --name {shlex.quote(name)} --permission-mode {shlex.quote(mode)}"
+        f" --append-system-prompt-file {shlex.quote(str(prompt_file))} {' '.join(shlex.quote(a) for a in claude_args)}\n"
+    )
+    script.chmod(0o755)
 
 
 @dataclass
@@ -109,16 +127,9 @@ def launch(
     prompt_file = d / f"{name}.prompt.md"
     prompt_file.write_text(lead_prompt(name, archetype, order_seq, order_text, team.raw.get("lead_notes", "")))
     first = registry.first_prompt(team, order_text, args=args, name=name)
+    creds = passenv.resolve()
     script = d / f"{name}.sh"
-    script.write_text(
-        "#!/bin/sh\n"
-        f"cd {shlex.quote(directory)} || exit 1\n"
-        f"export STELLA_TEAM={shlex.quote(name)}\n"
-        + (f"export STELLA_ORDER={order_seq}\n" if order_seq else "")
-        + f"exec {shlex.quote(s.claude_bin)} --name {shlex.quote(name)} --permission-mode {shlex.quote(mode)}"
-        f" --append-system-prompt-file {shlex.quote(str(prompt_file))} {shlex.quote(first)}\n"
-    )
-    script.chmod(0o755)
+    write_script(script, name, directory, mode, order_seq, [first], creds)
     if dry_run:
         return Launched(name, None, "dry-run", directory, script, {})
 
@@ -127,11 +138,11 @@ def launch(
         raise SystemExit(tmuxctl.last_error)
     window = sock = None
     if srv:
-        passed = {k: os.environ[k] for k in s.pass_env if k in os.environ}
+        passed = {k: v for k, v in creds.items() if v is not None}
         window = tmuxctl.new_window(srv, name, directory, str(script), env=passed)
         sock, via = srv.socket, f"tmux ({srv.via} server)"
     else:
-        env = {**os.environ, "STELLA_TEAM": name, **({"STELLA_ORDER": str(order_seq)} if order_seq else {})}
+        env = passenv.apply({**os.environ, "STELLA_TEAM": name, **({"STELLA_ORDER": str(order_seq)} if order_seq else {})})
         subprocess.Popen(
             [s.claude_bin, "--bg", "--name", name, "--permission-mode", mode,
              "--append-system-prompt-file", str(prompt_file), first],
@@ -143,3 +154,81 @@ def launch(
         window=window, socket=sock, via=via, mode=mode, session=os.environ.get("STELLA_SESSION_ID"),
     )
     return Launched(name, window, via, directory, script, ev)
+
+
+RESPAWN_NOTE = "[Stella] {why} Your conversation was resumed in a fresh process; carry on where you left off."
+RESPAWN_GRACE = 120  # seconds the old process's SessionEnd is ignored after a respawn
+
+
+def _marker(name: str) -> Path:
+    return store_dir() / "launch" / f"{name}.respawning"
+
+
+def _pending(name: str) -> int:
+    """How many killed processes of this team have not yet sent their SessionEnd."""
+    import time
+
+    p = _marker(name)
+    try:
+        if time.time() - p.stat().st_mtime >= RESPAWN_GRACE:
+            return 0
+        return int(p.read_text() or 0)
+    except (FileNotFoundError, ValueError):
+        return 0
+
+
+def respawning(name: str) -> bool:
+    """True when this SessionEnd comes from a process `respawn` killed on purpose. Each respawn
+    expects one such SessionEnd; a later one is a real exit."""
+    n = _pending(name)
+    if n <= 0:
+        _marker(name).unlink(missing_ok=True)
+        return False
+    if n == 1:
+        _marker(name).unlink(missing_ok=True)
+    else:
+        _marker(name).write_text(str(n - 1))
+    return True
+
+
+def respawn(name: str, why: str) -> str:
+    """Restart a running team's lead in its own window, resuming its conversation, with the
+    pass_env variables as the switch says now. Its work so far is kept; a tool call in
+    flight is interrupted."""
+    from stella import run
+
+    st = state.fold()
+    t = st.teams.get(name)
+    if not t:
+        return f"{name}: no such team"
+    launch_ev = next((e for e in reversed(list(ledger.events())) if e["type"] == "launch" and e.get("team") == name), {})
+    srv = tmuxctl.server_for_socket(launch_ev.get("socket"))
+    if not srv or not t.window or not tmuxctl.window_exists(srv, t.window):
+        return f"{name}: no open window; not restarted"
+    if not run.resumable(t.session_id):
+        return f"{name}: no conversation recorded to resume; not restarted"
+    creds = passenv.resolve()
+    d = store_dir() / "launch"
+    script = d / f"{name}.resume.sh"
+    directory = launch_ev.get("dir") or t.directory or os.path.expanduser("~")
+    write_script(script, name, directory, launch_ev.get("mode") or "default", t.order,
+                 ["--resume", t.session_id or "", RESPAWN_NOTE.format(why=why)], creds)
+    _marker(name).write_text(str(_pending(name) + 1))
+    err = tmuxctl.respawn(srv, t.window, directory, str(script), env={k: v for k, v in creds.items() if v is not None})
+    if err:
+        respawning(name)  # nothing was killed: take the expectation back
+        return f"{name}: tmux could not restart {t.window} ({err}); not restarted"
+    ledger.append("respawned", by="cli", team=name, window=t.window, pass_env=passenv.mode(),
+                  session=os.environ.get("STELLA_SESSION_ID"))
+    return f"{name}: restarted in {t.window}, conversation resumed"
+
+
+def respawn_all(why: str) -> list[str]:
+    st = state.fold()
+    return [respawn(t.name, why) for t in st.teams.values() if t.status in {"running", "needs-you"} and t.window]
+
+
+def background_teams() -> list[str]:
+    """Running teams started without tmux: they have no window, so they can't be restarted in place."""
+    st = state.fold()
+    return [t.name for t in st.teams.values() if t.status in {"running", "needs-you"} and not t.window]

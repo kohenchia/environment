@@ -171,12 +171,14 @@ def fold(since_events=None) -> State:
             team = st.teams.get(ev.get("team", ""))
             if team:
                 team.acked = True
-        elif t in {"report", "done", "ended", "started"}:
+        elif t in {"report", "done", "ended", "started", "respawned"}:
             team = st.teams.get(ev.get("team", ""))
             if not team:
                 continue
             if t == "started":
                 team.session_id = ev.get("session")
+                if team.status == "ended":  # a resumed session is alive again
+                    team.status = "running"
             elif t == "report":
                 team.last_report = ev.get("text")
                 team.status = "needs-you" if ev.get("needs_you") else "running"
@@ -187,6 +189,8 @@ def fold(since_events=None) -> State:
                 o = st.orders.get(team.order or -1)
                 if o and o.status == "open":
                     o.status = "done"
+            elif t == "respawned" and team.status == "ended":
+                team.status = "running"  # needs-you stays: the question is still open
             elif t == "ended" and team.status not in {"done"}:
                 team.status = "ended"
                 team.end_reason = ev.get("reason")

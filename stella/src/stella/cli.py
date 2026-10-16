@@ -222,7 +222,7 @@ def cmd_search(a):
 def cmd_run(a):
     from stella import run
 
-    r = run.run(fresh=a.fresh)
+    r = run.run(fresh=a.fresh, pass_env=a.pass_env)
     if isinstance(r, int):
         return r
     print(r)
@@ -232,6 +232,33 @@ def cmd_stop(a):
     from stella import run
 
     print(run.stop(keep_scheduler=a.keep_scheduler))
+
+
+def cmd_pass_env(a):
+    from stella import launch, passenv, run
+
+    if a.action in {"on", "off"}:
+        passenv.set_mode(a.action, by="cli")
+    print(passenv.status())
+    if not a.respawn:
+        if a.action in {"on", "off"}:
+            print("Sessions started from now on follow it. Running teams keep their credentials until"
+                  " restarted: `~/.local/bin/stella pass-env --respawn` (or name teams with --team).")
+        return
+    why = f"Restarted with pass_env {passenv.mode() or 'following the caller'}."
+    for line in ([launch.respawn(n, why) for n in a.team] if a.team else launch.respawn_all(why)):
+        print(line)
+    if a.team:
+        return
+    for name in launch.background_teams():
+        print(f"{name}: runs without a tmux window, so it can't be restarted in place; stop it and relaunch it")
+    print(run.respawn_self(why), flush=True)
+
+
+def cmd_respawn_self(a):
+    from stella import run
+
+    run.respawn_self_now(a.why)
 
 
 def cmd_scheduler(a):
@@ -476,8 +503,18 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=10)
     sp = c("run", cmd_run, "Run Stella: her own session, where every message is to her (and the scheduler in the background)")
     sp.add_argument("--fresh", action="store_true", help="start a new conversation (nothing is lost: state is on disk)")
+    sp.add_argument("--pass-env", choices=["on", "off"],
+                    help="set the pass_env switch instead of taking it from this environment")
     sp = c("stop", cmd_stop, "Stop Stella: her session and the background scheduler (launched teams keep running)")
     sp.add_argument("--keep-scheduler", action="store_true", help="stop only her session")
+    sp = c("pass-env", cmd_pass_env, "Show or switch whether sessions Stella starts get the pass_env variables;"
+           " --respawn restarts running teams (and Stella) on the current setting")
+    sp.add_argument("action", nargs="?", default="status", choices=["status", "on", "off"])
+    sp.add_argument("--respawn", action="store_true", help="restart running teams and Stella, resuming their conversations")
+    sp.add_argument("--team", action="append", default=[], help="with --respawn: only this team (repeatable; Stella is left alone)")
+    sp = sub.add_parser("respawn-self")  # internal: the detached half of `pass-env --respawn`
+    sp.set_defaults(fn=cmd_respawn_self)
+    sp.add_argument("why")
     sp = c("scheduler", cmd_scheduler, "Run the daily/nightly scheduler")
     sp.add_argument("--ensure", action="store_true", help="start the background scheduler unless it is running")
     sp.add_argument("--stop", action="store_true", help="stop the background scheduler")

@@ -182,4 +182,6 @@ def run_eval(only: list[str] | None = None, model: str = "sonnet") -> dict:
 def _env() -> dict:
     import os
 
-    return {**os.environ, "STELLA_HEADLESS": "1"}
+    from stella import passenv
+
+    return passenv.apply({**os.environ, "STELLA_HEADLESS": "1"})

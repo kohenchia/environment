@@ -18,7 +18,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from stella import extensions, gate, leak, ledger, notify
+from stella import extensions, gate, leak, ledger, notify, passenv
 from stella.config import CALL, settings, store_dir
 
 MARK = "[stella-job]"
@@ -155,8 +155,14 @@ def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = No
         cmd += ["--model", model]
     with log.open("w") as out:
         try:
+            env = passenv.apply({**os.environ, "STELLA_HEADLESS": "1"})
+        except SystemExit as e:  # never run on the wrong credentials; say so instead
+            out.write(f"{e}\n")
+            ledger.append("alert", by="scheduler", key="scheduler:pass-env", text=f"headless run skipped: {e}")
+            return 1
+        try:
             r = subprocess.run(cmd, stdout=out, stderr=subprocess.STDOUT, timeout=timeout,
-                               env={**os.environ, "STELLA_HEADLESS": "1"}, cwd=str(Path.home()))
+                               env=env, cwd=str(Path.home()))
             return r.returncode
         except subprocess.TimeoutExpired:
             out.write("\nTIMEOUT\n")

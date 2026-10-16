@@ -114,3 +114,11 @@ def send_text(srv: Server, window: str, text: str) -> None:
 def server_app(srv: Server) -> str:
     r = srv.run("show-environment", "-g", "__CFBundleIdentifier", check=False)
     return r.stdout.strip().partition("=")[2]
+
+
+def respawn(srv: Server, window: str, directory: str, command: str, env: dict[str, str] | None = None) -> str | None:
+    """Kill what runs in the window and start `command` there instead (same window id).
+    Returns tmux's error, or None when it worked."""
+    env_args = [a for k, v in (env or {}).items() for a in ("-e", f"{k}={v}")]
+    r = srv.run("respawn-pane", "-k", "-t", window, "-c", directory, *env_args, command, check=False)
+    return None if r.returncode == 0 else (r.stderr.strip() or f"exit {r.returncode}")
