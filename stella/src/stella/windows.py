@@ -119,10 +119,11 @@ def _panes(srv) -> list[dict]:
     return out
 
 
-def discover(srv) -> list[Target]:
-    """Every pane that runs Claude, classified; panes with nothing of Claude in them are left out."""
-    procs = _procs()
-    live, _ = fleet.sessions()
+def discover(srv, with_agents: bool = True, procs=None) -> list[Target]:
+    """Every pane that runs Claude, classified; panes with nothing of Claude in them are left out.
+    `with_agents` asks `claude agents` for session ids and cwds (not needed to tell what is alive)."""
+    procs = procs if procs is not None else _procs()
+    live = fleet.sessions()[0] if with_agents else []
     by_pid = {a["pid"]: a for a in live if a.get("pid")}
     st = state.fold()
     me = run._load()
@@ -155,6 +156,17 @@ def _classify(t: Target, st, me: dict, srv) -> None:
             t.kind, t.team = "team", key
             t.session_id = t.session_id or st.teams[key].session_id
             return
+
+
+def live_teams(srv=None) -> set[str] | None:
+    """The names of the teams whose lead is alive in a tmux pane right now (by its `--name` or its window's
+    name, whatever the window is called). None when that cannot be told: no tmux server reachable from here, or
+    the process list unreadable. Never guesses a team is gone."""
+    srv = srv or tmuxctl.find_server() or tmuxctl.server_for_socket(run._load().get("socket"))
+    procs = _procs()
+    if not srv or not procs:
+        return None
+    return {t.team for t in discover(srv, with_agents=False, procs=procs) if t.team}
 
 
 # ------------------------------------------------------------ restart

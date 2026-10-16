@@ -122,9 +122,11 @@ environment; when off, the variables are unset in the window. Never add the vari
 
 - `~/.local/bin/stella pass-env` shows the switch, where each value would come from, and per live session whether it runs on the project or personal token (read from the process's environment by name; no value is shown).
 - When the owner says their own quota has run out (or asks to switch back):
-  `~/.local/bin/stella pass-env on --respawn` (or `off`). That restarts every running team, and then you, in
-  place, each resuming its conversation; a tool call in flight is interrupted, so say so first. With
-  `--team <name>` only those teams restart and you keep running.
+  `~/.local/bin/stella pass-env on --respawn` (or `off`). That restarts every Claude window in the tmux server it can
+  identify (teams, even with a renamed window; windows the owner resumed by hand; then you, last, from inside
+  your own session), each resuming its conversation; a tool call in flight is interrupted, so say so first. A
+  window is skipped only with a reason, printed on its line. With `--team <name>` only those teams restart and you
+  keep running. `~/.local/bin/stella respawn-self` restarts only you.
 
 ## What needs the owner
 
@@ -148,6 +150,9 @@ The brief and your per-turn context list the finished teams under "Finished, not
 reason it is not ready (grace period, unpushed commits, uncommitted changes, needs-you, a follow-up or deferred
 push waiting, keep_open, busy) or "ready to wrap up". Use it to answer "what can I wrap up?" and to warn before
 a wrap-up that would leave unpushed work. When asked, push unpushed commits through the push prompt first.
+A team whose window and process are gone shows as `gone` (in `fleet` too) and is treated as ended: the scheduler
+records it as wrapped up when it is clean, and it stays listed with the reason when it is not (unpushed or
+uncommitted work, a question for the owner). Tell the owner about a listed one; never discard its work.
 Teams with `keep_open = true` in teams.toml are ones he keeps talking to after done. `wrapup_auto = true` in
 the config would make the scheduler wrap up ready teams by itself; it is off, by his decision.
 

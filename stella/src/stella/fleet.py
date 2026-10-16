@@ -31,9 +31,12 @@ def rows() -> tuple[list[dict], str | None]:
     out = []
     seen = set()
     now = ledger.now()
+    from stella import windows
+
+    live_names = windows.live_teams(srv) if srv else None  # None: cannot tell, so nothing is called gone
     launched = {e.get("team"): e.get("pass_env") for e in ledger.events() if e["type"] in {"launch", "respawned"} and e.get("pass_env")}
     for t in sorted(st.teams.values(), key=lambda t: t.seq, reverse=True):
-        if t.status == "done" and t.acked:
+        if t.acked:  # wrapped up or reaped
             continue
         s = by_name.get(t.name)
         seen.add(t.name)
@@ -41,12 +44,15 @@ def rows() -> tuple[list[dict], str | None]:
         if srv and t.window:
             win_state = "window closed" if not tmuxctl.window_exists(srv, t.window) else (
                 "exited" if tmuxctl.window_dead(srv, t.window) else "open")
+        gone = bool(t.window) and live_names is not None and t.name not in live_names
+        if gone:
+            win_state = "gone"
         out.append({
             "name": t.name, "launched_by_stella": True, "archetype": t.archetype, "order": t.order,
             "team_status": t.status, "session_status": (s or {}).get("status", "not running"),
             "window": t.window, "window_state": win_state, "cwd": t.directory,
             "age": _age(t.ts, now), "last_report": t.last_report, "pid": (s or {}).get("pid"),
-            "credentials": _credentials((s or {}).get("pid"), launched.get(t.name)),
+            "credentials": "gone" if gone else _credentials((s or {}).get("pid"), launched.get(t.name)),
         })
     for s in live:
         if s.get("name") in seen:
@@ -83,7 +89,9 @@ def table(rs: list[dict]) -> str:
     for r in rs:
         status = r.get("team_status") or ""
         status = f"{status}/{r['session_status']}" if status else str(r.get("session_status"))
-        if r.get("window_state"):
+        if r.get("window_state") == "gone":
+            status = f"{r.get('team_status')}, gone"  # no window and no process: the ledger is behind
+        elif r.get("window_state"):
             status += f" [{r['window_state']}]"
         tail = r.get("last_report") or r.get("cwd") or ""
         lines.append(f"{r['name'][:30]:<30} {'yes' if r['launched_by_stella'] else '':<5} {status[:22]:<22} {r.get('age', ''):<5} "

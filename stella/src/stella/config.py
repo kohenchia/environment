@@ -69,6 +69,7 @@ class Settings:
     wake_check_minutes: int = 20
     # The wrap-up sweep (see wrapup.py): when wrapup_auto is on, the scheduler closes clean finished teams
     # once they have stayed done this long. Off by default; the readiness check is still shown in the brief.
+    # Teams whose window and process are gone are recorded as wrapped up either way (there is nothing to close).
     wrapup_auto: bool = False  # off: the owner decides when a session is wrapped up (`stella wrap`)
     wrapup_grace_minutes: int = 5
     guarded_repos: list[Path] = field(default_factory=list)

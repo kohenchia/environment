@@ -215,12 +215,10 @@ def run_forever(interval: int = 60) -> int:
 def sweep_wrapup() -> None:
     """Wrap up the finished teams that are clean (see wrapup.py). Plain Python; no model runs. A failure
     is logged and raised once as an alert, never every minute."""
-    if not settings().wrapup_auto:
-        return
     from stella import state, wrapup
 
-    try:
-        wrapped, _ = wrapup.sweep()
+    try:  # with wrapup_auto off only the gone teams (no window, no process) are recorded: nothing is closed
+        wrapped, _ = wrapup.sweep(gone_only=not settings().wrapup_auto)
         if wrapped:
             print(f"{ledger.now():%Y-%m-%d %H:%M} wrapped up: {', '.join(v.team for v in wrapped)}", flush=True)
     except Exception as e:  # noqa: BLE001

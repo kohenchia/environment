@@ -3,7 +3,10 @@
 The owner decides when a session is wrapped up (`stella wrap` from inside it, `/stella:wrap-up`). This module
 says which finished teams are ready and why the others are not (`stella wrapup --dry-run`, the brief). With
 `wrapup_auto = true` the scheduler also closes the ready ones about once a minute; that is off by default.
-A team Stella launched is ready when ALL of these hold:
+A team whose window and process are both gone (killed by a tmux restart, or closed by hand without `stella
+done`) is treated as ended, whatever the ledger still says. It has no session to close, so the sweep records it as wrapped up when nothing is
+left on it, even with `wrapup_auto` off; otherwise it stays in the list with its reason. A team Stella
+launched is ready when ALL of these hold:
 
 * its status is done (or ended, when it was closed by hand with its order closed) and it was not reaped yet
 * its archetype does not set `keep_open` in teams.toml (the owner keeps talking to such a session)
@@ -45,6 +48,7 @@ class Verdict:
     checked: list[str] = field(default_factory=list)  # what held, when ok
     repos: list[str] = field(default_factory=list)
     since: dt.datetime | None = None
+    gone: bool = False  # no window and no process any more
 
 
 # ---------------------------------------------------------------- git
@@ -180,23 +184,31 @@ def _ago(d: dt.timedelta) -> str:
     return f"{m}m" if m < 60 else f"{m // 60}h"
 
 
-def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.datetime) -> Verdict:
-    v = Verdict(t.name, t.status, False)
+def is_gone(t: state.Team, live: set[str] | None) -> bool:
+    """A team Stella opened in tmux that is not finished (running, needs-you, or ended) and whose lead is no longer alive in any pane. `live` is None when that
+    cannot be told (tmux unreachable): then nothing is gone."""
+    return live is not None and bool(t.window) and t.status in {"running", "needs-you", "ended"} and t.name not in live
+
+
+def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.datetime, gone: bool = False) -> Verdict:
+    v = Verdict(t.name, "gone" if gone else t.status, False, gone=gone)
 
     def no(reason: str) -> Verdict:
         v.reason = reason
         return v
 
     grace = dt.timedelta(minutes=settings().wrapup_grace_minutes)
-    if t.archetype in keep_open:
+    if t.archetype in keep_open and not gone:
         return no("keep_open: its session stays open for you to talk to")
     if t.asking:
         return no(f"needs-you: {' '.join((t.last_report or '').split())[:80]}")
-    if t.status == "needs-you":
+    if t.status == "needs-you" and not gone:
         return no("needs-you")
-    if t.status == "running":
+    if t.status == "running" and not gone:
         return no("still running")
-    if t.status == "ended":
+    if gone:
+        pass  # treated as ended: nothing is running, and a gone window cannot be closed or asked
+    elif t.status == "ended":
         o = st.orders.get(t.order or -1)
         if t.end_reason != state.DELIBERATE_END:
             return no(f"{state.end_phrase(t.end_reason)}; decide whether to respawn or reap it")
@@ -212,7 +224,7 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
     if deferred:
         return no(f"deferred push: {deferred}")
     srv = window = None
-    if t.window:
+    if t.window and not gone:
         srv, window = _window(t.name, t)
         if srv is None:
             return no("tmux is not reachable from here, so its window cannot be checked or closed")
@@ -226,10 +238,10 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
     v.repos = [str(p) for p in repos]
     v.ok = True
     v.checked = [
-        f"status {t.status}",
+        f"status {v.status}" + (f" (the ledger still says {t.status})" if gone else ""),
         "no open question",
-        f"stayed {t.status} {_ago(now - v.since)} (grace {settings().wrapup_grace_minutes}m)",
-        "session idle" if window else "no open window",
+        f"stayed {v.status} {_ago(now - v.since)} (grace {settings().wrapup_grace_minutes}m)",
+        "window and process gone" if gone else "session idle" if window else "no open window",
         f"repos clean and pushed: {', '.join(Path(p).name for p in v.repos) or 'none touched'}",
         "no follow-up waits on it",
         "no deferred push",
@@ -244,13 +256,28 @@ def _keep_open() -> set[str]:
     return {n for n, t in teams.items() if t.keep_open}
 
 
-def evaluate(st: state.State | None = None, now: dt.datetime | None = None, all_teams: bool = False) -> list[Verdict]:
-    """A verdict per team not yet closed out. With all_teams, running teams are listed too."""
+def gone_teams(st: state.State) -> set[str]:
+    """Names of the teams that are running or needs-you in the ledger but whose window and process are gone."""
+    from stella import windows
+
+    maybe = [t for t in st.teams.values() if t.window and t.status in {"running", "needs-you", "ended"} and not t.acked]
+    if not maybe:
+        return set()
+    live = windows.live_teams()
+    return {t.name for t in maybe if is_gone(t, live)}
+
+
+def evaluate(st: state.State | None = None, now: dt.datetime | None = None, all_teams: bool = False,
+             gone_only: bool = False) -> list[Verdict]:
+    """A verdict per team not yet closed out. With all_teams, running teams are listed too; a team whose
+    window and process are gone is always listed (as ended). With gone_only, only those."""
     st = st or state.fold()
     now = now or ledger.now()
     keep = _keep_open()
+    gone = gone_teams(st)
     wanted = FINISHED | ({"running", "needs-you"} if all_teams else set())
-    return [evaluate_team(st, t, keep, now) for t in st.teams.values() if t.status in wanted and not t.acked]
+    return [evaluate_team(st, t, keep, now, gone=t.name in gone) for t in st.teams.values()
+            if not t.acked and (t.name in gone or (t.status in wanted and not gone_only))]
 
 
 def pending_lines(st: state.State, now: dt.datetime | None = None) -> list[str]:
@@ -260,7 +287,7 @@ def pending_lines(st: state.State, now: dt.datetime | None = None) -> list[str]:
         vs = [v for v in evaluate(st, now) if not (v.ok and settings().wrapup_auto)]
     except Exception:  # noqa: BLE001 - a broken check must not break the brief
         return []
-    return [f"- {v.team} ({v.status}{', ' + _ago(now - v.since) + ' ago' if v.since else ''}): {v.reason or 'clean, ready to wrap up when the owner says so'}" for v in vs]
+    return [f"- {v.team} ({v.status}{', ' + _ago(now - v.since) + ' ago' if v.since else ''}): {v.reason or ('clean, no window or process left: the sweep records it' if v.gone else 'clean, ready to wrap up when the owner says so')}" for v in vs]
 
 
 HEADER = ("Finished, not wrapped up (the owner decides when a session is wrapped up, with `/stella:wrap-up` in"
@@ -301,15 +328,22 @@ def close_team(st: state.State, t: state.Team, force_record: bool = True) -> tup
     return True, f"closed {name}"
 
 
-def sweep(dry_run: bool = False, now: dt.datetime | None = None) -> tuple[list[Verdict], list[Verdict]]:
-    """Returns (wrapped up, kept open). With dry_run nothing is changed or recorded."""
+def sweep(dry_run: bool = False, now: dt.datetime | None = None, gone_only: bool = False) -> tuple[list[Verdict], list[Verdict]]:
+    """Returns (wrapped up, kept open). With dry_run nothing is changed or recorded. With gone_only, only
+    teams whose window and process are gone are looked at (what the scheduler does when `wrapup_auto` is off)."""
     st = state.fold()
-    verdicts = evaluate(st, now, all_teams=dry_run)
+    verdicts = evaluate(st, now, all_teams=dry_run and not gone_only, gone_only=gone_only)
     wrapped, kept = [], []
     for v in verdicts:
         if not v.ok:
             kept.append(v)
         elif dry_run:
+            wrapped.append(v)
+        elif v.gone:  # nothing to close: record it. Its order stays as it is (the work was not finished).
+            t = st.teams[v.team]
+            ledger.append("ack", by="wrapup", key=f"team:{t.name}:{t.status}")
+            ledger.append("reaped", by="wrapup", team=t.name)
+            ledger.append("wrapped_up", by="wrapup", team=t.name, checked=v.checked, repos=v.repos or None)
             wrapped.append(v)
         else:
             t = st.teams[v.team]
