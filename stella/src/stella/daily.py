@@ -1,11 +1,15 @@
 """The day's work, read from every Claude Code transcript, and the jobs that use it.
 
-* `digest(date)`: a bounded summary of every session active that day (what the
+A run covers a `Window`, an instant range [start, end) between two local midnights,
+not a calendar date: only transcript events stamped inside it count, and work after
+the end belongs to the next run (see scheduler.py for how windows are planned).
+
+* `digest(window)`: a bounded summary of every session active in the window (what the
   owner asked, how each session ended), written to the store.
-* `run_daily(date)`: a headless session turns the digest into the daily log. An
+* `run_daily(window)`: a headless session turns the digest into the daily log. An
   extension supplies the prompt (where the log lives and which skill writes it);
   without one, it writes a journal entry into the store.
-* `run_nightly(date)`: denylist rebuild, leak sweep, and a reflection
+* `run_nightly(window)`: denylist rebuild, leak sweep, and a reflection
   that writes the morning digest and learning proposals.
 """
 
@@ -16,6 +20,7 @@ import json
 import os
 import re
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 from stella import extensions, leak, ledger, notify, passenv
@@ -42,9 +47,38 @@ def _clip(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
-def sessions_on(date: dt.date) -> list[dict]:
-    start = dt.datetime.combine(date, dt.time()).astimezone()
-    end = start + dt.timedelta(days=1)
+@dataclass(frozen=True)
+class Window:
+    """[start, end) as timezone-aware instants. `zone` names the zone whose local midnight is `end`."""
+
+    start: dt.datetime
+    end: dt.datetime
+    zone: str = ""
+
+    @property
+    def label(self) -> dt.date:
+        """The local date of the day the window mostly covers: the date of (end - 1s) in the end's zone."""
+        return (self.end - dt.timedelta(seconds=1)).astimezone().date()
+
+    def describe(self) -> str:
+        def one(t: dt.datetime) -> str:
+            t = t.astimezone()
+            return f"{t:%Y-%m-%d %H:%M} {t:%Z} (UTC{t:%z})"
+
+        return f"{one(self.start)} to {one(self.end)}, exclusive" + (f", zone {self.zone}" if self.zone else "")
+
+
+def local_midnight(date: dt.date) -> dt.datetime:
+    return dt.datetime.combine(date, dt.time()).astimezone()
+
+
+def day_window(date: dt.date, zone: str = "") -> Window:
+    """The local calendar day `date` as a window."""
+    return Window(local_midnight(date), local_midnight(date + dt.timedelta(days=1)), zone)
+
+
+def sessions_on(start: dt.datetime, end: dt.datetime) -> list[dict]:
+    """Sessions with at least one prompt stamped inside [start, end)."""
     out = []
     root = transcripts_dir()
     if not root.exists():
@@ -103,10 +137,11 @@ def sessions_on(date: dt.date) -> list[dict]:
     return sorted(out, key=lambda s: s["first"])
 
 
-def digest(date: dt.date, budget: int = 80_000) -> Path:
-    ss = sessions_on(date)
+def digest(win: Window, budget: int = 80_000) -> Path:
+    date = win.label
+    ss = sessions_on(win.start, win.end)
     per = max(budget // max(len(ss), 1), 1500)
-    lines = [f"# Work digest for {date:%A %Y-%m-%d}", "",
+    lines = [f"# Work digest for {date:%A %Y-%m-%d}", "", f"Window: {win.describe()}.",
              f"{len(ss)} sessions. For each: what {settings().owner} asked (verbatim, clipped), and how the session ended.", ""]
     for s in ss:
         head = f"## {s['title'] or s['session'][:8]}  ({s['cwd'] or '?'}, {s['first']:%H:%M}–{s['last']:%H:%M})"
@@ -130,13 +165,17 @@ def digest(date: dt.date, budget: int = 80_000) -> Path:
 
 
 DEFAULT_DAILY = """{mark} daily log for {date}.
-Read the work digest at {digest}. Write a concise journal entry of what {owner} did on {date}: one line
-per piece of work, with any links or identifiers that appear in the digest (never invent one), then a
-short "Learned" list of anything that took real effort to figure out. Write it to {journal}. Do not ask
-questions; this run is unattended."""
+Window: {start} to {end} (end exclusive), zone {zone}. Only what happened inside it counts.
+Read the work digest at {digest}. Write a concise journal entry of the work {owner} COMPLETED in that
+window: merged, pushed, sent, finished, decided, learned. Leave out work that is only in progress, only
+started, or only discussed; an unfinished thread is logged on the day it finishes. One line per piece of
+work, with any links or identifiers that appear in the digest (never invent one), then a short "Learned"
+list of anything that took real effort to figure out. Write it to {journal}. Do not ask questions; this
+run is unattended."""
 
 
-def _daily_prompt(date: dt.date, digest_path: Path) -> str:
+def _daily_prompt(win: Window, digest_path: Path) -> str:
+    date = win.label
     template = DEFAULT_DAILY
     for ext in extensions.load():
         f = ext.file("daily")
@@ -144,8 +183,10 @@ def _daily_prompt(date: dt.date, digest_path: Path) -> str:
             template = f.read_text()
     journal = store_dir() / "journal" / f"{date:%Y-%m-%d}.md"
     journal.parent.mkdir(parents=True, exist_ok=True)
+    start, end = (t.astimezone() for t in (win.start, win.end))
     return template.format(mark=MARK, date=f"{date:%Y-%m-%d}", digest=digest_path, owner=settings().owner,
-                           journal=journal, stella=CALL)
+                           journal=journal, stella=CALL, start=f"{start:%Y-%m-%d %H:%M %Z (UTC%z)}",
+                           end=f"{end:%Y-%m-%d %H:%M %Z (UTC%z)}", zone=win.zone or f"{end:%Z}")
 
 
 def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = None, claude: str | None = None) -> int:
@@ -169,13 +210,15 @@ def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = No
             return 124
 
 
-def run_daily(date: dt.date, claude: str | None = None) -> int:
-    if not sessions_on(date):
-        ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: no sessions, nothing to log")
+def run_daily(win: Window, claude: str | None = None) -> int:
+    date = win.label
+    used = f"window {win.describe()}"
+    if not sessions_on(win.start, win.end):
+        ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: no sessions, nothing to log; {used}")
         return 0
-    p = digest(date)
-    rc = headless(_daily_prompt(date, p), store_dir() / "runs" / f"daily-{date:%Y-%m-%d}.log", model="sonnet", claude=claude)
-    ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: {'written' if rc == 0 else f'FAILED (exit {rc})'}")
+    p = digest(win)
+    rc = headless(_daily_prompt(win, p), store_dir() / "runs" / f"daily-{date:%Y-%m-%d}.log", model="sonnet", claude=claude)
+    ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: {'written' if rc == 0 else f'FAILED (exit {rc})'}; {used}")
     if rc != 0:
         ledger.append("alert", by="scheduler", key=f"daily:{date}", text=f"daily log for {date} failed; see runs/daily-{date}.log")
     notify.notify("Stella", f"Daily log for {date:%Y-%m-%d} {'written' if rc == 0 else 'FAILED'}")
@@ -193,7 +236,8 @@ You are Stella's reflection pass. Read: the work digest {digest}; the priorities
 Do not ask questions; this run is unattended."""
 
 
-def run_nightly(date: dt.date, claude: str | None = None) -> list[str]:
+def run_nightly(win: Window, claude: str | None = None) -> list[str]:
+    date = win.label
     report: list[str] = []
     report += leak.rebuild()
     g = leak.guard()
@@ -214,7 +258,7 @@ def run_nightly(date: dt.date, claude: str | None = None) -> list[str]:
         except leak.DenylistMissing as e:
             ledger.append("alert", by="scheduler", key="leak:denylist", text=f"denylist missing: {e}")
             report.append(f"denylist missing: {e}")
-    p = digest(date)
+    p = digest(win)
     morning = store_dir() / "digests" / f"{date + dt.timedelta(days=1):%Y-%m-%d}-morning.md"
     prompt = REFLECT.format(mark=MARK, date=date, digest=p, priorities=store_dir() / "priorities.md",
                             canon=store_dir() / "canon.md", stella=CALL, owner=settings().owner, morning=morning)
@@ -222,6 +266,6 @@ def run_nightly(date: dt.date, claude: str | None = None) -> list[str]:
     report.append(f"reflection: exit {rc}")
     if rc == 0 and morning.exists():
         ledger.append("alert", by="scheduler", key=f"morning:{morning.stem}", text=f"morning digest ready: {morning}")
-    ledger.append("note", by="scheduler", text=f"nightly for {date}: " + "; ".join(report))
+    ledger.append("note", by="scheduler", text=f"nightly for {date}: " + "; ".join(report) + f"; window {win.describe()}")
     return report
 

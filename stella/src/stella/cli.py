@@ -337,21 +337,28 @@ def cmd_scheduler(a):
     return scheduler.run_forever()
 
 
+def _window_arg(a):
+    """--date D is that local calendar day; without it, the day that just ended."""
+    from stella import daily, scheduler
+
+    d = dt.date.fromisoformat(a.date) if a.date else dt.date.today() - dt.timedelta(days=1)
+    return daily.day_window(d, scheduler.zone_name())
+
+
 def cmd_daily(a):
     from stella import daily
 
-    d = dt.date.fromisoformat(a.date) if a.date else dt.date.today()
+    win = _window_arg(a)
     if a.digest_only:
-        print(daily.digest(d))
+        print(daily.digest(win))
         return
-    return daily.run_daily(d)
+    return daily.run_daily(win)
 
 
 def cmd_nightly(a):
     from stella import daily
 
-    d = dt.date.fromisoformat(a.date) if a.date else dt.date.today()
-    print("\n".join(daily.run_nightly(d)))
+    print("\n".join(daily.run_nightly(_window_arg(a))))
 
 
 def cmd_focus(a):
@@ -360,7 +367,8 @@ def cmd_focus(a):
 
     pr = store_dir() / "priorities.md"
     print(pr.read_text() if pr.exists() else "(no priorities recorded: ask the owner)")
-    print(f"\nToday's work digest: {daily.digest(dt.date.today())}")
+    midnight = daily.local_midnight(dt.date.today())
+    print(f"\nToday's work digest: {daily.digest(daily.Window(midnight, ledger.now()))}")
     print("\nOpen orders:")
     cmd_orders(argparse.Namespace(all=False))
 

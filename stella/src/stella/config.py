@@ -50,7 +50,7 @@ class Settings:
     claude_bin: str = "claude"
     claude_query_bin: str = ""
     permission_mode: str = "default"
-    daily_time: str = "20:00"
+    daily_time: str = "00:00"  # when the run for the day that just ended starts; the cutoff itself is always a local midnight
     stale_days: int = 7
     brief_lines: int = 60
     delta_lines: int = 15

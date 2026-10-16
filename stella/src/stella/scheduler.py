@@ -1,4 +1,5 @@
-"""The scheduler: runs the daily log at the configured time, then the nightly jobs, and every
+"""The scheduler: runs the daily log and the nightly jobs for the day that just ended (a window
+between two local midnights, see `due`), and every
 `wake_check_minutes` looks for a wake line to Stella that never arrived (see wake.py).
 
 It runs as a detached background process started by `stella run` from the owner's
@@ -6,7 +7,9 @@ terminal, not as a system service: a service manager may launch it without the f
 permissions the owner's terminal has, while a process started from that terminal
 inherits them. If it isn't running when a run is due (machine asleep, process gone),
 the next Claude session that starts runs one catch-up pass. A day missed is caught
-up for at most three days back.
+up for at most three days back, one run per missed day. The last cutoff is stored in
+scheduler.json as a timezone-aware instant with its zone name, so a time-zone change
+cannot double-count or drop an hour: consecutive windows tile exactly.
 
 One lock (`scheduler.lock`) is held by whichever scheduler is working, so the daemon
 and a catch-up pass can never run the same jobs twice.
@@ -43,21 +46,77 @@ def _save(d: dict) -> None:
     _state_path().write_text(json.dumps(d))
 
 
-def due(now: dt.datetime, last_done: str | None) -> list[dt.date]:
+def zone_name() -> str:
+    """The machine's current time zone, by name (TZ, else the /etc/localtime link, else the abbreviation)."""
+    tz = os.environ.get("TZ", "").lstrip(":")
+    if tz:
+        return tz
+    try:
+        path = os.path.realpath("/etc/localtime")
+    except OSError:
+        path = ""
+    if "zoneinfo/" in path:
+        return path.split("zoneinfo/", 1)[1]
+    return time.tzname[0]
+
+
+MIN_WINDOW = dt.timedelta(hours=1)  # a shorter window is skipped; the next midnight picks it up
+MAX_WINDOW = dt.timedelta(hours=36)  # a longer one is split on local midnights
+MAX_DAYS_BACK = 3
+
+
+def _midnight(date: dt.date) -> dt.datetime:
+    return daily.local_midnight(date)
+
+
+def cutoff_record(end: dt.datetime) -> dict:
+    """What a completed run stores: the cutoff instant (offset included) and the zone it was local midnight in."""
+    return {"at": end.isoformat(), "tz": zone_name()}
+
+
+def last_cutoff(st: dict) -> dict | None:
+    """The stored cutoff. A scheduler.json from before cutoffs (`last_done`, a date whose whole day was logged)
+    counts as local midnight at the end of that date."""
+    lc = st.get("last_cutoff")
+    if lc:
+        return lc
+    if st.get("last_done"):
+        end = _midnight(dt.date.fromisoformat(st["last_done"]) + dt.timedelta(days=1))
+        return cutoff_record(end)
+    return None
+
+
+def due(now: dt.datetime, last: dict | None) -> list[daily.Window]:
+    """The windows to run now, oldest first; they tile exactly from the stored cutoff to the latest cutoff.
+
+    The cutoff is the latest local midnight (in the current zone) at or before `now`, once `daily_time` of
+    the day after it has been reached. No stored cutoff: the previous local calendar day. A window shorter
+    than MIN_WINDOW (or inverted, after a zone change) is skipped; one longer than MAX_WINDOW is split on
+    local midnights so each day gets its own run; the start is never more than MAX_DAYS_BACK days back.
+    """
+    now = now.astimezone()
     hh, mm = (int(x) for x in settings().daily_time.split(":"))
-    today = now.date()
-    reached = (now.hour, now.minute) >= (hh, mm)
-    newest = today if reached else today - dt.timedelta(days=1)
-    if last_done:
-        start = dt.date.fromisoformat(last_done) + dt.timedelta(days=1)
+    day = now.date() if (now.hour, now.minute) >= (hh, mm) else now.date() - dt.timedelta(days=1)
+    end = _midnight(day)
+    zone = zone_name()
+    if last:
+        start = dt.datetime.fromisoformat(last["at"])
     else:
-        start = newest  # first run: only the most recent day
-    start = max(start, newest - dt.timedelta(days=2))
-    out, d = [], start
-    while d <= newest:
-        out.append(d)
-        d += dt.timedelta(days=1)
-    return out
+        start = _midnight(day - dt.timedelta(days=1))
+    start = max(start, _midnight(day - dt.timedelta(days=MAX_DAYS_BACK)))
+    if end - start < MIN_WINDOW:
+        return []
+    cuts = [start, end]
+    if end - start > MAX_WINDOW:
+        mids, d = [], start.astimezone().date() + dt.timedelta(days=1)
+        while _midnight(d) < end:
+            if _midnight(d) > start:
+                mids.append(_midnight(d))
+            d += dt.timedelta(days=1)
+        if mids and mids[0] - start < MIN_WINDOW:  # a sliver at the front joins the next day: still no gap
+            mids = mids[1:]
+        cuts = [start, *mids, end]
+    return [daily.Window(a, b, zone) for a, b in zip(cuts, cuts[1:])]
 
 
 def tick(now: dt.datetime | None = None, claude: str | None = None) -> list[str]:
@@ -67,7 +126,8 @@ def tick(now: dt.datetime | None = None, claude: str | None = None) -> list[str]
 
     now = now or ledger.now()
     st = _load()
-    if not due(now, st.get("last_done")):
+    wins = due(now, last_cutoff(st))
+    if not wins:
         return []
     try:
         passenv.resolve()
@@ -75,13 +135,18 @@ def tick(now: dt.datetime | None = None, claude: str | None = None) -> list[str]
         if "scheduler:pass-env" not in state.fold().alerts:  # once, not every minute
             ledger.append("alert", by="scheduler", key="scheduler:pass-env", text=f"scheduler waiting: {e}")
         return []
+    prev = last_cutoff(st)
+    if prev and prev.get("tz") not in (None, zone_name()):
+        ledger.append("note", by="scheduler", text=f"time zone changed since the last cutoff ({prev['tz']} -> {zone_name()}):"
+                      f" running {len(wins)} window(s) from {prev['at']}")
     did = []
-    for d in due(now, st.get("last_done")):
-        daily.run_daily(d, claude=claude)
-        daily.run_nightly(d, claude=claude)
-        st["last_done"] = d.isoformat()
+    for w in wins:
+        daily.run_daily(w, claude=claude)
+        daily.run_nightly(w, claude=claude)
+        st["last_cutoff"] = cutoff_record(w.end)
+        st.pop("last_done", None)
         _save(st)
-        did.append(d.isoformat())
+        did.append(f"{w.label.isoformat()} [{w.describe()}]")
     return did
 
 
@@ -124,7 +189,7 @@ def run_forever(interval: int = 60) -> int:
         return 1
     (store_dir() / "scheduler.pid").write_text(str(os.getpid()))
     every = settings().wake_check_minutes * 60
-    print(f"{ledger.now():%Y-%m-%d %H:%M} stella scheduler: daily log at {settings().daily_time}; checking every {interval}s;"
+    print(f"{ledger.now():%Y-%m-%d %H:%M} stella scheduler: daily log for each day that ends (runs from {settings().daily_time} after local midnight); checking every {interval}s;"
           f" wake-line backstop every {every // 60}m", flush=True)
     last_wake_check = 0.0
     while True:
@@ -230,7 +295,7 @@ def catch_up_if_needed() -> None:
     if os.environ.get("STELLA_NO_CATCHUP") == "1":
         return
     try:
-        if running_pid() or not due(ledger.now(), _load().get("last_done")):
+        if running_pid() or not due(ledger.now(), last_cutoff(_load())):
             return
         if not _credentials_match():
             return
