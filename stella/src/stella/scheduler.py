@@ -211,17 +211,21 @@ def run_forever(interval: int = 60) -> int:
         sweep_wrapup()
         end = time.monotonic() + interval
         while time.monotonic() < end:  # the last-resort queues (tyfp, adoption) are served here
-            time.sleep(min(3, max(0.1, end - time.monotonic())))
+            time.sleep(min(1, max(0.1, end - time.monotonic())))
             _close_queued()
 
 
 def _close_queued() -> None:
-    from stella import wrapup
+    from stella import gate, wrapup
 
     try:
         wrapup.process_requests()
     except Exception as e:  # noqa: BLE001
         print(f"gg error: {type(e).__name__}: {e}", flush=True)
+    try:
+        gate.process_diff_requests()
+    except Exception as e:  # noqa: BLE001
+        print(f"push-diff error: {type(e).__name__}: {e}", flush=True)
 
 
 def sweep_wrapup() -> None:

@@ -203,8 +203,13 @@ asks for itself. (Guarded repos, `~/.local/bin/stella gate status`, also run the
   When the owner tells you at the start to push (or merge) the work, launch with `stella launch --auto-push`:
   that team pushes with no prompt.
 
-- When a push is needed, just run it (`git push`, `gh pr create`, …). The tool hook makes Claude Code show
-  the owner a yes/no prompt naming the repo and branch; the owner answers it. That prompt is the ask
+- When a push is needed, run `~/.local/bin/stella push` (the current repo's branch; `-C <dir>` for another
+  repo) as that one command, never inside a longer one (the dialog shows the whole command, so a long one
+  buries the question). `gh pr create` and the like still go through the same prompt. The tool hook makes
+  Claude Code show the owner a yes/no prompt naming the repo and branch, with the diff open in a pane beside
+  the window; the owner answers it.
+- If the refusal carries the owner's words "d" or "diff" (No + Tab to amend), they want to see the changes:
+  run `stella diff --show` (it opens the pane, or prints the diffstat for you to quote), then push again. That prompt is the ask
   (principle 3) for a push from a guarded repo; no need to ask in chat as well.
 - The prompt comes once per repo and head, only for the real push, and only at the end of the work: don't
   push intermediate states, and don't run a push to test something. Subagents inherit an approval.
@@ -213,7 +218,7 @@ asks for itself. (Guarded repos, `~/.local/bin/stella gate status`, also run the
 - The prompt can only say yes or no, so **no means "later"**: its text tells the owner Stella keeps it on the
   outstanding list. Treat a declined push as deferred, not rejected: when the owner asks for outstanding
   items, list each guarded repo with unpushed commits (`git -C <repo> log --oneline @{u}..`), and show the
-  diff (`git -C <repo> diff @{u}...HEAD`) when asked.
+  diff (`stella diff <repo>`) when asked.
 - **The hooks enforce it.** If a session ends its turn, or a team runs `stella done`, with unpushed commits in a
   repo it worked in, the Stop hook (or `done`) refuses once per head and says to push now: do that, and the prompt
   appears. Do not loop on it: after one reminder per head, or after a no, it lets go. A no is recorded as

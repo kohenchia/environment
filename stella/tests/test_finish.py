@@ -28,7 +28,7 @@ def test_finishing_with_unpushed_commits_is_blocked_once(env, repo):
     _commit(env, repo)
     first = _stop(env, repo)
     assert first["decision"] == "block"
-    assert "git -C" in first["reason"] and "push -u origin main" in first["reason"] and "1 unpushed commit" in first["reason"]
+    assert "stella push -C" in first["reason"] and "push -u origin" not in first["reason"] and "1 unpushed commit" in first["reason"]
     assert "run `stella" not in first["reason"] and "review-push" not in first["reason"]
     assert _stop(env, repo) == {}  # one reminder per head per session: no loop
 
@@ -56,7 +56,7 @@ def test_the_push_goes_through_the_prompt_and_a_no_is_a_deferral(env, repo):
     _commit(env, repo)
     assert _stop(env, repo)["decision"] == "block"
     out = _pre(env, "git push -u origin main", repo)  # what the session does next
-    assert out["permissionDecision"] == "ask" and out["permissionDecisionReason"].startswith("Push dotfiles")
+    assert out["permissionDecision"] == "ask" and "PUSH  dotfiles → main" in out["permissionDecisionReason"]
     # the owner answered no: the tool never ran, so no PostToolUse and the remote has nothing new
     assert env.git(env.tmp / "remote.git", "rev-parse", "main").stdout != env.git(repo, "rev-parse", "HEAD").stdout
     done = _stop(env, repo)
@@ -114,7 +114,7 @@ def test_done_is_refused_once_then_goes_through(env, repo):
     _commit(env, repo)
     sess = {"STELLA_SESSION_ID": S}
     r = env.run("done", "alpha", "built it", env=sess, cwd=repo, check=False)
-    assert r.returncode == 1 and "push -u origin main" in r.stderr
+    assert r.returncode == 1 and "stella push -C" in r.stderr
     assert not [e for e in env.events() if e["type"] == "done"]
     r = env.run("done", "alpha", "built it", env=sess, cwd=repo, check=False)
     assert r.returncode == 0
@@ -134,7 +134,7 @@ def test_done_outside_a_claude_session_is_not_checked(env, repo):
     assert env.run("done", "alpha", "x", cwd=repo).returncode == 0
 
 
-@pytest.mark.parametrize("cmd", ["review-push", "push-question", "push"])
+@pytest.mark.parametrize("cmd", ["review-push", "push-question"])
 def test_the_manual_push_commands_are_gone(env, cmd):
     r = env.run(cmd, "dotfiles", check=False)
     assert r.returncode == 2 and "invalid choice" in r.stderr
@@ -145,7 +145,7 @@ def test_nothing_in_the_core_tells_anyone_to_run_a_push_command():
 
     root = Path(__file__).resolve().parents[1]
     hits = [str(p) for p in list(root.glob("src/**/*.py")) + list(root.glob("plugin/**/*")) + [root / "README.md"]
-            if p.is_file() and any(w in p.read_text() for w in ("review-push", "stella push", "push-question"))]
+            if p.is_file() and any(w in p.read_text() for w in ("review-push", "push-question"))]
     assert hits == []
 
 

@@ -1,5 +1,8 @@
 """Requirement 20: a Claude session's push from a guarded repo asks the owner first; the owner's own push is plain git."""
 
+import json
+from pathlib import Path
+
 import pytest
 
 from stella.gate import BLOCKED_URL, HOOK_SCRIPT
@@ -40,29 +43,96 @@ def _old_gate(env, repo):
     "git push", "git push origin main", "git push --force", "git push --no-verify origin main",
     "git push --delete origin main", "git push --tags", "git -c core.hooksPath=/dev/null push",
     "gh pr create --fill", "gh pr merge 3", "gh api -X POST repos/o/r/git/refs",
-    "echo hi && git push", "bash -c 'git push'", "/usr/bin/git push -u origin HEAD",
+    "stella push", "echo hi && git push", "bash -c 'git push'", "/usr/bin/git push -u origin HEAD",
 ])
 def test_a_push_from_a_guarded_repo_asks_the_owner(env, repo, cmd):
     _commit(env, repo)
     assert _pretool(env, cmd, repo) == "ask"
 
 
-def test_the_prompt_names_the_repo_branch_commits_and_where_the_diff_is(env, repo):
+def test_the_prompt_is_short_grouped_and_ends_with_the_choices(env, repo):
     _commit(env, repo)
     reason = _pretool_out(env, "git push origin main", repo)["permissionDecisionReason"]
-    first, *rest = reason.splitlines()
-    assert first == "Push dotfiles -> main (1 commit)"
-    assert rest[0] == "  · change" and rest[-1].startswith("Diff: ")
-    assert "FORCE" not in reason and "outstanding" not in reason
-    # no tmux server in tests, so the diff is in a file
-    patch = env.store / "push-diff.patch"
-    assert f"Diff: {patch}" == rest[-1] and "+x" in patch.read_text()
+    assert reason.splitlines() == [
+        "▲ PUSH  dotfiles → main", "  1 commit", "", "  · change", "",
+        "Yes: push · No: defer · Diff: no viewer; No + Tab, type d"]  # no tmux in tests: nothing opens
+    assert "\x1b" not in reason and "FORCE" not in reason and not list(env.store.glob("push-diff*"))
+
+
+def test_a_new_branch_and_more_commits_are_counted(env, repo):
+    env.git(repo, "switch", "-q", "-c", "feature")
+    for i in range(5):
+        _commit(env, repo, text=f"{i}\n", msg=f"c{i}")
+    lines = _pretool_out(env, "git push", repo)["permissionDecisionReason"].splitlines()
+    assert lines[:2] == ["▲ PUSH  dotfiles → feature", "  5 commits · new branch"]
+    assert lines[3:7] == ["  · c4", "  · c3", "  · c2", "    … and 2 more"]
+
+
+def test_stella_push_asks_like_git_push_and_is_never_a_force(env, repo):
+    _commit(env, repo)
+    for cmd in ("~/.local/bin/stella push", "stella push -C .", f"cd {repo} && stella push"):
+        out = _pretool_out(env, cmd, repo)
+        assert out["permissionDecision"] == "ask" and "FORCE" not in out["permissionDecisionReason"], cmd
+        assert "also runs" not in out["permissionDecisionReason"]
+    assert _pretool(env, "stella status", repo) is None
+    assert _pretool(env, "echo stella push", repo) is None
+
+
+def test_a_compound_command_says_so_in_one_line(env, repo):
+    _commit(env, repo)
+    reason = _pretool_out(env, f"cd {repo} && just style 2>&1 | tail -1; uv run pytest -q; git push -u origin main", repo)["permissionDecisionReason"]
+    assert "⚠ This command also runs just style, pytest. Push only?" in reason.splitlines()
+    assert reason.splitlines()[-1].startswith("Yes: push")
+
+
+def test_stella_push_pushes_the_current_branch_and_refuses_a_detached_head(env, repo):
+    sha = _commit(env, repo)
+    assert env.run("push", cwd=repo, check=False).returncode == 0 and _remote_head(env) == sha
+    env.git(repo, "checkout", "-q", "--detach")
+    r = env.run("push", cwd=repo, check=False)
+    assert r.returncode == 2 and "no branch" in r.stderr
+
+
+def test_the_diff_pane_is_queued_for_the_scheduler_and_closes_when_the_push_is_answered(env, repo, monkeypatch):
+    from stella import scheduler
+
+    _commit(env, repo)
+    monkeypatch.setenv("STELLA_STORE", str(env.store))
+    lock = scheduler._try_lock()  # a running scheduler
+    try:
+        tmux = {"TMUX": f"{env.tmp}/sock,1,0", "TMUX_PANE": "%7"}
+        out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"}, env=tmux)
+        assert out["permissionDecisionReason"].endswith("Diff: pane on the right")
+        req = json.loads((env.store / "pushdiff" / "S1.json").read_text())
+        marker = Path(req["marker"])
+        assert req["pane"] == "%7" and marker.read_text() == req["token"] and list(req["targets"].values()) == [str(repo)]
+        from stella import gate
+
+        cmd = gate.viewer_command({repo: repo}, marker, req["token"])
+        assert "diff --stat" in cmd and "less -R" in cmd and "kill-pane" in cmd and str(marker) in cmd
+        env.hook("posttool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"}, env=tmux)
+        assert not marker.exists()  # the viewer's watcher sees this and closes its pane
+    finally:
+        lock.close()
+
+
+def test_without_a_scheduler_or_tmux_nothing_is_queued(env, repo):
+    _commit(env, repo)
+    tmux = {"TMUX": f"{env.tmp}/sock,1,0", "TMUX_PANE": "%7"}
+    out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"}, env=tmux)
+    assert "no viewer" in out["permissionDecisionReason"] and not list((env.store / "pushdiff").glob("*"))
+
+
+def test_stella_diff_show_prints_the_diffstat_when_no_pane_opens(env, repo):
+    _commit(env, repo)
+    out = env.run("diff", "--show", cwd=repo).stdout
+    assert "f.txt" in out and "+x" in out and "stella push" in out
 
 
 def test_a_force_push_says_so_on_the_first_line(env, repo):
     _commit(env, repo)
     reason = _pretool_out(env, "git push --force origin main", repo)["permissionDecisionReason"]
-    assert reason.splitlines()[0] == "Push dotfiles -> main (1 commit) FORCE"
+    assert reason.splitlines()[:2] == ["▲ PUSH  dotfiles → main", "  1 commit · FORCE"]
 
 
 def test_a_push_by_path_from_elsewhere_asks(env, repo):
@@ -75,7 +145,7 @@ def test_a_push_from_a_worktree_asks(env, repo):
     wt = env.tmp / "wt"
     env.git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
     out = _pretool_out(env, "git push origin feature", wt)
-    assert out["permissionDecision"] == "ask" and "feature (0 commits, new branch)" in out["permissionDecisionReason"]
+    assert out["permissionDecision"] == "ask" and "dotfiles → feature" in out["permissionDecisionReason"] and "0 commits · new branch" in out["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("cmd", [
@@ -244,7 +314,7 @@ def test_asking_stella_to_push_is_just_an_order(env, repo):
     assert [e["type"] for e in env.events()] == ["order"]
 
 
-@pytest.mark.parametrize("cmd", ["push", "review-push", "push-question"])
+@pytest.mark.parametrize("cmd", ["review-push", "push-question"])
 def test_the_approval_commands_are_gone(env, repo, cmd):
     r = env.run(cmd, "dotfiles", check=False)
     assert r.returncode == 2 and "invalid choice" in r.stderr

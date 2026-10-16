@@ -123,7 +123,7 @@ def blockers(st: state.State, sid: str, cwd: str, own: bool = False, t: state.Te
         branch = gate._git_out(where, "rev-parse", "--abbrev-ref", "HEAD")
         out.append(Blocker("push", f"{_plural(n, 'unpushed commit')} in {root.name} ({branch})",
                            f"approve the push of {root.name} {branch} ({_plural(n, 'commit')})",
-                           f"git -C {root} push -u origin {branch}"))
+                           f"~/.local/bin/stella push -C {root}"))
     return out
 
 

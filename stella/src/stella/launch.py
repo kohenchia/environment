@@ -31,11 +31,12 @@ def lead_prompt(name: str, archetype: str, order_seq: int | None, order_text: st
     order_ref = f"order #{order_seq}" if order_seq else "an order"
     if auto_push:
         push = (f"- Push duty: {owner} told you up front to push. When your work is committed in a repo that has a remote, "
-                f"push the branch yourself (no prompt will appear), then say what was pushed. Opening a PR or merging still needs his yes.")
+                f"push the branch yourself with `{stella} push` (no prompt will appear), then say what was pushed. Opening a PR or merging still needs his yes.")
     else:
-        push = (f"- Push duty: a commit in a repo that has a remote is not finished until you have tried to push it. Run `git push -u origin <branch>` "
-                f"yourself, before `{stella} done`: Claude Code then shows {owner} a yes/no prompt, so he never has to remember an outstanding push. "
+        push = (f"- Push duty: a commit in a repo that has a remote is not finished until you have tried to push it. Run `{stella} push` (from the repo, or `{stella} push -C <dir>`) "
+                f"yourself, as that one short command and nothing else in it, before `{stella} done`: Claude Code then shows {owner} a yes/no prompt, so he never has to remember an outstanding push. "
                 f"If he answers no, the push is deferred: say \"not pushed, you declined\" in your final message and name the branch and commit. "
+                f"If the refusal says \"d\" or \"diff\", he wants to see the changes: run `{stella} diff --show`, then `{stella} push` again. "
                 f"Never write just \"committed locally\". A repo with no remote needs no push. `{stella} done` refuses once while your commits are unpushed.")
     return f"""You are the lead of the team "{name}", launched by Stella, {owner}'s chief of staff, to carry out {order_ref}.
 
