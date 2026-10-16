@@ -60,7 +60,7 @@ drawline
 ```bash
 rg "def main"              # Search all tracked files from the current directory
 rg -i todo                 # Case-insensitive
-rg -t py "import notes"    # Only Python files
+rg -t py "import requests" # Only Python files
 rg -l "TODO"               # Just list matching file names
 rg -C 3 "raise ValueError" # 3 lines of context around each match
 ```

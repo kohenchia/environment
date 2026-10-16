@@ -158,7 +158,7 @@ there. Widen or zoom the pane (`Cmd+Shift+Enter`) before clicking a long URL.
 None of this involves OSC 8 hyperlinks. Claude Code prints URLs as plain text here — its only OSC 8
 path is gated on a terminal allowlist that Alacritty isn't on, and tmux would drop the sequence anyway
 because `terminal-features` doesn't claim `hyperlinks` and no terminfo entry on this machine advertises
-`Hls`. That's why the wrapper around Claude Code banner's Docs/Marketplace/Support links aren't clickable while
+`Hls`. That's why the linked labels in a startup banner (Docs, Support) aren't clickable while
 ordinary URLs are.
 
 ---
@@ -362,7 +362,7 @@ error connecting to /private/tmp/tmux-501/default (Operation not permitted)
 
 The single success was a manual `tmux` call from a Bash tool invocation. The denial persists with
 `sandbox.enabled: false` and `CLAUDE_CODE_DISABLE_SANDBOX=1`, so it isn't reachable from settings — it's
-an outer boundary, most likely the wrapper around Claude Code wrapper.
+an outer boundary, most likely a wrapper around Claude Code.
 
 The bell sidesteps it because **nothing in the chain spawns a process from Claude**. Claude writes `\a`
 in-process from its renderer (`notifyBell()`), the tmux server sets the flag, and the tmux server —

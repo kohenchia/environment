@@ -973,8 +973,8 @@ function wts() {
     else
         print "Usage: wts <repo> <branch>"
         print "  Creates a symlink in the current directory pointing to the worktree."
-        print "  e.g. wts dashboard feature/launch-ifp"
-        print "       -> dashboard@feature-launch-ifp"
+        print "  e.g. wts dashboard feature/new-login"
+        print "       -> dashboard@feature-new-login"
         return 1
     fi
 
@@ -1015,8 +1015,8 @@ function wtu() {
     else
         print "Usage: wtu <repo> <branch>"
         print "  Removes a worktree symlink from the current directory."
-        print "  e.g. wtu dashboard feature/launch-ifp"
-        print "       -> removes dashboard@feature-launch-ifp"
+        print "  e.g. wtu dashboard feature/new-login"
+        print "       -> removes dashboard@feature-new-login"
         return 1
     fi
 

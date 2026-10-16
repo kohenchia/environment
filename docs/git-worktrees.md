@@ -120,12 +120,12 @@ Create a local symlink pointing to a worktree. Useful for workspaces that aggreg
 
 ```bash
 cd ~/github/workspace
-wts dashboard feature/launch-ifp
-# ✓ dashboard@feature-launch-ifp -> ~/github/dashboard-wt/feature/launch-ifp
+wts dashboard feature/new-login
+# ✓ dashboard@feature-new-login -> ~/github/dashboard-wt/feature/new-login
 
 ls -l dashboard*
 # dashboard -> ../dashboard
-# dashboard@feature-launch-ifp -> ~/github/dashboard-wt/feature/launch-ifp
+# dashboard@feature-new-login -> ~/github/dashboard-wt/feature/new-login
 ```
 
 The symlink name is `<repo>@<branch>` with slashes replaced by hyphens.
@@ -135,8 +135,8 @@ The symlink name is `<repo>@<branch>` with slashes replaced by hyphens.
 ## `wtu` — Unlink a Worktree Symlink
 
 ```bash
-wtu dashboard feature/launch-ifp
-# ✓ Removed dashboard@feature-launch-ifp
+wtu dashboard feature/new-login
+# ✓ Removed dashboard@feature-new-login
 ```
 
 ---
