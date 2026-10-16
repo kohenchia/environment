@@ -21,6 +21,14 @@ BIN = CORE_ROOT / "bin" / "stella"
 CALL = "~/.local/bin/stella"
 
 
+def headless_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment for a `claude -p` run Stella starts. STELLA_HEADLESS keeps her hooks quiet.
+    CLAUDE_CODE_ENTRYPOINT names the session's origin; its default for `-p`, `sdk-cli`, is one
+    Claude Code leaves out of the `--resume` / `/resume` picker, so those sessions could only be
+    resumed by id. Any other value lists them."""
+    return {**(os.environ if base is None else base), "STELLA_HEADLESS": "1", "CLAUDE_CODE_ENTRYPOINT": "stella"}
+
+
 def _expand(p: str | os.PathLike[str]) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(str(p))))
 

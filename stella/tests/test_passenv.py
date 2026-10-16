@@ -200,3 +200,15 @@ def test_scheduler_alerts_once_while_waiting(env, env_claude):
     for _ in range(3):
         env.run("scheduler", "--once")
     assert sum(e.get("key") == "scheduler:pass-env" for e in env.events()) == 1
+
+
+def test_headless_runs_are_listed_by_the_resume_picker(env, env_claude):
+    """`claude -p` defaults to the `sdk-cli` entrypoint, which the resume picker hides."""
+    out, _ = env_claude
+    probe = env.tmp / "claude-entry"
+    probe.write_text(f'#!/bin/sh\necho "$CLAUDE_CODE_ENTRYPOINT" >> "{out}/entry.txt"\n')
+    probe.chmod(0o755)
+    env.write_config(claude_bin=str(probe))
+    env.run("nightly", "--date", "2026-01-02", env={"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
+    entries = (out / "entry.txt").read_text().split()
+    assert entries and set(entries) == {"stella"}

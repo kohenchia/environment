@@ -23,7 +23,7 @@ import subprocess
 import time
 
 from stella import daily, ledger
-from stella.config import BIN, settings, store_dir
+from stella.config import BIN, headless_env, settings, store_dir
 
 CATCH_UP_EVERY = 30 * 60  # seconds between catch-up attempts from sessions
 
@@ -221,6 +221,6 @@ def catch_up_if_needed() -> None:
         with log.open("a") as out:
             subprocess.Popen([str(BIN), "scheduler", "--once", "--in-session"], stdin=subprocess.DEVNULL, stdout=out,
                              stderr=subprocess.STDOUT, start_new_session=True,
-                             env={**os.environ, "STELLA_HEADLESS": "1"})
+                             env=headless_env())
     except OSError:
         pass

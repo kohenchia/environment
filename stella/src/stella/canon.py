@@ -180,8 +180,7 @@ def run_eval(only: list[str] | None = None, model: str = "sonnet") -> dict:
 
 
 def _env() -> dict:
-    import os
-
     from stella import passenv
+    from stella.config import headless_env
 
-    return passenv.apply({**os.environ, "STELLA_HEADLESS": "1"})
+    return passenv.apply(headless_env())
