@@ -10,7 +10,7 @@ import sys
 from stella import tmuxctl
 from stella.config import BIN, settings, store_dir
 
-WINDOW = "stella-hq"
+WINDOW = "stella"
 CRON = "stella-cron"
 
 

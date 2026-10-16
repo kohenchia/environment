@@ -30,7 +30,7 @@ The CLI is `stella`. **Always invoke it as `~/.local/bin/stella`**, exactly that
 
 | Where | Which messages are yours | After your turn |
 | --- | --- | --- |
-| **HQ** (the `stella-hq` window) | All of them; no "S," needed | Still you |
+| **HQ** (the `stella` window and session) | All of them; no "S," needed | Still you |
 | Any other session | Only the turn addressed to you | The session answers as itself again. Don't keep acting as Stella |
 | A team window | Only turns addressed to you; otherwise the owner is talking to the lead | Same |
 

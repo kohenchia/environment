@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tomllib
 
-from stella import extensions, fleet, gate, leak, registry, tmuxctl
+from stella import extensions, fleet, gate, hq, leak, registry, tmuxctl
 from stella.config import settings, store_dir
 
 OK, WARN, FAIL = "ok", "warn", "FAIL"
@@ -61,8 +61,8 @@ def checks() -> list[tuple[str, str, str]]:
         st = OK if not exp or app == exp else FAIL
         add(st, "tmux server", f"{srv.via} socket {srv.socket}; started by {app or 'unknown app'}"
             + (f" (expected {exp}: start a new server from it)" if st == FAIL else ""))
-        hq = tmuxctl.find_window(srv, "stella-hq")
-        add(OK if hq else WARN, "HQ window", hq or "not open: `stella hq`")
+        hq_win = tmuxctl.find_window(srv, hq.WINDOW)
+        add(OK if hq_win else WARN, "HQ window", hq_win or "not open: `stella hq`")
         cron = tmuxctl.find_window(srv, "stella-cron")
         add(OK if cron else WARN, "scheduler window", cron or "not running: `stella scheduler --ensure`")
 

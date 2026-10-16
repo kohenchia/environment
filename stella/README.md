@@ -36,7 +36,7 @@ stella doctor    # check everything
 
 | Where | What counts as talking to her |
 | --- | --- |
-| HQ (`stella hq`, window `stella-hq`) | Every message |
+| HQ (`stella hq`, window and session `stella`) | Every message |
 | Any other session | A message that starts with `Stella`, `S,` or `S:`, or says "ask Stella". Only that turn is hers; the next plain message is for the session again |
 | A team's window | Plain messages go to the team lead; address her to talk to her |
 
