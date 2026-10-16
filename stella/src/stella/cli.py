@@ -216,7 +216,16 @@ def cmd_search(a):
 def cmd_run(a):
     from stella import run
 
-    print(run.run(fresh=a.fresh))
+    r = run.run(fresh=a.fresh)
+    if isinstance(r, int):
+        return r
+    print(r)
+
+
+def cmd_stop(a):
+    from stella import run
+
+    print(run.stop(keep_scheduler=a.keep_scheduler))
 
 
 def cmd_scheduler(a):
@@ -461,6 +470,8 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=10)
     sp = c("run", cmd_run, "Run Stella: her own session, where every message is to her (and the scheduler in the background)")
     sp.add_argument("--fresh", action="store_true", help="start a new conversation (nothing is lost: state is on disk)")
+    sp = c("stop", cmd_stop, "Stop Stella: her session and the background scheduler (launched teams keep running)")
+    sp.add_argument("--keep-scheduler", action="store_true", help="stop only her session")
     sp = c("scheduler", cmd_scheduler, "Run the daily/nightly scheduler")
     sp.add_argument("--ensure", action="store_true", help="start the background scheduler unless it is running")
     sp.add_argument("--stop", action="store_true", help="stop the background scheduler")

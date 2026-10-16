@@ -29,6 +29,7 @@ and installs the `stella` plugin into Claude Code. Then, inside tmux:
 
 ```
 stella run       # run Stella here (and the scheduler in the background)
+stella stop      # stop her session and the scheduler (launched teams keep running)
 stella doctor    # check everything
 ```
 

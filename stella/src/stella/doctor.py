@@ -61,8 +61,9 @@ def checks() -> list[tuple[str, str, str]]:
         st = OK if not exp or app == exp else FAIL
         add(st, "tmux server", f"{srv.via} socket {srv.socket}; started by {app or 'unknown app'}"
             + (f" (expected {exp}: start a new server from it)" if st == FAIL else ""))
-        win = tmuxctl.find_window(srv, run.WINDOW)
-        add(OK if win else WARN, "Stella's window", win or "not open: `stella run`")
+
+    me = run.running()
+    add(OK if me else WARN, "Stella's session", f"running (pid {me['pid']})" if me else "not running: `stella run`")
     pid = scheduler.running_pid()
     add(OK if pid else WARN, "scheduler", f"running (pid {pid})" if pid else "not running: `stella run` or `stella scheduler --ensure`")
 
