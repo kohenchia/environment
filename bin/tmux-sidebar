@@ -11,7 +11,6 @@
 #   tmux-sidebar ensure [W]   give window W (default: current) a sidebar if it lacks one
 #   tmux-sidebar ensure-all   the same for every window
 #   tmux-sidebar dock [W]     put W's sidebar back at the far left, full height, fixed width
-#   tmux-sidebar width [N|+N|-N]  show, set or nudge the sidebar width, in every window
 #   tmux-sidebar cycle-layout  next-layout for the tool panes only, sidebar kept out of it
 #   tmux-sidebar poke         redraw every sidebar now
 #   tmux-sidebar toggle       turn sidebars on/off everywhere (also swaps the top-bar tabs back in)
@@ -95,19 +94,6 @@ dock() {
     ensure "$win"
     pane="$(sidebar_pane_of "$win")"
     [[ -n "$pane" ]] || return 0
-    # Dragged by hand? The window is as wide as when we last docked it, yet the
-    # sidebar is not its configured width: nobody else could have done that, so the
-    # new width is the one wanted. (A terminal resize changes the window width; zoom
-    # hides the sidebar's real size.)
-    local now_w seen_w pane_w
-    read -r now_w pane_w zoom <<<"$(tmux display -p -t "$pane" '#{window_width} #{pane_width} #{window_zoomed_flag}')"
-    seen_w="$(tmux show -wqv -t "$win" @sidebar_winw)"
-    tmux set -w -t "$win" @sidebar_winw "$now_w"
-    if [[ "$zoom" == 0 && "$seen_w" == "$now_w" && "$pane_w" != "$width" ]] \
-        && ((pane_w >= min_width && pane_w <= now_w / 2)); then
-        set_width "$pane_w"
-        return 0
-    fi
     # Already where it belongs? Then do nothing, which is also what stops the
     # layout-changed hook from calling itself.
     [[ "$(tmux display -p -t "$pane" '#{pane_at_left}#{pane_at_top}#{pane_at_bottom}#{pane_width}')" == "111$width" ]] && return 0
@@ -121,35 +107,6 @@ dock() {
     other="$(tmux list-panes -t "$win" -F '#{pane_id} #{@sidebar}' | awk '$2 != 1 { print $1; exit }')"
     [[ -n "$other" ]] || return 0
     tmux join-pane -d -f -b -h -l "$width" -s "$pane" -t "$other" 2>/dev/null
-}
-
-# Make $1 columns the sidebar width everywhere, now and for windows made later.
-set_width() {
-    local w="$1" win
-    ((w < min_width)) && w=$min_width
-    width="$w"
-    tmux set -g @sidebar_width "$w"
-    tmux list-windows -a -F '#{window_id}' | while read -r win; do
-        local pane
-        pane="$(sidebar_pane_of "$win")"
-        [[ -n "$pane" ]] || continue
-        tmux resize-pane -t "$pane" -x "$w" 2>/dev/null
-        tmux set -w -t "$win" @sidebar_winw "$(tmux display -p -t "$win" '#{window_width}')"
-    done
-    poke
-}
-
-# width            show it
-# width 30         set it
-# width +2 / -2    nudge it
-adjust_width() {
-    local arg="${1:-}"
-    case "$arg" in
-        "")      tmux display-message "sidebar width $width" ;;
-        +* | -*) set_width $((width + arg)); tmux display-message "sidebar width $width" ;;
-        *[!0-9]*) echo "usage: tmux-sidebar width [N|+N|-N]" >&2; return 2 ;;
-        *)       set_width "$arg"; tmux display-message "sidebar width $width" ;;
-    esac
 }
 
 # Cmd+Shift+Space. tmux's layout presets treat pane 1 as the "main" pane, which
@@ -306,10 +263,9 @@ case "${1:-}" in
     run)        run ;;
     ensure)     ensure "${2:-}" ;;
     ensure-all) tmux list-windows -a -F '#{window_id}' | while read -r w; do ensure "$w"; done ;;
-    width)      adjust_width "${2:-}" ;;
     dock)       dock "${2:-}" ;;
     cycle-layout) cycle_layout "${2:-}" ;;
     poke)       poke ;;
     toggle)     toggle ;;
-    *)          echo "usage: tmux-sidebar run|ensure [window]|ensure-all|width [N|+N|-N]|dock [window]|cycle-layout|poke|toggle" >&2; exit 2 ;;
+    *)          echo "usage: tmux-sidebar run|ensure [window]|ensure-all|dock [window]|cycle-layout|poke|toggle" >&2; exit 2 ;;
 esac

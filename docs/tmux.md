@@ -102,7 +102,6 @@ can never retitle your project tab. `renumber-windows` is on, so closing a tab r
 | `Cmd+Shift+D` | Split down |
 | `Cmd+Shift+←↑↓→` | Move focus between panes |
 | `Cmd+Opt+←↑↓→` | Move the pane itself in that direction |
-| `Cmd+Opt+Ctrl+←↑↓→` | Resize the pane (hold to keep resizing); not Cmd+Ctrl, which collided with tab moves |
 | `Cmd+Shift+Enter` | Zoom the pane in / out |
 | `Cmd+Shift+Space` | Cycle pane layouts |
 | `Cmd+R` | Rename the pane (sets the border label) |
@@ -442,15 +441,13 @@ Clicking a row jumps to that window.
 How it works: tmux has no vertical window list, so each window carries one narrow pane (flagged
 `@sidebar`) running `bin/tmux-sidebar run`, which redraws `tmux list-windows`. An `after-new-window`
 hook adds it to new windows, `window-layout-changed` docks it back to the far left at `@sidebar_width`
-(24 until you resize it), and reloading the config adds it to windows that already exist. It never takes focus.
+(24 columns, fixed), and reloading the config adds it to windows that already exist. It never takes focus.
 
 | Thing | Behaviour |
 |---|---|
 | `C-b b` | Toggle sidebars everywhere. Off puts the tabs back in the top bar. |
 | `Cmd+Shift+←↑↓→` | Never rests on the sidebar: a hook hands focus to its neighbour, even after a click or a closed pane |
 | `Cmd+Opt+←↑↓→` | Will not swap a pane with the sidebar |
-| Drag the sidebar's right border | Resizes it, in every window, and the width sticks (min 12) |
-| `C-b <` / `C-b >` | Narrower / wider by 2 (hold to repeat); `tmux-sidebar width 30` sets it, `tmux-sidebar width` shows it |
 | `Cmd+Shift+Space` | Cycles layouts of the tool panes; the sidebar stays put |
 | `Cmd+Shift+Enter` | Zooming a pane hides the sidebar until you unzoom |
 | Pane labels | Numbered from the first tool pane, not the sidebar |
@@ -485,7 +482,7 @@ process out of a project tab so it stops competing for space, or pulling a shell
 working in. Add `-h`/`-v` to control which way the target splits, and `-d` to leave the focus where
 it is instead of following the pane.
 
-Dragging a pane border with the mouse resizes it; that works out of the box with `mouse on`.
+Dragging a pane border does nothing: border drags are unbound, because the sidebar's width is fixed and resizing it re-fired the layout hook in every window (a refresh loop). There is no key, command or mouse gesture to resize the sidebar.
 
 ---
 
