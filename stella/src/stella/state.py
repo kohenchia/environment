@@ -1,4 +1,4 @@
-"""Fold the ledger into current state: open orders, teams, attention items.
+"""Fold the ledger into current state: open orders, follow-ups, teams, attention items.
 
 The ledger grows forever; this state is bounded by what is *open*, not by history.
 Only renderings of it (the brief, the delta) ever enter a model's context.
@@ -76,6 +76,18 @@ class Team:
 
 
 @dataclass
+class Followup:
+    """"After teams X and Y are done, do Z": Stella's own reminder, not an order from the owner."""
+
+    seq: int
+    ts: dt.datetime
+    text: str
+    after: list[str]
+    status: str = "open"  # open | done | cancelled
+    note: str | None = None
+
+
+@dataclass
 class Attention:
     key: str
     seq: int
@@ -93,9 +105,28 @@ class State:
     acked: set[str] = field(default_factory=set)
     push_questions: list[dict] = field(default_factory=list)
     push_intents: list[dict] = field(default_factory=list)
+    followups: dict[int, Followup] = field(default_factory=dict)
 
     def open_orders(self) -> list[Order]:
         return [o for o in self.orders.values() if o.status == "open" and o.kind == "instruction"]
+
+    def open_followups(self) -> list[Followup]:
+        return sorted((f for f in self.followups.values() if f.status == "open"), key=lambda f: f.seq)
+
+    def waiting_on(self, f: Followup) -> list[str]:
+        """The teams a follow-up still waits for, each with why ("beta (running)"); empty means READY.
+        Only `stella done` counts as finished: a team that exited without it has not done its part."""
+        out = []
+        for name in f.after:
+            t = self.teams.get(name)
+            if not t:
+                out.append(f"{name} (not launched)")
+            elif t.status != "done":
+                out.append(f"{name} ({t.status})")
+        return out
+
+    def ready_followups(self) -> list[Followup]:
+        return [f for f in self.open_followups() if not self.waiting_on(f)]
 
     def attention(self, now: dt.datetime | None = None) -> list[Attention]:
         now = now or ledger.now()
@@ -207,6 +238,15 @@ def fold(since_events=None) -> State:
             st.push_questions.append(ev)
         elif t == "push_intent":
             st.push_intents.append(ev)
+        elif t == "followup":
+            st.followups[ev["seq"]] = Followup(
+                seq=ev["seq"], ts=ts, text=ev.get("text", ""), after=list(ev.get("after", []))
+            )
+        elif t == "followup_close":
+            f = st.followups.get(ev.get("followup", -1))
+            if f:
+                f.status = ev.get("status", "done")
+                f.note = ev.get("note")
     return st
 
 

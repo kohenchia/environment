@@ -67,10 +67,16 @@ def describe(ev: dict) -> str:
         return f"#{ev['seq']} restarted {ev.get('team')} (pass_env {ev.get('pass_env') or 'not set'}), conversation resumed"
     if t == "alert":
         return f"#{ev['seq']} alert: {_clip(ev.get('text', ''))}"
+    if t == "followup":
+        return f"#{ev['seq']} follow-up after {', '.join(ev.get('after', []))}: {_clip(ev.get('text', ''))}"
+    if t == "followup_close":
+        return f"#{ev['seq']} closed follow-up #{ev.get('followup')} as {ev.get('status')}"
+    if t == "wake":
+        return f"#{ev['seq']} woke Stella: {_clip(ev.get('text', ''))}"
     return f"#{ev['seq']} {t}"
 
 
-QUIET = {"ack", "started", "push_question", "push_intent", "clear_alert", "reaped"}
+QUIET = {"ack", "started", "push_question", "push_intent", "clear_alert", "reaped", "wake"}
 
 
 def delta(session_id: str, since: int, st: State | None = None) -> list[str]:
@@ -98,6 +104,17 @@ def conflict_lines(st: State, order_seq: int) -> list[str]:
     return out
 
 
+def followup_lines(st: State, now: dt.datetime | None = None) -> list[str]:
+    """Each open follow-up, READY when every team it waits for has finished, else naming the rest."""
+    now = now or ledger.now()
+    out = []
+    for f in st.open_followups():
+        waiting = st.waiting_on(f)
+        tag = f"READY ({', '.join(f.after)} finished)" if not waiting else f"waiting on {', '.join(waiting)}"
+        out.append(f"- #{f.seq} {tag}, {_age(f.ts, now)} ago: {_clip(f.text)}")
+    return out
+
+
 def render(st: State) -> str:
     cap = settings().brief_lines
     now = ledger.now()
@@ -105,6 +122,7 @@ def render(st: State) -> str:
 
     att = st.attention(now)
     sections.append(("Needs you", [f"- {_clip(a.text, 130)}" for a in att], 1))
+    sections.append(("Follow-ups", followup_lines(st, now), 1))
 
     oo = sorted(st.open_orders(), key=lambda o: o.seq, reverse=True)
     order_lines = []
@@ -149,7 +167,7 @@ def render(st: State) -> str:
     if omitted:
         out.append(
             "+" + ", ".join(f"{n} more in {t.lower()}" for t, n in omitted.items())
-            + ": `~/.local/bin/stella orders`, `… attention`, `… fleet`"
+            + ": `~/.local/bin/stella orders`, `… attention`, `… followup list`, `… fleet`"
         )
     if len(out) == 1:
         out.append("Nothing open.")

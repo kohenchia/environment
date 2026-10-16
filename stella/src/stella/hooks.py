@@ -4,10 +4,13 @@
   Stella's own session, always). If it is: record it verbatim in the ledger *before the model runs*,
   then inject the persona, what other sessions recorded since this session last
   looked, and possible conflicts. If it isn't: hand the turn back to the session.
+  In Stella's own session, a message starting `[Stella] ` is a wake line typed by
+  her tooling (wake.py): a system note, never an order.
 * SessionStart: in Stella's own session, inject the full context and brief (also
   after /compact). In a team window, record which session is the lead. Anywhere,
   if the scheduler is down and a run is overdue, start a catch-up pass.
-* SessionEnd: a team lead that exits without `stella done` raises an attention item.
+* SessionEnd: a team lead that exits without `stella done` raises an attention item,
+  and unless the owner closed it by hand, wakes Stella.
 * PreToolUse: the push prompt (a push from a repo with a remote asks the owner first) and the leak guard.
 * PostToolUse: remembers an approved push's head so it is not asked twice.
 """
@@ -20,13 +23,20 @@ import re
 import sys
 import traceback
 
-from stella import address, brief, context, gate, leak, ledger, notify, run, scheduler, sessions, state, targets
+from stella import address, brief, context, gate, leak, ledger, notify, run, scheduler, sessions, state, targets, wake
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
     " do not act as Stella or relay to teams."
 )
 UNAVAILABLE = "STELLA LEDGER UNAVAILABLE ({err}). Tell the owner; do not act on orders until it is fixed."
+SYSTEM_NOTE = (
+    "This message was typed into your window by Stella's own tooling (a wake line or a restart note), not by"
+    " {owner}. It is not an order: nothing was recorded for it, and it neither opens nor closes any order."
+    " If it is a wake line: review your open follow-ups and the fleet, act on what is unblocked (READY follow-ups;"
+    " close each with `~/.local/bin/stella followup close N` once done), then tell {owner} in a line or two what"
+    " happened and what you did. If nothing is unblocked, say so in one line."
+)
 
 
 def _emit(event: str, text: str) -> None:
@@ -67,6 +77,9 @@ def prompt(data: dict) -> None:
     addressed = own or address.is_addressed(text)
     sess = sessions.load(sid)
 
+    if own and wake.is_wake_line(text):
+        return _system_note(sid, sess)
+
     if not addressed:
         if team and sess.get("seen_first") and not text.startswith("[Stella]"):
             try:
@@ -92,6 +105,8 @@ def prompt(data: dict) -> None:
         st = state.fold()
         delta = brief.delta(sid, sess.get("cursor", 0))
         conflicts = brief.conflict_lines(st, order["seq"]) if kind == "instruction" else []
+        woke = wake.drain() if own else None  # news that came while she was busy, not yet typed to her
+        followups = brief.followup_lines(st) if own else []
     except Exception as e:  # noqa: BLE001 - the model must hear about any failure
         _emit("UserPromptSubmit", UNAVAILABLE.format(err=f"{type(e).__name__}: {e}"))
         return
@@ -111,8 +126,39 @@ def prompt(data: dict) -> None:
             " if it does, ask the owner before acting, then record the outcome with"
             " `~/.local/bin/stella decide \"...\" --supersedes N`:\n" + "\n".join(f"- {c}" for c in conflicts)
         )
+    if woke:
+        parts.append(woke)
+    if followups:
+        parts.append(FOLLOWUPS + "\n".join(followups))
     sess["cursor"] = st.last_seq
     sess["last_addressed"] = True
+    sessions.save(sid, sess)
+    _emit("UserPromptSubmit", "\n\n".join(parts))
+
+
+FOLLOWUPS = "Your open follow-ups (act on READY ones; `~/.local/bin/stella followup close N` when done):\n"
+
+
+def _system_note(sid: str, sess: dict) -> None:
+    """A wake line (or restart note) in Stella's own session: context for her turn, and no order."""
+    from stella.config import settings
+
+    try:
+        newer = wake.drain()  # news since the line was typed: told now, not typed again
+        st = state.fold()
+        delta = brief.delta(sid, sess.get("cursor", 0))
+        followups = brief.followup_lines(st)
+    except Exception as e:  # noqa: BLE001
+        _emit("UserPromptSubmit", UNAVAILABLE.format(err=f"{type(e).__name__}: {e}"))
+        return
+    parts = [SYSTEM_NOTE.format(owner=settings().owner)]
+    if newer:
+        parts.append(newer)
+    if followups:
+        parts.append(FOLLOWUPS + "\n".join(followups))
+    if delta:
+        parts.append("Since this session last looked, other sessions recorded:\n" + "\n".join(f"- {d}" for d in delta))
+    sess["cursor"] = st.last_seq
     sessions.save(sid, sess)
     _emit("UserPromptSubmit", "\n\n".join(parts))
 
@@ -140,6 +186,7 @@ def session_start(data: dict) -> None:
             sess.update(cursor=st.last_seq, context_loaded=True, own=True)
             sessions.save(sid, sess)
             run.remember_session(sid)
+            wake.cover_all()  # the brief below has it all; nothing is left to wake her for
         except Exception as e:  # noqa: BLE001
             text = UNAVAILABLE.format(err=f"{type(e).__name__}: {e}")
         _emit("SessionStart", text)
@@ -167,10 +214,12 @@ def session_end(data: dict) -> None:
     st = state.fold()
     t = st.teams.get(team)
     if t and t.status not in {"done", "ended"}:
-        ledger.append("ended", by="hook", team=team, session=data.get("session_id"), reason=data.get("reason"))
+        ledger.append("ended", by="hook", team=team, session=data.get("session_id"), reason=data.get("reason"),
+                      window_closed=wake.window_gone(t) or None)
         t.end_reason = data.get("reason")
         if t.end_reason != state.DELIBERATE_END:
             notify.notify("Stella", "T" + t.ended_text()[1:])
+        wake.kick()
 
 
 _WRITEY = re.compile(r"(>|\btee\b|\bsed\s+-i|\bperl\s+-[pi]|<<|\bcp\b|\bmv\b|\bgit\s+commit\b|\bpython3?\b|\bcat\b.*>|\bprintf\b|\becho\b)")

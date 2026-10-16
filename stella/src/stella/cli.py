@@ -198,11 +198,12 @@ def cmd_reap(a):
 
 
 def cmd_report(a):
-    from stella import notify
+    from stella import notify, wake
 
     ev = ledger.append("report", by="cli", team=a.team, text=a.message, needs_you=a.needs_you or None)
     if a.needs_you:
         notify.notify(f"Stella: {a.team} needs you", a.message)
+        wake.kick()
     print(f"recorded #{ev['seq']}")
     if a.needs_you:
         print(
@@ -213,11 +214,49 @@ def cmd_report(a):
 
 
 def cmd_done(a):
-    from stella import notify
+    from stella import notify, wake
 
     ev = ledger.append("done", by="cli", team=a.team, text=a.message)
     notify.notify(f"Stella: {a.team} finished", a.message)
+    wake.kick()
     print(f"recorded #{ev['seq']}; the owner has been notified")
+
+
+def cmd_followup(a):
+    from stella import wake
+
+    st = state.fold()
+    if a.action == "add":
+        after = [t.strip() for t in a.after.split(",") if t.strip()]
+        if not after:
+            raise SystemExit("--after needs at least one team name")
+        ev = ledger.append("followup", by="cli", text=a.text, after=after, session=_session())
+        st = state.fold()
+        waiting = st.waiting_on(st.followups[ev["seq"]])
+        if waiting:
+            print(f"recorded follow-up #{ev['seq']}, waiting on {', '.join(waiting)}. You will be woken when it is READY.")
+        else:
+            wake.seen(ev["seq"])
+            print(f"recorded follow-up #{ev['seq']}; it is READY now (every team named has finished): act on it.")
+        return
+    if a.action == "list":
+        rows = brief.followup_lines(st) if not a.all else [
+            f"- #{f.seq} [{f.status}] after {', '.join(f.after)}: {' '.join(f.text.split())[:150]}"
+            for f in sorted(st.followups.values(), key=lambda f: f.seq)]
+        print("\n".join(rows) or "No open follow-ups.")
+        return
+    for seq in a.seq:
+        f = st.followups.get(seq)
+        if not f:
+            raise SystemExit(f"no follow-up #{seq}")
+        ledger.append("followup_close", by="cli", followup=seq, status=a.status, note=a.note, session=_session())
+        print(f"closed follow-up #{seq} as {a.status}")
+
+
+def cmd_wake(a):
+    from stella import wake
+
+    return wake.main()
 
 
 def cmd_search(a):
@@ -282,6 +321,9 @@ def cmd_scheduler(a):
         return
     if a.once:
         print(scheduler.run_once(in_session=a.in_session) or "nothing due")
+        return
+    if a.wake_check:
+        print(scheduler.wake_backstop() or "nothing pending")
         return
     return scheduler.run_forever()
 
@@ -485,6 +527,19 @@ def build() -> argparse.ArgumentParser:
     sp = c("done", cmd_done, "(team leads) report the order complete")
     sp.add_argument("team")
     sp.add_argument("message")
+    sp = c("followup", cmd_followup, "Stella's follow-ups: \"after these teams are done, do this\"")
+    fsub = sp.add_subparsers(dest="action", required=True)
+    fp = fsub.add_parser("add", help="record a follow-up", description="record a follow-up")
+    fp.add_argument("text", help="what to do")
+    fp.add_argument("--after", required=True, help="the team(s) that must finish first, comma-separated")
+    fp = fsub.add_parser("list", help="open follow-ups, READY or waiting (or all with --all)")
+    fp.add_argument("--all", action="store_true")
+    fp = fsub.add_parser("close", aliases=["done"], help="close follow-ups")
+    fp.add_argument("seq", type=int, nargs="+")
+    fp.add_argument("--status", default="done", choices=["done", "cancelled"])
+    fp.add_argument("--note")
+    sp = sub.add_parser("wake")  # internal: the detached helper that types the wake line
+    sp.set_defaults(fn=cmd_wake)
     sp = c("search", cmd_search, "Search the whole ledger")
     sp.add_argument("query")
     sp.add_argument("--limit", type=int, default=10)
@@ -506,6 +561,7 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--ensure", action="store_true", help="start the background scheduler unless it is running")
     sp.add_argument("--stop", action="store_true", help="stop the background scheduler")
     sp.add_argument("--once", action="store_true", help="run whatever is due, then exit")
+    sp.add_argument("--wake-check", action="store_true", help="run the wake-line backstop once, then exit")
     sp.add_argument("--in-session", action="store_true", help=argparse.SUPPRESS)
     sp = c("daily", cmd_daily, "Write the daily log now")
     sp.add_argument("--date")

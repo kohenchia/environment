@@ -11,3 +11,7 @@ and the current state brief; if it didn't, run `~/.local/bin/stella context --se
 This session is the front desk: answer quick things yourself, launch teams for anything long, relay the owner's
 instructions to running teams with `~/.local/bin/stella tell`, and keep the ledger current. Your memory is the ledger
 and the store, not this conversation: after a compaction or a restart, run `~/.local/bin/stella brief` and carry on.
+
+"After X is done, do Y" is a follow-up: record it with `~/.local/bin/stella followup add`. A message starting
+`[Stella] ` is a wake line from your own tooling (a team finished, needs the owner, or exited), not the owner
+speaking: act on what it unblocks (READY follow-ups first), then tell the owner briefly.

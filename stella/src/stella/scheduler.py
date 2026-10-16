@@ -1,4 +1,5 @@
-"""The scheduler: runs the daily log at the configured time, then the nightly jobs.
+"""The scheduler: runs the daily log at the configured time, then the nightly jobs, and every
+`wake_check_minutes` looks for a wake line to Stella that never arrived (see wake.py).
 
 It runs as a detached background process started by `stella run` from the owner's
 terminal, not as a system service: a service manager may launch it without the file
@@ -122,16 +123,33 @@ def run_forever(interval: int = 60) -> int:
         print("another stella scheduler is already running")
         return 1
     (store_dir() / "scheduler.pid").write_text(str(os.getpid()))
-    print(f"{ledger.now():%Y-%m-%d %H:%M} stella scheduler: daily log at {settings().daily_time}; checking every {interval}s", flush=True)
+    every = settings().wake_check_minutes * 60
+    print(f"{ledger.now():%Y-%m-%d %H:%M} stella scheduler: daily log at {settings().daily_time}; checking every {interval}s;"
+          f" wake-line backstop every {every // 60}m", flush=True)
+    last_wake_check = 0.0
     while True:
         try:
             did = tick()
             if did:
                 print(f"{ledger.now():%Y-%m-%d %H:%M} ran daily+nightly for {', '.join(did)}", flush=True)
+            if every > 0 and time.monotonic() - last_wake_check >= every:
+                last_wake_check = time.monotonic()
+                r = wake_backstop()
+                if r:
+                    print(f"{ledger.now():%Y-%m-%d %H:%M} wake backstop: {r}", flush=True)
         except Exception as e:  # noqa: BLE001 - keep the loop alive, but say so
             ledger.append("alert", by="scheduler", key="scheduler:error", text=f"scheduler error: {type(e).__name__}: {e}")
             print(f"error: {e}", flush=True)
         time.sleep(interval)
+
+
+def wake_backstop(now: dt.datetime | None = None) -> str | None:
+    """A wake line that never arrived (the helper died, or she was busy until it gave up): send it now if
+    she is idle. Plain Python over the ledger and her screen; no model runs. None when nothing is pending."""
+    from stella import wake
+
+    r = wake.backstop(now)
+    return None if r.status == "nothing" else f"{r.status} {r.detail}".rstrip()
 
 
 def run_once(in_session: bool = False) -> list[str]:

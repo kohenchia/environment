@@ -46,6 +46,11 @@ class Settings:
     stale_days: int = 7
     brief_lines: int = 60
     delta_lines: int = 15
+    # The wake line (see wake.py): events this close together share one line, lines are at least this
+    # far apart, and the scheduler's backstop looks for a wake line that never arrived this often.
+    wake_merge_seconds: int = 20
+    wake_gap_seconds: int = 60
+    wake_check_minutes: int = 20
     guarded_repos: list[Path] = field(default_factory=list)
     # Environment variables forwarded from the launcher into every team session it opens.
     pass_env: list[str] = field(default_factory=list)
@@ -95,6 +100,9 @@ def settings() -> Settings:
         "stale_days",
         "brief_lines",
         "delta_lines",
+        "wake_merge_seconds",
+        "wake_gap_seconds",
+        "wake_check_minutes",
     ):
         if key in data:
             setattr(s, key, data[key])

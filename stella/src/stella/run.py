@@ -105,7 +105,8 @@ def _run_here(argv: list[str], srv) -> int:
     env = passenv.apply({**os.environ, ENV: "1"})
     try:
         p = subprocess.Popen(argv, cwd=os.path.expanduser("~"), env=env)
-        _update(pid=p.pid, window=None, pane=pane or None)
+        _update(pid=p.pid, window=None, pane=pane or None,
+                socket=srv.socket if srv and os.environ.get("TMUX") else None)  # where the wake line types
         try:
             return p.wait()
         except KeyboardInterrupt:
@@ -146,7 +147,7 @@ def run(fresh: bool = False, pass_env: str | None = None) -> str | int:
     w = tmuxctl.new_window(srv, WINDOW, os.path.expanduser("~"), _command(argv, creds),
                            env={k: v for k, v in creds.items() if v is not None})
     pid = srv.run("display-message", "-p", "-t", w, "#{pane_pid}", check=False).stdout.strip()
-    _update(pid=int(pid) if pid.isdigit() else None, window=w, pane=None)
+    _update(pid=int(pid) if pid.isdigit() else None, window=w, pane=None, socket=srv.socket)
     return f"Opened Stella in window {w}. {sched}" + (f" {switched}" if switched else "")
 
 

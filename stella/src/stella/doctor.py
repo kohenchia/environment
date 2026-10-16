@@ -8,7 +8,7 @@ import subprocess
 import sys
 import tomllib
 
-from stella import extensions, fleet, gate, leak, registry, run, scheduler, tmuxctl
+from stella import extensions, fleet, gate, leak, registry, run, scheduler, tmuxctl, wake
 from stella.config import settings, store_dir
 
 OK, WARN, FAIL = "ok", "warn", "FAIL"
@@ -64,6 +64,10 @@ def checks() -> list[tuple[str, str, str]]:
 
     me = run.running()
     add(OK if me else WARN, "Stella's session", f"running (pid {me['pid']})" if me else "not running: `stella run`")
+    if me:
+        t = wake.target()
+        add(WARN if isinstance(t, str) else OK, "wake line target",
+            f"can't type to her: {t}" if isinstance(t, str) else f"her pane {t.pane} (window {t.window})")
     pid = scheduler.running_pid()
     add(OK if pid else WARN, "scheduler", f"running (pid {pid})" if pid else "not running: `stella run` or `stella scheduler --ensure`")
 
