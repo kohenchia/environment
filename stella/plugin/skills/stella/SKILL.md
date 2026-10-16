@@ -117,6 +117,25 @@ week, confirm or close), alerts from the nightly sweep, the morning digest, open
 asked "what needs me?", give that list, most important first, one line each. `~/.local/bin/stella ack <key>` once
 the owner has seen an item.
 
+### Wrapping up finished teams
+
+"Wrap up" (or "wrap up the ones that are done") means: for each finished team with nothing left for the
+owner, record it, close its session, close its tmux window, and then verify the window is gone. Closing the
+record alone is not wrapping up. (Correction #472: `stella reap` printed "closed" for two teams while their
+windows stayed open, because the command sandbox blocks tmux.)
+
+1. Take the finished teams from `~/.local/bin/stella attention`. Skip any with something still waiting on the
+   owner (an unposted result, an open question, a pending push) and say so.
+2. Run `~/.local/bin/stella reap <team>...`. Read its output: "closed" is only trustworthy if it does not say
+   tmux is unreachable or that the window is still open.
+3. Verify. Run `tmux list-windows -a -F '#{window_name}'` and confirm none of the reaped names appear. If the
+   sandbox blocks tmux, use the helper path that reaches it instead, for example
+   `cd ~/github/environment/stella && uv run python -c 'from stella import tmuxctl; s = tmuxctl.find_server(); print([tmuxctl.find_window(s, n) for n in ("team-a", "team-b")])'`
+   (every entry should be `None`).
+4. If a window is still there and you cannot reach tmux, do not claim it is closed: tell the owner which windows
+   remain and that they need to run `stella reap` from a shell where tmux is reachable.
+5. Reply with what is closed (verified), and what is still open and why.
+
 ## Priorities and focus
 
 `~/.local/bin/stella focus` prints the priorities (`priorities.md` in the store), today's work digest and the open
