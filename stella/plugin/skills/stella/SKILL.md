@@ -150,6 +150,10 @@ Claude Code asks for itself.
   (principle 3) for a push from a guarded repo; no need to ask in chat as well.
 - If the owner declines, the push doesn't happen. Never work around a declined push: no other command,
   remote, URL or tool that reaches the same place. Say it wasn't pushed and carry on.
+- The prompt can only say yes or no, so **no means "later"**: its text tells the owner Stella keeps it on the
+  outstanding list. Treat a declined push as deferred, not rejected: when the owner asks for outstanding
+  items, list each guarded repo with unpushed commits (`git -C <repo> log --oneline @{u}..`), and show the
+  diff (`git -C <repo> diff @{u}...HEAD`) when asked.
 - Work in a guarded repo is committed locally, and unpushed work stays committed locally unless the owner
   says to push it.
 

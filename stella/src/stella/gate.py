@@ -142,7 +142,7 @@ def _touched(command: str, cwd: str) -> dict[Path, Path]:
 
 
 def _summary(where: Path) -> str:
-    """Branch and how far it is ahead of its upstream, as seen from `where`."""
+    """What a push from `where` would send: the target, the commits (newest first) and the diffstat."""
     d = where if where.is_dir() else where.parent
 
     def git(*args: str) -> str:
@@ -157,9 +157,17 @@ def _summary(where: Path) -> str:
     if not upstream and git("rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"):
         upstream = f"origin/{branch}"
     if not upstream:
-        return f"branch {branch}, not on the remote yet"
-    ahead = git("rev-list", "--count", f"{upstream}..HEAD") or "?"
-    return f"branch {branch}, {ahead} commit(s) ahead of {upstream}"
+        return f"{branch} is not on the remote yet"
+    count = git("rev-list", "--count", f"{upstream}..HEAD") or "?"
+    lines = [f"{branch} is {count} commit(s) ahead of {upstream}:"]
+    subjects = git("log", "--format=%h %s", "--max-count=5", f"{upstream}..HEAD").splitlines()
+    lines += [f"  {s[:90]}" for s in subjects]
+    if count.isdigit() and int(count) > len(subjects):
+        lines.append(f"  … and {int(count) - len(subjects)} more")
+    stat = git("diff", "--shortstat", f"{upstream}...HEAD")
+    if stat:
+        lines.append(f"  {stat}")
+    return "\n".join(lines)
 
 
 def check_bash(command: str, cwd: str) -> Verdict:
@@ -170,10 +178,12 @@ def check_bash(command: str, cwd: str) -> Verdict:
     if not touched:
         return Verdict()
     names = ", ".join(alias(r) for r in sorted(touched))
-    details = "; ".join((f"{alias(r)}: " if len(touched) > 1 else "") + _summary(w) for r, w in sorted(touched.items()))
+    details = "\n".join((f"{alias(r)}: " if len(touched) > 1 else "") + _summary(w) for r, w in sorted(touched.items()))
     shown = " ".join(command.split())
-    shown = shown if len(shown) <= 200 else shown[:199] + "…"
-    return Verdict("ask", f"Push {names}? {details}. Command: {shown}")
+    shown = shown if len(shown) <= 120 else shown[:119] + "…"
+    return Verdict("ask", f"Push {names}?\n{details}\n"
+                          f"Yes pushes. No holds it back: Stella keeps it on your outstanding list and can show the full diff.\n"
+                          f"({shown})")
 
 
 # ---------------------------------------------------------------- git hooks

@@ -50,7 +50,8 @@ def test_the_prompt_names_the_repo_and_branch(env, repo):
     _commit(env, repo)
     reason = _pretool_out(env, "git push origin main", repo)["permissionDecisionReason"]
     assert reason.startswith("Push dotfiles?")
-    assert "branch main, 1 commit(s) ahead of origin/main" in reason and "git push origin main" in reason
+    assert "main is 1 commit(s) ahead of origin/main" in reason and "change" in reason and "1 file changed" in reason
+    assert "outstanding list" in reason and "git push origin main" in reason
 
 
 def test_a_push_by_path_from_elsewhere_asks(env, repo):
@@ -62,7 +63,7 @@ def test_a_push_from_a_worktree_asks(env, repo):
     wt = env.tmp / "wt"
     env.git(repo, "worktree", "add", "-q", "-b", "feature", str(wt))
     out = _pretool_out(env, "git push origin feature", wt)
-    assert out["permissionDecision"] == "ask" and "branch feature" in out["permissionDecisionReason"]
+    assert out["permissionDecision"] == "ask" and "feature is" in out["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize("cmd", [
