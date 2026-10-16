@@ -86,7 +86,7 @@ the normal way.
 | `Cmd+T` | New tab in the same directory, named after it |
 | `Cmd+Shift+[` / `]` | Previous / next tab |
 | `Cmd+Shift+←` / `→` | Previous / next tab (same thing, arrow form) |
-| `Cmd+Ctrl+Shift+←` / `→` | Move the current tab left / right |
+| `Cmd+Ctrl+←` / `→` (or with Shift) | Move the current tab left / right (Shift is not reported on this Mac, so both work) |
 | `Cmd+Shift+R` | Rename the tab |
 | `Cmd+Shift+W` | Close the tab (asks first) |
 

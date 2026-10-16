@@ -100,8 +100,12 @@ bindings = [
   { key = "}", mods = "Command|Shift", chars = "\u001B[1;4C" },
 
   # reorder the tab itself
+  # Shift is not reported on these chords on this Mac (the terminal saw Cmd+Ctrl+Shift+Left as plain
+  # Cmd+Ctrl+Left: `cat -v` printed ^[[1;13D), so the same move is bound without it as well.
   { key = "ArrowLeft",  mods = "Command|Control|Shift", chars = "\u001B[1;8D" },
   { key = "ArrowRight", mods = "Command|Control|Shift", chars = "\u001B[1;8C" },
+  { key = "ArrowLeft",  mods = "Command|Control", chars = "\u001B[1;8D" },
+  { key = "ArrowRight", mods = "Command|Control", chars = "\u001B[1;8C" },
 
   # ── Panes = tools ───────────────────────────────────────────────────────
   { key = "D", mods = "Command", chars = "\u001Bd" },          # split right
