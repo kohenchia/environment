@@ -1,0 +1,16 @@
+#!/bin/sh
+# Entry point for the stella CLI. Hooks call this on every prompt, so it skips
+# `uv run` (slow) when the project's venv already exists.
+SELF="$0"
+while [ -L "$SELF" ]; do
+    LINK="$(readlink "$SELF")"
+    case "$LINK" in
+        /*) SELF="$LINK" ;;
+        *) SELF="$(dirname "$SELF")/$LINK" ;;
+    esac
+done
+ROOT="$(cd "$(dirname "$SELF")/.." && pwd -P)"
+if [ -x "$ROOT/.venv/bin/python" ]; then
+    exec "$ROOT/.venv/bin/python" -m stella "$@"
+fi
+exec uv run --quiet --project "$ROOT" python -m stella "$@"
