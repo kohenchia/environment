@@ -8,7 +8,8 @@
   after /compact). In a team window, record which session is the lead. Anywhere,
   if the scheduler is down and a run is overdue, start a catch-up pass.
 * SessionEnd: a team lead that exits without `stella done` raises an attention item.
-* PreToolUse: the push prompt (a push from a guarded repo asks the owner first) and the leak guard.
+* PreToolUse: the push prompt (a push from a repo with a remote asks the owner first) and the leak guard.
+* PostToolUse: remembers an approved push's head so it is not asked twice.
 """
 
 from __future__ import annotations
@@ -221,7 +222,14 @@ def _leak_hit(text: str, where: str, g: leak.Guard) -> str | None:
     )
 
 
-HANDLERS = {"prompt": prompt, "session-start": session_start, "session-end": session_end, "pretool": pretool}
+def posttool(data: dict) -> None:
+    """A push command ran, so the owner approved it (or the session was told to push): remember the head."""
+    if data.get("tool_name") == "Bash":
+        gate.record_approval((data.get("tool_input") or {}).get("command", ""), data.get("cwd") or os.getcwd())
+
+
+HANDLERS = {"prompt": prompt, "session-start": session_start, "session-end": session_end, "pretool": pretool,
+            "posttool": posttool}
 
 
 def main(event: str) -> int:

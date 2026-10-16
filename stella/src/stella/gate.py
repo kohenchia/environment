@@ -1,11 +1,13 @@
-"""Guarded repos: a push from one asks the owner first, and commits to one pass the leak guard.
+"""The push prompt for every repo that has a remote, and the leak guard for guarded repos.
 
 Guarded repos: the repo the core lives in, plus any listed in settings.
 
 * The push prompt. `check_bash` (run by the PreToolUse hook) spots a Claude
-  session's command that pushes from a guarded repo and returns an "ask"
-  verdict, so Claude Code shows the owner its own yes/no prompt before the
-  command runs. A push the owner types at a terminal is plain git.
+  session's command that pushes from any git repo with a remote (guarded or
+  not) and returns an "ask" verdict, so Claude Code shows the owner its own
+  yes/no prompt before the command runs. A push the owner types at a terminal
+  is plain git. A session launched with `--auto-push` (STELLA_AUTO_PUSH=1) was
+  told up front to push for the owner, so it is not asked.
 * The leak guard's git hooks. `install` puts `pre-commit` and `commit-msg`
   hooks in each guarded repo; `git_hook` runs them against the denylist.
 
@@ -15,6 +17,7 @@ and the unusable push URL it set on every remote.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shlex
@@ -24,7 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stella import leak
-from stella.config import BIN, settings
+from stella.config import BIN, settings, store_dir
 
 # The push URL the old push gate set on every remote. Kept only to recognise and remove it.
 BLOCKED_URL = "file:///STELLA-PUSH-GATE/push-with-stella-push"
@@ -70,6 +73,23 @@ def guarded_root(path: str | Path) -> Path | None:
     return None
 
 
+def _remote_root(path: str | Path) -> Path | None:
+    """The top of the git checkout `path` is in, if it has a remote to push to."""
+    p = Path(os.path.expanduser(str(path)))
+    d = p if p.is_dir() else p.parent
+    while d != d.parent and not d.exists():
+        d = d.parent
+    try:
+        top = subprocess.run(["git", "-C", str(d), "rev-parse", "--show-toplevel"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+        if not top:
+            return None
+        remotes = subprocess.run(["git", "-C", top, "remote"], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return Path(top).resolve() if remotes else None
+
+
 def alias(root: Path) -> str:
     return root.name
 
@@ -83,11 +103,16 @@ def resolve_alias(name: str) -> Path:
 
 # ---------------------------------------------------------------- the push prompt
 
-_SPLIT = re.compile(r"\s*(?:&&|\|\||;|\||\n|\$\(|`|\(|\))\s*")
-# `git … push`, but not `.git/hooks/pre-push` or `git remote set-url --push`.
-_PUSHY = re.compile(r"(?<![\w.-])git\s[^;&|\n]*?(?<![\w./=-])push(?![\w-])"
-                    r"|\bgh\s+(pr\s+(create|merge)|repo\s+sync|release\s+create)\b")
-_GH_API_WRITE = re.compile(r"\bgh\s+api\b.*(-X|--method)\s*(POST|PUT|PATCH|DELETE)", re.I)
+# What counts as a push is decided from the parsed command, never from its text: a commit message, a
+# grep pattern, a heredoc or a quoted argument that says "git push" is not a push.
+_HEREDOC = re.compile(r"(<<-?\s*(['\"]?)(\w+)\2[^\n]*\n).*?\n[ \t]*\3[ \t]*(?=\n|$)", re.S)
+_OPERATOR = re.compile(r"[;()<>|&\n`]+")
+_WRAPPERS = {"env", "command", "sudo", "time", "exec", "nohup", "nice", "builtin"}
+_SHELLS = {"bash", "sh", "zsh", "dash"}
+_GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix", "--config-env"}
+_GH_WRITES = {("pr", "create"), ("pr", "merge"), ("repo", "sync"), ("release", "create")}
+_API_WRITE = re.compile(r"^(-X|--method)(=|$)|^-X(POST|PUT|PATCH|DELETE)$", re.I)
+_API_METHOD = re.compile(r"POST|PUT|PATCH|DELETE", re.I)
 
 
 @dataclass
@@ -97,47 +122,103 @@ class Verdict:
 
 
 def _segments(cmd: str) -> list[list[str]]:
-    segs = []
-    for part in _SPLIT.split(cmd):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            segs.append(shlex.split(part, posix=True))
-        except ValueError:
-            segs.append(part.split())
-    return segs
+    """The command's simple commands, as word lists, split on operators outside quotes."""
+    cmd = _HEREDOC.sub(r"\1", cmd)
+    lex = shlex.shlex(cmd, posix=True, punctuation_chars=";()<>|&\n`")
+    lex.whitespace, lex.whitespace_split, lex.commenters = " \t\r", True, ""
+    try:
+        tokens = list(lex)
+    except ValueError:  # unbalanced quote: fall back to words, still never matching inside text
+        tokens = cmd.split()
+    segs: list[list[str]] = [[]]
+    for tok in tokens:
+        if _OPERATOR.fullmatch(tok):
+            segs.append([])
+        else:
+            segs[-1].append(tok)
+    return [seg for seg in segs if seg]
 
 
-def _touched(command: str, cwd: str) -> dict[Path, Path]:
-    """Guarded repos the command touches, each mapped to the directory it is touched from."""
-    here = Path(os.path.expanduser(cwd or os.getcwd()))
-    touched: dict[Path, Path] = {}
+def _kind(seg: list[str]) -> str | None:
+    """"git" or "gh" if this simple command pushes or writes to the remote, else None."""
+    i = 0
+    while i < len(seg) and (re.fullmatch(r"\w+=.*", seg[i]) or seg[i] in _WRAPPERS):
+        i += 1
+        while i < len(seg) and seg[i - 1] in _WRAPPERS and seg[i].startswith("-"):
+            i += 1
+    if i >= len(seg):
+        return None
+    word, args = os.path.basename(seg[i]), seg[i + 1:]
+    if word == "git":
+        j = 0
+        while j < len(args) and args[j].startswith("-"):
+            j += 2 if args[j] in _GIT_VALUE_OPTS else 1
+        return "git" if j < len(args) and args[j] == "push" else None
+    if word == "gh":
+        words, j = [], 0
+        while j < len(args) and len(words) < 2:
+            if args[j] in {"-R", "--repo"}:
+                j += 1
+            elif not args[j].startswith("-"):
+                words.append(args[j])
+            j += 1
+        if tuple(words) in _GH_WRITES:
+            return "gh"
+        if words[:1] == ["api"]:
+            for k, tok in enumerate(args):
+                if _API_WRITE.match(tok):
+                    nxt = args[k + 1] if k + 1 < len(args) else ""
+                    val = tok.split("=", 1)[1] if "=" in tok else nxt if tok.startswith("--") or len(tok) == 2 else tok[2:]
+                    if _API_METHOD.fullmatch(val.strip()):
+                        return "gh"
+        return None
+    if word in _SHELLS:
+        for k, tok in enumerate(args):
+            if tok.startswith("-") and not tok.startswith("--") and "c" in tok and k + 1 < len(args):
+                return "inner"  # resolved by `_walk`
+    return None
 
-    def add(path: Path | str) -> None:
-        r = guarded_root(path)
-        if r:
-            touched.setdefault(r, Path(os.path.expanduser(str(path))))
 
-    add(here)
+def _walk(command: str, here: Path, out: list[tuple[list[str], str, Path]]) -> None:
+    """Collect (words, kind, cwd) for every simple command that pushes, following `cd` and `sh -c '…'`."""
     for seg in _segments(command):
-        if not seg:
-            continue
         if seg[0] == "cd" and len(seg) > 1:
             target = Path(os.path.expanduser(seg[1]))
             here = target if target.is_absolute() else here / target
-            add(here)
+            continue
+        kind = _kind(seg)
+        if kind == "inner":
+            i = next(k for k, t in enumerate(seg) if os.path.basename(t) in _SHELLS)
+            args = seg[i + 1:]
+            k = next(k for k, t in enumerate(args) if t.startswith("-") and not t.startswith("--") and "c" in t)
+            _walk(args[k + 1], here, out)
+        elif kind:
+            out.append((seg, kind, here))
+
+
+def _touched(pushes: list[tuple[list[str], str, Path]], command: str) -> dict[Path, Path]:
+    """Repos with a remote that the pushing commands touch, each mapped to the directory it is touched from."""
+    touched: dict[Path, Path] = {}
+
+    def add(path: Path | str) -> None:
+        r = guarded_root(path) or _remote_root(path)
+        if r:
+            touched.setdefault(r, Path(os.path.expanduser(str(path))))
+
+    for seg, _, here in pushes:
+        add(here)
         for i, tok in enumerate(seg):
             if tok in {"-C", "--git-dir", "--work-tree", "-R", "--repo"} and i + 1 < len(seg):
                 add(here / os.path.expanduser(seg[i + 1]))
             elif tok.startswith(("/", "~", "./", "../")):
                 add(here / os.path.expanduser(tok) if not tok.startswith(("/", "~")) else tok)
-    for root in guarded_repos():
-        spellings = {str(root)}
-        if root.is_relative_to(Path.home()):
-            spellings |= {f"~/{root.relative_to(Path.home())}", f"$HOME/{root.relative_to(Path.home())}"}
-        if any(sp in command for sp in spellings):
-            touched.setdefault(root, root)
+        text = " ".join(seg)
+        for root in guarded_repos():
+            spellings = {str(root)}
+            if root.is_relative_to(Path.home()):
+                spellings |= {f"~/{root.relative_to(Path.home())}", f"$HOME/{root.relative_to(Path.home())}"}
+            if any(sp in text for sp in spellings):
+                touched.setdefault(root, root)
     return touched
 
 
@@ -170,11 +251,86 @@ def _summary(where: Path) -> str:
     return "\n".join(lines)
 
 
+def _git_out(where: Path, *args: str) -> str:
+    d = where if where.is_dir() else where.parent
+    try:
+        r = subprocess.run(["git", "-C", str(d), *args], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def _head(where: Path) -> str:
+    return _git_out(where, "rev-parse", "HEAD")
+
+
+_PLAIN_FLAGS = {"-u", "--set-upstream", "--no-verify", "-q", "--quiet", "-v", "--verbose", "--no-progress"}
+
+
+def _plain(seg: list[str]) -> bool:
+    """A push of the current work: no deletion, tags, force or refspec that changes the remote beyond the commits."""
+    args = seg[seg.index("push") + 1:] if "push" in seg else []
+    return all(a in _PLAIN_FLAGS or (not a.startswith("-") and ":" not in a and not a.startswith("+")) for a in args)
+
+
+def _nothing_to_send(where: Path) -> bool:
+    """True when the branch has an upstream and no commits ahead of it."""
+    upstream = _git_out(where, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+    if not upstream:
+        upstream = f"origin/{_git_out(where, 'rev-parse', '--abbrev-ref', 'HEAD')}"
+    return _git_out(where, "rev-list", "--count", f"{upstream}..HEAD") == "0"
+
+
+# An approval is remembered per repo and head commit, in one file every session and subagent of the owner
+# reads, so the same head is never asked about twice. It is recorded after a push command ran, which only
+# happens when the owner said yes (or the session was told up front to push).
+
+
+def _approvals_file() -> Path:
+    return store_dir() / "push_approved.json"
+
+
+def _approved() -> list[str]:
+    try:
+        return json.loads(_approvals_file().read_text())
+    except (OSError, ValueError):
+        return []
+
+
+def is_approved(root: Path, where: Path) -> bool:
+    head = _head(where)
+    return bool(head) and f"{root}@{head}" in _approved()
+
+
+def record_approval(command: str, cwd: str) -> list[str]:
+    """After a push command ran: remember each touched repo's head as approved."""
+    pushes: list[tuple[list[str], str, Path]] = []
+    _walk(command, Path(os.path.expanduser(cwd or os.getcwd())), pushes)
+    done = []
+    for root, where in _touched(pushes, command).items():
+        head = _head(where)
+        if head:
+            done.append(f"{root}@{head}")
+    if done:
+        keep = [e for e in _approved() if e not in done][-499:] + done
+        f = _approvals_file()
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(keep))
+    return done
+
+
 def check_bash(command: str, cwd: str) -> Verdict:
-    """Ask the owner before a command that pushes from a guarded repo runs."""
-    if not guarded_repos() or not (_PUSHY.search(command) or _GH_API_WRITE.search(command)):
+    """Ask the owner before a command that pushes from a repo with a remote runs. Once per repo and head."""
+    pushes: list[tuple[list[str], str, Path]] = []
+    _walk(command, Path(os.path.expanduser(cwd or os.getcwd())), pushes)
+    if not pushes:
         return Verdict()
-    touched = _touched(command, cwd)
+    kinds = {k for _, k, _ in pushes}
+    if os.environ.get("STELLA_AUTO_PUSH") == "1" and kinds == {"git"}:
+        return Verdict()  # told up front to push; a PR, merge or API write still asks
+    plain = kinds == {"git"} and all(_plain(seg) for seg, _, _ in pushes)
+    touched = {r: w for r, w in _touched(pushes, command).items()
+               if not is_approved(r, w) and not (plain and _nothing_to_send(w))}
     if not touched:
         return Verdict()
     names = ", ".join(alias(r) for r in sorted(touched))
@@ -182,7 +338,7 @@ def check_bash(command: str, cwd: str) -> Verdict:
     shown = " ".join(command.split())
     shown = shown if len(shown) <= 120 else shown[:119] + "…"
     return Verdict("ask", f"Push {names}?\n{details}\n"
-                          f"Yes pushes. No holds it back: Stella keeps it on your outstanding list and can show the full diff.\n"
+                          f"Yes pushes, and this head is not asked about again. No holds it back: Stella keeps it on your outstanding list and can show the full diff.\n"
                           f"({shown})")
 
 

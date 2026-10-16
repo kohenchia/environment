@@ -24,10 +24,19 @@ def slug(text: str, limit: int = 32) -> str:
     return (s[:limit].rstrip("-")) or "team"
 
 
-def lead_prompt(name: str, archetype: str, order_seq: int | None, order_text: str, extra: str = "") -> str:
+def lead_prompt(name: str, archetype: str, order_seq: int | None, order_text: str, extra: str = "",
+                auto_push: bool = False) -> str:
     owner = settings().owner
     stella = CALL
     order_ref = f"order #{order_seq}" if order_seq else "an order"
+    if auto_push:
+        push = (f"- Push duty: {owner} told you up front to push. When your work is committed in a repo that has a remote, "
+                f"push the branch yourself (no prompt will appear), then say what was pushed. Opening a PR or merging still needs his yes.")
+    else:
+        push = (f"- Push duty: a commit in a repo that has a remote is not finished until you have tried to push it. Run `git push -u origin <branch>` "
+                f"yourself, before `{stella} done`: Claude Code then shows {owner} a yes/no prompt, so he never has to remember an outstanding push. "
+                f"If he answers no, the push is deferred: say \"not pushed, you declined\" in your final message and name the branch and commit. "
+                f"Never write just \"committed locally\". A repo with no remote needs no push.")
     return f"""You are the lead of the team "{name}", launched by Stella, {owner}'s chief of staff, to carry out {order_ref}.
 
 The order, verbatim:
@@ -46,12 +55,13 @@ How this team works:
 - The same holds when you finish: after `{stella} done`, your last message says what was done, where the outputs are, and what is left for {owner}, in full.
 - When you launch a subagent, brief it the same way: its final report is read by a person who has not seen its work, so it states its result, its open questions and its recommendation in full, self-contained, with no "as discussed" and no references to context only you hold.
 - When the order is complete (or cannot be completed): `{stella} done {name} "<what was done, where the outputs are, anything left open>"`. Do this before you stop.
-- Ask {owner} first before anything outward-facing or hard to reverse: posting, pushing, writing to external systems, triggering pipelines, deleting.
+- Ask {owner} first before anything outward-facing or hard to reverse: posting, writing to external systems, triggering pipelines, deleting. (Pushing is covered by the push duty below.)
+{push}
 {extra}""".rstrip() + "\n"
 
 
 def write_script(script: Path, name: str, directory: str, mode: str, order_seq: int | None, claude_args: list[str],
-                 creds: dict[str, str | None]) -> None:
+                 creds: dict[str, str | None], auto_push: bool = False) -> None:
     """The window's command. pass_env variables that are off are unset here (a tmux server's
     environment may carry them); values that are on come in through tmux -e and never touch disk."""
     s = settings()
@@ -61,6 +71,7 @@ def write_script(script: Path, name: str, directory: str, mode: str, order_seq: 
         f"cd {shlex.quote(directory)} || exit 1\n"
         f"export STELLA_TEAM={shlex.quote(name)}\n"
         + (f"export STELLA_ORDER={order_seq}\n" if order_seq else "")
+        + ("export STELLA_AUTO_PUSH=1\n" if auto_push else "")
         + "".join(f"unset {k}\n" for k, v in creds.items() if v is None)
         + f"{shlex.quote(s.claude_bin)} --name {shlex.quote(name)} --permission-mode {shlex.quote(mode)}"
         f" --append-system-prompt-file {shlex.quote(str(prompt_file))} {' '.join(shlex.quote(a) for a in claude_args)}\n"
@@ -102,6 +113,7 @@ def launch(
     args: str = "",
     permission_mode: str | None = None,
     dry_run: bool = False,
+    auto_push: bool = False,
 ) -> Launched:
     st = state.fold()
     order_text = text or ""
@@ -139,11 +151,11 @@ def launch(
     d = store_dir() / "launch"
     d.mkdir(parents=True, exist_ok=True)
     prompt_file = d / f"{name}.prompt.md"
-    prompt_file.write_text(lead_prompt(name, archetype, order_seq, order_text, team.raw.get("lead_notes", "")))
+    prompt_file.write_text(lead_prompt(name, archetype, order_seq, order_text, team.raw.get("lead_notes", ""), auto_push))
     first = registry.first_prompt(team, order_text, args=args, name=name)
     creds = passenv.resolve()
     script = d / f"{name}.sh"
-    write_script(script, name, directory, mode, order_seq, [first], creds)
+    write_script(script, name, directory, mode, order_seq, [first], creds, auto_push)
     if dry_run:
         return Launched(name, None, "dry-run", directory, script, {})
 
@@ -156,7 +168,8 @@ def launch(
         window = tmuxctl.new_window(srv, name, directory, str(script), env=passed)
         sock, via = srv.socket, f"tmux ({srv.via} server)"
     else:
-        env = passenv.apply({**os.environ, "STELLA_TEAM": name, **({"STELLA_ORDER": str(order_seq)} if order_seq else {})})
+        env = passenv.apply({**os.environ, "STELLA_TEAM": name, **({"STELLA_ORDER": str(order_seq)} if order_seq else {}),
+                                  **({"STELLA_AUTO_PUSH": "1"} if auto_push else {})})
         subprocess.Popen(
             [s.claude_bin, "--bg", "--name", name, "--permission-mode", mode,
              "--append-system-prompt-file", str(prompt_file), first],
@@ -165,7 +178,7 @@ def launch(
         via = "background session (no tmux server found); reach it with `claude attach " + name + "`"
     ev = ledger.append(
         "launch", by="cli", team=name, archetype=archetype, order=order_seq, dir=directory,
-        window=window, socket=sock, via=via, mode=mode, session=os.environ.get("STELLA_SESSION_ID"),
+        window=window, socket=sock, via=via, mode=mode, auto_push=auto_push, session=os.environ.get("STELLA_SESSION_ID"),
     )
     return Launched(name, window, via, directory, script, ev)
 
@@ -226,7 +239,8 @@ def respawn(name: str, why: str) -> str:
     script = d / f"{name}.resume.sh"
     directory = launch_ev.get("dir") or t.directory or os.path.expanduser("~")
     write_script(script, name, directory, launch_ev.get("mode") or "default", t.order,
-                 ["--resume", t.session_id or "", RESPAWN_NOTE.format(why=why)], creds)
+                 ["--resume", t.session_id or "", RESPAWN_NOTE.format(why=why)], creds,
+                 bool(launch_ev.get("auto_push")))
     _marker(name).write_text(str(_pending(name) + 1))
     err = tmuxctl.respawn(srv, t.window, directory, str(script), env={k: v for k, v in creds.items() if v is not None})
     if err:

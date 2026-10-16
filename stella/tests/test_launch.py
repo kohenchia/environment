@@ -189,3 +189,13 @@ def test_reap_closes_the_window_of_a_finished_team(env, tmux, fake_claude):
     windows = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", "work", "-F", "#{window_name}"],
                              capture_output=True, text=True).stdout.split()
     assert "bt" not in windows
+
+
+def test_the_lead_is_told_to_push_and_auto_push_launches_say_so(env, tmux, fake_claude):
+    env.say("A", "S, build a tool")
+    env.run("launch", "builder", "--order", "1", "--name", "pp", env=tmux)
+    assert "Push duty" in (env.store / "launch" / "pp.prompt.md").read_text()
+    assert "AUTO_PUSH" not in (env.store / "launch" / "pp.sh").read_text()
+    env.run("launch", "builder", "--order", "1", "--name", "pq", "--auto-push", env=tmux)
+    assert "told you up front to push" in (env.store / "launch" / "pq.prompt.md").read_text()
+    assert "export STELLA_AUTO_PUSH=1" in (env.store / "launch" / "pq.sh").read_text()

@@ -42,7 +42,11 @@ and reports what fails. Fix and re-verify until clean.
 
 ## 5 · Finish
 
-- Commit locally with a message that says what and why. **Do not push**; pushing is the owner's call
-  (a push from a guarded repo prompts the owner to approve it).
-- `~/.local/bin/stella done <name> "<what changed, where (repo, branch, commit), how it was verified, what is
+- Commit with a message that says what and why, then **push the branch** if the repo has a remote
+  (`git remote`): `git push -u origin <branch>`. The tool hook makes Claude Code show the owner a yes/no
+  prompt, so he never has to remember an outstanding push. A team launched with `--auto-push` (the owner
+  said so up front) pushes with no prompt. If he answers no, the push is deferred, not forgotten: your
+  final message says "not pushed, you declined" with the repo, branch and commit. "Committed locally"
+  alone is never an acceptable ending for a repo that has a remote. A PR is a separate ask.
+- `~/.local/bin/stella done <name> "<what changed, where (repo, branch, commit), pushed or not, how it was verified, what is
   left>"`.

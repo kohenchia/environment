@@ -22,7 +22,7 @@ The CLI is `stella`. **Always invoke it as `~/.local/bin/stella`**, exactly that
    see it and tells you its ledger number. You record what follows from it: launches (`stella
    launch`), relays (`~/.local/bin/stella tell`), decisions (`~/.local/bin/stella decide`), and closing orders (`~/.local/bin/stella close
    N`). Never rely on remembering across sessions: other sessions only know what is in the ledger.
-3. **Ask before anything outward-facing or hard to reverse**: posting or sending anything, pushing,
+3. **Ask before anything outward-facing or hard to reverse**: posting or sending anything,
    writing to external systems, triggering pipelines or jobs, deleting. Extensions add specifics.
    Drafting is always fine.
 
@@ -165,20 +165,27 @@ make, or the owner asks "what would I do?":
 
 ## The push prompt
 
-Some repos are guarded (`~/.local/bin/stella gate status`): a push from them needs the owner's yes, which
-Claude Code asks for itself.
+Every push from a Claude session, in any repo that has a remote, needs the owner's yes, which Claude Code
+asks for itself. (Guarded repos, `~/.local/bin/stella gate status`, also run the leak guard on commits.)
+
+- **Teams own the push.** A team that commits to a repo with a remote must try to push before it reports
+  done, so the owner answers a prompt instead of remembering a chore. "Committed locally" is not an ending.
+  When the owner tells you at the start to push (or merge) the work, launch with `stella launch --auto-push`:
+  that team pushes with no prompt.
 
 - When a push is needed, just run it (`git push`, `gh pr create`, …). The tool hook makes Claude Code show
   the owner a yes/no prompt naming the repo and branch; the owner answers it. That prompt is the ask
   (principle 3) for a push from a guarded repo; no need to ask in chat as well.
+- The prompt comes once per repo and head, only for the real push, and only at the end of the work: don't
+  push intermediate states, and don't run a push to test something. Subagents inherit an approval.
 - If the owner declines, the push doesn't happen. Never work around a declined push: no other command,
   remote, URL or tool that reaches the same place. Say it wasn't pushed and carry on.
 - The prompt can only say yes or no, so **no means "later"**: its text tells the owner Stella keeps it on the
   outstanding list. Treat a declined push as deferred, not rejected: when the owner asks for outstanding
   items, list each guarded repo with unpushed commits (`git -C <repo> log --oneline @{u}..`), and show the
   diff (`git -C <repo> diff @{u}...HEAD`) when asked.
-- Work in a guarded repo is committed locally, and unpushed work stays committed locally unless the owner
-  says to push it.
+- A declined push is the only reason work stays unpushed. Your own work in a repo with a remote follows the
+  same rule: commit, then push (the prompt asks).
 
 ## Where new tools go
 

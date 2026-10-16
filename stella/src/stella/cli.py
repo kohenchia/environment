@@ -129,7 +129,7 @@ def cmd_launch(a):
     from stella import launch
 
     r = launch.launch(a.archetype, order_seq=a.order, text=a.text, name=a.name, directory=a.dir,
-                      args=a.args or "", permission_mode=a.mode, dry_run=a.dry_run)
+                      args=a.args or "", permission_mode=a.mode, dry_run=a.dry_run, auto_push=a.auto_push)
     if a.dry_run:
         print(r.script.read_text())
         return
@@ -428,7 +428,7 @@ def build() -> argparse.ArgumentParser:
         return sp
 
     sp = c("hook", cmd_hook, "Claude Code hook entry point (reads hook JSON on stdin)")
-    sp.add_argument("event", choices=["prompt", "session-start", "session-end", "pretool"])
+    sp.add_argument("event", choices=["prompt", "session-start", "session-end", "pretool", "posttool"])
     sp = c("context", cmd_context, "Persona addenda, knowledge maps, teams and the brief")
     sp.add_argument("--self", dest="self_", action="store_true", help="as Stella's own session")
     sp.add_argument("--team", action="store_true")
@@ -469,6 +469,8 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--dir")
     sp.add_argument("--args", help="arguments for the team's launch command")
     sp.add_argument("--mode", help="permission mode override")
+    sp.add_argument("--auto-push", action="store_true",
+                    help="the owner said up front to push: the team pushes its branch without the yes/no prompt")
     sp.add_argument("--dry-run", action="store_true")
     sp = c("tell", cmd_tell, "Send a message to a running team lead")
     sp.add_argument("team")
