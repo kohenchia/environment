@@ -447,14 +447,14 @@ hook adds it to new windows, `window-layout-changed` docks it back to the far le
 | Thing | Behaviour |
 |---|---|
 | `C-b b` | Toggle sidebars everywhere. Off puts the tabs back in the top bar. |
-| `Cmd+Shift+←` | Stops at the leftmost tool pane; it will not step into the sidebar |
-| `Cmd+Opt+←` | Will not swap a pane with the sidebar |
+| `Cmd+Shift+←↑↓→` | Never rests on the sidebar: a hook hands focus to its neighbour, even after a click or a closed pane |
+| `Cmd+Opt+←↑↓→` | Will not swap a pane with the sidebar |
 | `Cmd+Shift+Space` | Cycles layouts of the tool panes; the sidebar stays put |
 | `Cmd+Shift+Enter` | Zooming a pane hides the sidebar until you unzoom |
 | Pane labels | Numbered from the first tool pane, not the sidebar |
 | Last tool pane closed | The sidebar sees it is alone and exits, closing the window |
 
-Costs: 24 columns of every window, one extra process per window that polls tmux once a second, and
+Windows narrower than 72 columns get no sidebar. Costs: 24 columns of every window, one extra process per window that looks at tmux once a second (and at once when a hook pokes it), and
 `#{window_panes}` is one higher than it used to be, so anything that counts panes sees the sidebar.
 Stella's `window_dead` already looks past it.
 
