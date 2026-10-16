@@ -312,3 +312,24 @@ def test_reopen_resumes_a_session_by_name_in_its_own_directory_and_lists_it(env,
     # not a team: no team name in the window's environment, so no team hooks fire for it
     assert "STELLA_TEAM" not in (env.store / "launch" / "pr-9-sam.reopen.sh").read_text()
     assert "already open" in env.run("reopen", "pr-9-sam", env=tmux).stdout
+
+
+def test_a_lead_that_ends_never_runs_claude_itself(env, tmux, fake_claude):
+    """The farewell line names `claude --resume` in backticks; in a shell double-quoted string that would RUN
+    the real `claude` (under the test's HOME, which has no keychain: macOS then asks to store its token)."""
+    (env.home / ".zshrc").write_text("")
+    shim = env.tmp / "shim"
+    shim.mkdir()
+    (shim / "claude").write_text(f'#!/bin/sh\necho "$@" >> "{env.tmp}/real-claude-ran.txt"\n')
+    (shim / "claude").chmod(0o755)
+    quits = env.tmp / "claude-quits-now"
+    quits.write_text(f'#!/bin/sh\necho "$@" > "{fake_claude}/args.txt"\nexit 0\n')
+    quits.chmod(0o755)
+    env.write_config(claude_bin=str(quits), tmux_session="work")
+    sock = tmux["TMUX"].split(",")[0]
+    env.say("A", "S, build q2")
+    env.run("launch", "builder", "--order", "1", "--name", "q2", env={**tmux, "PATH": f"{shim}:{env.env['PATH']}"}, cwd=env.tmp)
+    _wait(fake_claude / "args.txt")
+    assert _wait_for(lambda: _pane(sock, "q2", "#{@stella_lead_exited}") == "1")
+    time.sleep(0.5)
+    assert not (env.tmp / "real-claude-ran.txt").exists()

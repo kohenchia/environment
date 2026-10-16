@@ -218,7 +218,7 @@ def _resume_script(t: Target, why: str, creds: dict[str, str | None]) -> Path:
         + f"{shlex.quote(s.claude_bin)} {' '.join(shlex.quote(a) for a in keep)} --resume {shlex.quote(t.session_id or '')} {shlex.quote(launch.RESPAWN_NOTE.format(why=why))}\n"
         'rc=$?\n'
         'if [ "$rc" -ne 0 ]; then printf "\\n[stella] claude exited with status %s.\\n" "$rc"; fi\n'
-        'printf "\\n[stella] claude ended. This is your shell in %s: run things, or `claude --resume` to go on.\\n" "$PWD"\n'
+        "printf '\\n[stella] claude ended. This is your shell in %s: run things, or `claude --resume` to go on.\\n' \"$PWD\"\n"
         'exec "${SHELL:-/bin/sh}" -l\n'
     )
     script.chmod(0o755)

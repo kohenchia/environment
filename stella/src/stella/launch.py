@@ -97,7 +97,7 @@ def write_script(script: Path, name: str, directory: str, mode: str, order_seq: 
             if team else ""
         )
         + 'if [ "$rc" -ne 0 ]; then printf "\\n[stella] claude exited with status %s.\\n" "$rc"; fi\n'
-        f'printf "\\n[stella] claude ended. This is your shell in %s: run things, or `claude --resume` to go on.\\n" "$PWD"\n'
+        f"printf '\\n[stella] claude ended. This is your shell in %s: run things, or `claude --resume` to go on.\\n' \"$PWD\"\n"
         'exec "${SHELL:-/bin/sh}" -l\n'
     )
     script.chmod(0o755)
