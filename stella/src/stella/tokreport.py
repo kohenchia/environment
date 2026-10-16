@@ -61,8 +61,15 @@ def _name(t: windows.Target) -> str:
     return t.window_name or t.pane_id
 
 
-def line(name: str, before: str | None, after: str | None, note: str, w: int) -> str:
-    return f"  {name:<{w}}  {_cell(before, False, 8)} -> {_cell(after, True, 8)} {note}".rstrip()
+def _modes(before: str | None, after: str | None) -> str:
+    """The permission mode, next to the token: `[mode auto -> bypass]`, or just `[mode bypass]` when it did not change."""
+    if after is None or before == after:
+        return f"  [mode {after or before or '?'}]"
+    return f"  [mode {before or '?'} -> {after}]"
+
+
+def line(name: str, before: str | None, after: str | None, note: str, w: int, modes: str = "") -> str:
+    return f"  {name:<{w}}  {_cell(before, False, 8)} -> {_cell(after, True, 8)} {note}{modes}".rstrip()
 
 
 def width(inv: windows.Inventory) -> int:
@@ -73,12 +80,13 @@ def result_line(r: windows.Result, before: dict[str, str | None], goal: str, w: 
     """One line for a restart result: `name  personal -> PROJECT  restarted`."""
     want = "project" if goal == "on" else "personal"
     b = before.get(r.target.pane_id) if r.target else None
+    modes = _modes(windows.mode_of(r.target), windows.wanted_mode_word(r.target)) if r.target else ""
     if r.outcome == "restarted":
-        return line(r.name, b, want, "restarted", w)
+        return line(r.name, b, want, "restarted", w, modes)
     if r.outcome == "later":
         who = "stella: restarting last, resuming this conversation" if r.text == "stella" else \
             "restarting after this command (the pane it runs in), conversation resumed"
-        return line(r.name, b, want, who, w)
+        return line(r.name, b, want, who, w, modes)
     if r.outcome == "missing":
         return f"  {r.name:<{w}}  {r.text}"
     if r.outcome == "skipped":
@@ -105,7 +113,7 @@ def table(inv: windows.Inventory, goal: str | None, title: str, pending: set[str
         if t.pane_id in pending:
             rows.append(f"  {_name(t):<{w}}  {_cell(tok, False, 8)} restarting in a moment")
             continue
-        rows.append(f"  {_name(t):<{w}}  {_cell(tok, True, 8)}".rstrip())
+        rows.append(f"  {_name(t):<{w}}  {_cell(tok, True, 8)}  [mode {windows.mode_of(t) or '?'}]".rstrip())
         if goal and tok != ("project" if goal == "on" else "personal"):
             bad.append((_name(t), tok))
     out = [title, *rows, *(extras(inv, w) if with_extras else [])]

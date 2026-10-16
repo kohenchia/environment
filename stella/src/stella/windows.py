@@ -35,7 +35,8 @@ from stella.config import BIN, settings, store_dir
 _UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 _INTERPRETERS = {"sh", "bash", "zsh", "dash", "env", "node", "python", "python3"}
 # Flags worth carrying over when an unknown (hand-opened) session is restarted; each takes one value.
-_KEEP_WITH_VALUE = ("--name", "--model", "--permission-mode", "--agent", "--append-system-prompt-file")
+# The permission mode is not among them: a restart applies the current `permission_mode` setting.
+_KEEP_WITH_VALUE = ("--name", "--model", "--agent", "--append-system-prompt-file")
 _KEEP_FLAGS = ("--dangerously-skip-permissions",)
 LATE_DELAY = 1.5  # seconds the detached helper waits, so the caller finishes its output first
 
@@ -179,6 +180,61 @@ def inventory(srv, with_agents: bool = True) -> Inventory:
     return Inventory(targets, shells, outside, dead)
 
 
+_MODE_WORDS = {"bypassPermissions": "bypass", "acceptEdits": "edits", "default": "default", "auto": "auto", "plan": "plan"}
+
+
+def mode_of(t: Target) -> str | None:
+    """The permission mode a live process was started with, as a short word (from its command line)."""
+    m = _flag(t.argv, "--permission-mode")
+    if m is None and "--dangerously-skip-permissions" in t.argv:
+        m = "bypassPermissions"
+    return _MODE_WORDS.get(m, m) if m else None
+
+
+def wanted_mode_word(t: Target) -> str:
+    """The short word for the mode a restart gives this target."""
+    from stella import launch
+
+    ev = next((e for e in reversed(list(ledger.events())) if e["type"] == "launch" and e.get("team") == t.team), {}) if t.team else {}
+    m = launch.wanted_mode(ev)
+    return _MODE_WORDS.get(m, m)
+
+
+def window_pane(srv, window: str) -> str | None:
+    """The pane id of a window's one working pane (the sidebar pane is left out)."""
+    ps = [p for p in _panes(srv) if p["window_id"] == window]
+    return ps[0]["pane_id"] if ps else None
+
+
+def claude_ended(srv, window: str, procs=None) -> bool:
+    """True when the window is only the owner's shell: no Claude in its panes' process trees and nothing
+    else running in them (a lead that ended, or a start that failed, leaves that; see launch.write_script).
+    A shell with a job in it (an editor, a build) is not reused: that would kill the job."""
+    procs = procs if procs is not None else _procs()
+    ps = [p for p in _panes(srv) if p["window_id"] == window]
+    if not ps or not procs:
+        return False
+    return all(len(_descendants(p["pane_pid"], procs)) == 1 and p["pane_pid"] in procs for p in ps)
+
+
+def exited_teams(srv, targets: list[Target], procs=None) -> list[Target]:
+    """Teams (adopted ones included) whose window is only a shell now because claude exited in it, as
+    targets that restart can resume. A window is matched to its team by name, or by the window id the ledger recorded."""
+    procs = procs if procs is not None else _procs()
+    st = state.fold()
+    seen = {t.pane_id for t in targets}
+    out = []
+    for p in _panes(srv):
+        if p["pane_id"] in seen or not claude_ended(srv, p["window_id"], procs):
+            continue
+        team = next((n for n, tm in st.teams.items() if n == p["window_name"]), None) or next(
+            (n for n, tm in st.teams.items() if tm.window == p["window_id"] and not tm.acked), None)
+        if team and team not in {t.team for t in targets} | {t.team for t in out}:
+            out.append(Target(p["window_id"], p["window_name"], p["pane_id"], p["pane_pid"], st.teams[team].directory or p["cwd"],
+                              kind="team", team=team, session_id=st.teams[team].session_id))
+    return out
+
+
 def _classify(t: Target, st, me: dict, srv) -> None:
     if "stella:stella" in t.argv or (me.get("pane") == t.pane_id and me.get("socket") == srv.socket):
         t.kind, t.team = "stella", None
@@ -238,10 +294,11 @@ def _resume_script(t: Target, why: str, creds: dict[str, str | None]) -> Path:
     keep: list[str] = []
     for i, a in enumerate(t.argv[:-1]):
         if a in _KEEP_WITH_VALUE:
+            if a == "--append-system-prompt-file" and not os.path.exists(os.path.expanduser(t.argv[i + 1])):
+                continue  # never name a file that is not there: claude exits on it
             keep += [a, t.argv[i + 1]]
     keep += [a for a in t.argv if a in _KEEP_FLAGS]
-    if "--permission-mode" not in keep:
-        keep += ["--permission-mode", s.permission_mode]
+    keep += ["--permission-mode", s.permission_mode]
     script = store_dir() / "launch" / f"resume-{re.sub(r'[^A-Za-z0-9_.-]', '_', t.label)}.sh"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(
@@ -267,12 +324,24 @@ def skip_reason(t: Target) -> str | None:
     return None
 
 
+def _log(line: str) -> str:
+    """Keep a line saying why a window was not restarted, where it can be read after the fact."""
+    try:
+        log = store_dir() / "runs" / "respawn.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with log.open("a") as f:
+            f.write(f"{ledger.now():%Y-%m-%d %H:%M} {line}\n")
+    except OSError:
+        pass
+    return line
+
+
 def restart(srv, t: Target, why: str) -> str:
     """Restart one target in its pane; returns one line saying what happened."""
     from stella import launch
 
     if reason := skip_reason(t):
-        return f"{t.label} ({t.window_name}): skipped, {reason}"
+        return _log(f"{t.label} ({t.window_name}): skipped, {reason}")
     creds = passenv.resolve()
     env = {k: v for k, v in creds.items() if v is not None}
     where = f"{t.window_name} {t.pane_id}"
@@ -291,7 +360,8 @@ def restart(srv, t: Target, why: str) -> str:
         ledger.append("respawned", by="cli", team=run.WINDOW, window=t.window_id, pass_env=passenv.mode())
         return f"Stella: restarted in {where}, conversation resumed"
     if t.kind == "team":
-        return launch.respawn_team(srv, t.team, t.pane_id, t.session_id, why, creds, label=where)
+        line = launch.respawn_team(srv, t.team, t.pane_id, t.session_id, why, creds, label=where)
+        return line if ": restarted in " in line else _log(line)
     err = tmuxctl.respawn(srv, t.pane_id, t.cwd, str(_resume_script(t, why, creds)), env=env)
     if err:
         return f"{t.label} ({t.window_name}): tmux could not restart {t.pane_id} ({err}); not restarted"
@@ -341,6 +411,7 @@ def restart_all(why: str, only_teams: list[str] | None = None, emit=lambda r: No
         return out
     passenv.resolve()  # fail here, where it can be seen, not halfway
     targets = discover(srv)
+    targets += exited_teams(srv, targets)  # a window left as a shell after claude ended: resumed in that pane
     if only_teams:
         for name in only_teams:
             t = next((x for x in targets if x.team == name), None)

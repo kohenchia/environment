@@ -77,7 +77,8 @@ def write_script(script: Path, name: str, directory: str, mode: str, order_seq: 
     session that is not one of Stella's teams: no team name in its environment, no hook feed."""
     s = settings()
     prompt_file = store_dir() / "launch" / f"{name}.prompt.md"
-    extra = f" --append-system-prompt-file {shlex.quote(str(prompt_file))}" if team or prompt_file.exists() else ""
+    # Only a prompt file that is there: an adopted (hand-opened) session never had one, and claude exits on a missing file.
+    extra = f" --append-system-prompt-file {shlex.quote(str(prompt_file))}" if prompt_file.exists() else ""
     script.write_text(
         "#!/bin/sh\n"
         f"cd {shlex.quote(directory)} || exit 1\n"
@@ -197,7 +198,7 @@ def launch(
         via = "background session (no tmux server found); reach it with `claude attach " + name + "`"
     ev = ledger.append(
         "launch", by="cli", team=name, archetype=archetype, order=order_seq, dir=directory,
-        window=window, socket=sock, via=via, mode=mode, auto_push=auto_push, pass_env=passenv.effective(), session=os.environ.get("STELLA_SESSION_ID"),
+        window=window, socket=sock, via=via, mode=mode, mode_explicit=bool(permission_mode), auto_push=auto_push, pass_env=passenv.effective(), session=os.environ.get("STELLA_SESSION_ID"),
     )
     return Launched(name, window, via, directory, script, ev)
 
@@ -237,17 +238,31 @@ def respawning(name: str) -> bool:
     return True
 
 
-def respawn_team(srv, name: str, pane: str, session_id: str, why: str, creds: dict[str, str | None], label: str = "") -> str:
+def wanted_mode(launch_ev: dict) -> str:
+    """The permission mode a restarted session gets: the current `permission_mode` setting, unless the owner
+    named one at launch with --mode (the launch event says so), which is that one session's own choice."""
+    return (launch_ev.get("mode") if launch_ev.get("mode_explicit") else None) or settings().permission_mode
+
+
+def respawn_team(srv, name: str, pane: str, session_id: str, why: str, creds: dict[str, str | None], label: str = "",
+                 ) -> str:
     """Restart a team's lead in its pane, resuming its conversation, with the pass_env variables as
-    the switch says now. Its work so far is kept; a tool call in flight is interrupted."""
+    the switch says now. Its work so far is kept; a tool call in flight is interrupted.
+    An adopted team (or any team whose launch prompt file is gone) comes back as plain
+    `claude --resume <id> --name <name> --permission-mode <mode>`: no file is referenced that is not there.
+    The permission mode is the current setting, never the old process's: only a mode the owner named at launch
+    (`--mode`, recorded as `mode_explicit`) is kept."""
     t = state.fold().teams.get(name)
     if not t:
         return f"{name}: no such team"
+    if not session_id:
+        return f"{name}: cannot be restarted, no session id is known for it"
     launch_ev = next((e for e in reversed(list(ledger.events())) if e["type"] == "launch" and e.get("team") == name), {})
     d = store_dir() / "launch"
+    d.mkdir(parents=True, exist_ok=True)  # an adopted team was never launched: nothing made the folder
     script = d / f"{name}.resume.sh"
     directory = launch_ev.get("dir") or t.directory or os.path.expanduser("~")
-    write_script(script, name, directory, launch_ev.get("mode") or "default", t.order,
+    write_script(script, name, directory, wanted_mode(launch_ev), t.order,
                  ["--resume", session_id, RESPAWN_NOTE.format(why=why)], creds, bool(launch_ev.get("auto_push")))
     _marker(name).write_text(str(_pending(name) + 1))
     err = tmuxctl.respawn(srv, pane, directory, str(script), env={k: v for k, v in creds.items() if v is not None})
@@ -273,8 +288,12 @@ def reopen(target: str, directory: str | None = None, dry_run: bool = False) -> 
     name = t.name if t else (found.title or target)
     directory = os.path.expanduser(directory or (t.directory if t and t.directory else found.cwd) or "~")
     srv = tmuxctl.find_server()
-    if srv and tmuxctl.find_window(srv, name):
-        return f"{name}: a window of that name is already open; close it first or give it another name"
+    existing = tmuxctl.find_window(srv, name) if srv else None
+    if existing:
+        from stella import windows
+
+        if not windows.claude_ended(srv, existing):
+            return f"{name}: a window of that name is already open with its claude running; close it first or give it another name"
     if dry_run:
         return f"would reopen {name} (session {found.session_id}) in {directory}"
     note = resume.make_listable(found.path)
@@ -283,12 +302,20 @@ def reopen(target: str, directory: str | None = None, dry_run: bool = False) -> 
     d.mkdir(parents=True, exist_ok=True)
     script = d / f"{name}.reopen.sh"
     creds = passenv.resolve()
-    mode = launch_ev.get("mode") or settings().permission_mode
+    mode = wanted_mode(launch_ev)
     write_script(script, name, directory, mode, t.order if t else None, ["--resume", found.session_id], creds,
                  bool(launch_ev.get("auto_push")), team=t is not None)
     if not srv:
         return tmuxctl.last_error or f"{name}: no tmux server is running; run `cd {directory} && claude --resume {found.session_id}`"
-    window = tmuxctl.new_window(srv, name, directory, str(script), env={k: v for k, v in creds.items() if v is not None})
+    passed = {k: v for k, v in creds.items() if v is not None}
+    if existing:  # its claude has exited and the pane is a shell: start the session in that pane
+        pane = windows.window_pane(srv, existing)
+        err = tmuxctl.respawn(srv, pane, directory, str(script), env=passed) if pane else "no pane found"
+        if err:
+            return f"{name}: the window is open but its claude has exited, and tmux could not reuse it ({err}); not reopened"
+        window, note = existing, (f"{note}; " if note else "") + "reused the window whose claude had exited"
+    else:
+        window = tmuxctl.new_window(srv, name, directory, str(script), env=passed)
     if t:
         ledger.append("launch", by="cli", team=name, archetype=t.archetype, order=t.order, dir=directory, window=window,
                       socket=srv.socket, via=f"tmux ({srv.via} server)", mode=mode, auto_push=launch_ev.get("auto_push"),
