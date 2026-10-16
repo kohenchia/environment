@@ -183,7 +183,7 @@ def _walk(command: str, here: Path, out: list[tuple[list[str], str, Path]]) -> N
     """Collect (words, kind, cwd) for every simple command that pushes, following `cd` and `sh -c '…'`."""
     for seg in _segments(command):
         if seg[0] == "cd" and len(seg) > 1:
-            target = Path(os.path.expanduser(seg[1]))
+            target = Path(os.path.expandvars(os.path.expanduser(seg[1])))
             here = target if target.is_absolute() else here / target
             continue
         kind = _kind(seg)
@@ -355,6 +355,17 @@ def record_approval(command: str, cwd: str) -> list[str]:
     return done
 
 
+def _unresolved(pushes: list[tuple[list[str], str, Path]]) -> str | None:
+    """A directory a push runs from that only the shell could expand (`cd $D/w`, `git -C "$(pwd)"`):
+    the hook cannot tell which repo it is, and guessing would describe the wrong one."""
+    for seg, _, here in pushes:
+        paths = [str(here)] + [seg[i + 1] for i, t in enumerate(seg[:-1]) if t in {"-C", "--git-dir", "--work-tree"}]
+        for p in paths:
+            if "$" in p or "`" in p:
+                return p
+    return None
+
+
 def check_bash(command: str, cwd: str) -> Verdict:
     """Ask the owner before a command that pushes from a repo with a remote runs. Once per repo and head."""
     pushes: list[tuple[list[str], str, Path]] = []
@@ -364,6 +375,9 @@ def check_bash(command: str, cwd: str) -> Verdict:
     kinds = {k for _, k, _ in pushes}
     if os.environ.get("STELLA_AUTO_PUSH") == "1" and kinds == {"git"}:
         return Verdict()  # told up front to push; a PR, merge or API write still asks
+    unknown = _unresolved(pushes)
+    if unknown and kinds == {"git"}:
+        return Verdict("ask", f"Push from {unknown}: this hook cannot resolve that path, so it cannot say which repo or how many commits.")
     plain = kinds == {"git"} and all(_plain(seg) for seg, _, _ in pushes)
     touched = {r: w for r, w in _touched(pushes, command).items()
                if not is_approved(r, w) and not (plain and _nothing_to_send(w))}
