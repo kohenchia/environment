@@ -107,8 +107,7 @@ class State:
     decisions: list[dict] = field(default_factory=list)
     alerts: dict[str, Attention] = field(default_factory=dict)
     acked: set[str] = field(default_factory=set)
-    push_questions: list[dict] = field(default_factory=list)
-    push_intents: list[dict] = field(default_factory=list)
+    push_deferred: list[dict] = field(default_factory=list)
     followups: dict[int, Followup] = field(default_factory=dict)
 
     def open_orders(self) -> list[Order]:
@@ -248,10 +247,8 @@ def fold(since_events=None) -> State:
             st.acked.add(ev.get("key", ""))
         elif t == "clear_alert":
             st.alerts.pop(ev.get("key", ""), None)
-        elif t == "push_question":
-            st.push_questions.append(ev)
-        elif t == "push_intent":
-            st.push_intents.append(ev)
+        elif t == "push_deferred":
+            st.push_deferred.append(ev)
         elif t == "followup":
             st.followups[ev["seq"]] = Followup(
                 seq=ev["seq"], ts=ts, text=ev.get("text", ""), after=list(ev.get("after", []))

@@ -169,11 +169,15 @@ def test_open_followup_blocks(env, led):
 
 def test_deferred_push_blocks(env, led):
     r = _repo(env)
+    (r / "b.txt").write_text("b\n")
+    env.git(r, "add", ".")
+    env.git(r, "commit", "-q", "-m", "more")
+    sha = env.git(r, "rev-parse", "HEAD").stdout.strip()
     led.team(dir=str(r))
-    led.add("push_question", ago=8, repo="proj", sha="abc1234", branch="x", session="sess-alpha")
+    led.add("push_deferred", ago=8, repo="proj", path=str(r), sha=sha, branch="main", session="sess-alpha")
     out = _sweep(env)
     assert "deferred push" in out and "wrapped_up" not in _types(env)
-    led.add("push", repo="proj", sha="abc1234", ref="refs/heads/x")
+    env.git(r, "push", "-q")  # the commit reaches the remote some other way: nothing is outstanding any more
     assert "wrapped up alpha" in _sweep(env)
 
 

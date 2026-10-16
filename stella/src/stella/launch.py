@@ -36,7 +36,7 @@ def lead_prompt(name: str, archetype: str, order_seq: int | None, order_text: st
         push = (f"- Push duty: a commit in a repo that has a remote is not finished until you have tried to push it. Run `git push -u origin <branch>` "
                 f"yourself, before `{stella} done`: Claude Code then shows {owner} a yes/no prompt, so he never has to remember an outstanding push. "
                 f"If he answers no, the push is deferred: say \"not pushed, you declined\" in your final message and name the branch and commit. "
-                f"Never write just \"committed locally\". A repo with no remote needs no push.")
+                f"Never write just \"committed locally\". A repo with no remote needs no push. `{stella} done` refuses once while your commits are unpushed.")
     return f"""You are the lead of the team "{name}", launched by Stella, {owner}'s chief of staff, to carry out {order_ref}.
 
 The order, verbatim:

@@ -13,7 +13,7 @@ A team Stella launched is ready when ALL of these hold:
 * its session is idle at its prompt, not working
 * every repo it worked in (its directory, and repos named in its reports) has nothing unpushed (when the
   repo has a remote) and no uncommitted changes
-* no open follow-up waits on it, and no push question it raised is still unanswered
+* no open follow-up waits on it, and no push the owner deferred is still outstanding
 
 Then the sweep does what `stella reap` does (kills the window, verifies it is gone), closes the orders the
 team carried, records `wrapped_up` naming what it checked, and raises one quiet notification line.
@@ -165,12 +165,13 @@ def session_idle(srv: tmuxctl.Server, window: str) -> bool:
 
 
 def _deferred_push(st: state.State, t: state.Team) -> str | None:
-    pushed = [(e.get("repo"), e["seq"]) for e in ledger.events() if e["type"] == "push"]
+    """A push the owner declined (recorded by the Stop hook) is outstanding until its commit is on a remote."""
     mine = t.sessions | ({t.session_id} if t.session_id else set())
-    for q in st.push_questions:
+    for q in st.push_deferred:
         if q.get("team") == t.name or (q.get("session") in mine and q.get("session")):
-            if not any(repo == q.get("repo") and seq > q["seq"] for repo, seq in pushed):
-                return f"push of {q.get('repo')} {q.get('branch', '')} {str(q.get('sha', ''))[:7]} was asked and not approved".replace("  ", " ")
+            path, sha = q.get("path"), q.get("sha")
+            if path and sha and not _git(Path(path), "branch", "-r", "--contains", sha):
+                return f"push of {q.get('repo')} {q.get('branch', '')} {str(sha)[:7]} was deferred".replace("  ", " ")
     return None
 
 

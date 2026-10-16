@@ -201,6 +201,10 @@ asks for itself. (Guarded repos, `~/.local/bin/stella gate status`, also run the
   outstanding list. Treat a declined push as deferred, not rejected: when the owner asks for outstanding
   items, list each guarded repo with unpushed commits (`git -C <repo> log --oneline @{u}..`), and show the
   diff (`git -C <repo> diff @{u}...HEAD`) when asked.
+- **The hooks enforce it.** If a session ends its turn, or a team runs `stella done`, with unpushed commits in a
+  repo it worked in, the Stop hook (or `done`) refuses once per head and says to push now: do that, and the prompt
+  appears. Do not loop on it: after one reminder per head, or after a no, it lets go. A no is recorded as
+  deferred; report it as "not pushed, deferred" with the repo, branch and commit.
 - A declined push is the only reason work stays unpushed. Your own work in a repo with a remote follows the
   same rule: commit, then push (the prompt asks).
 

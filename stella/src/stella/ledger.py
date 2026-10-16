@@ -20,7 +20,7 @@ from stella.config import store_dir
 
 # Event types only the prompt hook may write. `stella log` refuses them, so an
 # instruction or a push approval can't be invented by a model calling the CLI.
-HOOK_ONLY = frozenset({"order", "push_intent", "direct"})
+HOOK_ONLY = frozenset({"order", "push_deferred", "direct"})
 
 
 def ledger_dir() -> Path:

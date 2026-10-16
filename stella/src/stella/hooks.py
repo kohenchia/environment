@@ -12,7 +12,9 @@
 * SessionEnd: a team lead that exits without `stella done` raises an attention item,
   and unless the owner closed it by hand, wakes Stella.
 * PreToolUse: the push prompt (a push from a repo with a remote asks the owner first) and the leak guard.
-* PostToolUse: remembers an approved push's head so it is not asked twice.
+* PostToolUse: remembers an approved push's head so it is not asked twice, and the repos a session committed in.
+* Stop: a session that ends its turn with unpushed commits in repos it worked in is told once to push now, so the
+  push prompt appears (`finish`); a push the owner declined is recorded as deferred and not asked again.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ import re
 import sys
 import traceback
 
-from stella import address, brief, context, gate, leak, ledger, notify, run, scheduler, sessions, state, targets, wake, wrapup
+from stella import address, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, targets, wake, wrapup
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -247,6 +249,7 @@ def pretool(data: dict) -> None:
                     return _deny(hit)
         v = gate.check_bash(cmd, cwd)
         if v.decision == "ask":
+            finish.remember_asked(data.get("session_id") or "", v.asked)
             return _ask(v.reason)
         return
     if tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
@@ -281,11 +284,28 @@ def _leak_hit(text: str, where: str, g: leak.Guard) -> str | None:
 def posttool(data: dict) -> None:
     """A push command ran, so the owner approved it (or the session was told to push): remember the head."""
     if data.get("tool_name") == "Bash":
-        gate.record_approval((data.get("tool_input") or {}).get("command", ""), data.get("cwd") or os.getcwd())
+        cmd, cwd = (data.get("tool_input") or {}).get("command", ""), data.get("cwd") or os.getcwd()
+        gate.record_approval(cmd, cwd)
+        finish.remember_commits(data.get("session_id") or "", cmd, cwd)
+
+
+def stop(data: dict) -> None:
+    """The session ends its turn: with unpushed commits in repos it worked in, make it push so the prompt appears."""
+    if os.environ.get("STELLA_HEADLESS") == "1" or not data.get("session_id"):
+        return
+    res = finish.check(data["session_id"], data.get("cwd") or os.getcwd(), own=run.is_self(),
+                       may_block=not data.get("stop_hook_active"))
+    out: dict = {}
+    if res.block:
+        out.update(decision="block", reason=res.block)
+    if res.deferred:
+        out["systemMessage"] = "; ".join(res.deferred)
+    if out:
+        print(json.dumps(out))
 
 
 HANDLERS = {"prompt": prompt, "session-start": session_start, "session-end": session_end, "pretool": pretool,
-            "posttool": posttool}
+            "posttool": posttool, "stop": stop}
 
 
 def main(event: str) -> int:

@@ -119,6 +119,7 @@ _API_METHOD = re.compile(r"POST|PUT|PATCH|DELETE", re.I)
 class Verdict:
     decision: str | None = None  # None (no opinion), "ask" or "deny": a PreToolUse permissionDecision
     reason: str = ""
+    asked: tuple[str, ...] = ()  # "<repo>@<head>" of every push the owner is being asked about
 
 
 def _segments(cmd: str) -> list[list[str]]:
@@ -139,21 +140,35 @@ def _segments(cmd: str) -> list[list[str]]:
     return [seg for seg in segs if seg]
 
 
-def _kind(seg: list[str]) -> str | None:
-    """"git" or "gh" if this simple command pushes or writes to the remote, else None."""
+def _command(seg: list[str]) -> tuple[str, list[str]] | None:
+    """The program and arguments of a simple command, past env assignments and wrappers like `env` or `sudo`."""
     i = 0
     while i < len(seg) and (re.fullmatch(r"\w+=.*", seg[i]) or seg[i] in _WRAPPERS):
         i += 1
         while i < len(seg) and seg[i - 1] in _WRAPPERS and seg[i].startswith("-"):
             i += 1
-    if i >= len(seg):
+    return (os.path.basename(seg[i]), seg[i + 1:]) if i < len(seg) else None
+
+
+def _git_sub(seg: list[str]) -> str | None:
+    """The git subcommand of a simple command (`push`, `commit`, …), past git's own options."""
+    cmd = _command(seg)
+    if not cmd or cmd[0] != "git":
         return None
-    word, args = os.path.basename(seg[i]), seg[i + 1:]
+    args, j = cmd[1], 0
+    while j < len(args) and args[j].startswith("-"):
+        j += 2 if args[j] in _GIT_VALUE_OPTS else 1
+    return args[j] if j < len(args) else None
+
+
+def _kind(seg: list[str]) -> str | None:
+    """"git" or "gh" if this simple command pushes or writes to the remote, else None."""
+    cmd = _command(seg)
+    if not cmd:
+        return None
+    word, args = cmd
     if word == "git":
-        j = 0
-        while j < len(args) and args[j].startswith("-"):
-            j += 2 if args[j] in _GIT_VALUE_OPTS else 1
-        return "git" if j < len(args) and args[j] == "push" else None
+        return "git" if _git_sub(seg) == "push" else None
     if word == "gh":
         words, j = [], 0
         while j < len(args) and len(words) < 2:
@@ -194,6 +209,24 @@ def _walk(command: str, here: Path, out: list[tuple[list[str], str, Path]]) -> N
             _walk(args[k + 1], here, out)
         elif kind:
             out.append((seg, kind, here))
+
+
+def commit_dirs(command: str, cwd: str) -> list[Path]:
+    """The directories a `git commit` in this command runs from, following `cd` and `git -C`."""
+    here = Path(os.path.expanduser(cwd or os.getcwd()))
+    out: list[Path] = []
+    for seg in _segments(command):
+        if seg[0] == "cd" and len(seg) > 1:
+            target = Path(os.path.expandvars(os.path.expanduser(seg[1])))
+            here = target if target.is_absolute() else here / target
+        elif _git_sub(seg) == "commit":
+            where = here
+            for i, tok in enumerate(seg[:-1]):
+                if tok == "-C":
+                    where = here / os.path.expanduser(seg[i + 1])
+                    break
+            out.append(where)
+    return out
 
 
 def _touched(pushes: list[tuple[list[str], str, Path]], command: str) -> dict[Path, Path]:
@@ -384,7 +417,8 @@ def check_bash(command: str, cwd: str) -> Verdict:
     if not touched:
         return Verdict()
     body = "\n".join(f"{alias(r)} -> {_summary(w, not plain)}" for r, w in sorted(touched.items()))
-    return Verdict("ask", f"Push {body}\nDiff: {show_diff(touched)}")
+    asked = tuple(f"{r}@{_head(w)}" for r, w in sorted(touched.items()))
+    return Verdict("ask", f"Push {body}\nDiff: {show_diff(touched)}", asked)
 
 
 # ---------------------------------------------------------------- git hooks

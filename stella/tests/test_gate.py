@@ -174,6 +174,76 @@ def test_asking_stella_to_push_is_just_an_order(env, repo):
     assert [e["type"] for e in env.events()] == ["order"]
 
 
+def test_an_auto_push_session_is_not_asked(env, repo):
+    _commit(env, repo)
+    out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "git push"}, "cwd": str(repo)},
+                   env={"STELLA_AUTO_PUSH": "1"})
+    assert not out
+
+
+def test_writes_into_the_git_dir_are_not_blocked(env, repo):
+    path = _hooks(repo) / "pre-push"
+    out = env.hook("pretool", {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": "x"}, "cwd": str(repo)})
+    assert out is None
+
+
+def test_the_owners_own_push_is_plain_git(env, repo):
+    sha = _commit(env, repo)
+    env.git(repo, "push", "-q", "origin", "main")
+    assert _remote_head(env) == sha
+
+
+def test_gate_install_removes_the_old_push_gate(env, repo):
+    _old_gate(env, repo)
+    status = env.run("gate", "status", "dotfiles").stdout
+    assert "FAIL the old push gate's pre-push hook" in status and "remote.origin.pushurl" in status
+    out = env.run("gate", "install", "dotfiles").stdout
+    assert "removed the old push gate's pre-push hook" in out and "unset remote.origin.pushurl" in out
+    assert not (_hooks(repo) / "pre-push").exists()
+    assert env.git(repo, "config", "--get", "remote.origin.pushurl", check=False).stdout.strip() == ""
+    assert "FAIL" not in env.run("gate", "status", "dotfiles").stdout
+    sha = _commit(env, repo)
+    r = env.git(repo, "push", "origin", "main", check=False)
+    assert r.returncode == 0, r.stderr
+    assert _remote_head(env) == sha
+
+
+def test_gate_install_restores_the_owners_own_pre_push_hook(env, repo):
+    _old_gate(env, repo)
+    mine = "#!/bin/sh\n# the owner's own hook\nexit 0\n"
+    (_hooks(repo) / "pre-push.pre-stella").write_text(mine)
+    env.run("gate", "install", "dotfiles")
+    assert (_hooks(repo) / "pre-push").read_text() == mine
+    assert not (_hooks(repo) / "pre-push.pre-stella").exists()
+    assert "FAIL" not in env.run("gate", "status", "dotfiles").stdout
+
+
+def test_gate_install_leaves_other_push_urls_alone(env, repo):
+    env.git(repo, "config", "remote.origin.pushurl", str(env.tmp / "remote.git"))
+    env.run("gate", "install", "dotfiles")
+    assert env.git(repo, "config", "--get", "remote.origin.pushurl").stdout.strip() == str(env.tmp / "remote.git")
+
+
+def test_gate_keeps_the_leak_guard_commit_hooks(env, repo):
+    out = env.run("gate", "status", "dotfiles").stdout
+    assert "FAIL" not in out
+    assert "ok   pre-commit hook" in out and "ok   commit-msg hook" in out
+    for name in ("pre-commit", "commit-msg"):
+        assert "git-hook" in (_hooks(repo) / name).read_text()
+
+
+def test_a_leftover_pre_push_hook_lets_the_push_through(env, repo):
+    r = env.run("git-hook", "pre-push", "origin", "url", input="refs/heads/main a refs/heads/main b\n", cwd=repo, check=False)
+    assert r.returncode == 0
+
+
+def test_asking_stella_to_push_is_just_an_order(env, repo):
+    _commit(env, repo)
+    out = env.say("A", "S, push dotfiles")
+    assert "push approval" not in out
+    assert [e["type"] for e in env.events()] == ["order"]
+
+
 @pytest.mark.parametrize("cmd", ["push", "review-push", "push-question"])
 def test_the_approval_commands_are_gone(env, repo, cmd):
     r = env.run(cmd, "dotfiles", check=False)

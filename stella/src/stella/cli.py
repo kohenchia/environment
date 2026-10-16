@@ -235,7 +235,18 @@ def cmd_report(a):
 def cmd_done(a):
     from stella import notify, wake
 
-    ev = ledger.append("done", by="cli", team=a.team, text=a.message)
+    from stella import finish
+
+    res = finish.for_done(os.getcwd())
+    text = a.message
+    if res and res.block:
+        print(res.block + "\nThen run `stella done` again.", file=sys.stderr)
+        raise SystemExit(1)
+    if res and res.deferred:
+        text += " [" + "; ".join(res.deferred) + "]"
+    if res and res.outstanding:
+        text += " [not pushed: " + "; ".join(res.outstanding) + "]"
+    ev = ledger.append("done", by="cli", team=a.team, text=text)
     notify.notify(f"Stella: {a.team} finished", a.message)
     wake.kick()
     print(f"recorded #{ev['seq']}; the owner has been notified")
@@ -516,7 +527,7 @@ def build() -> argparse.ArgumentParser:
         return sp
 
     sp = c("hook", cmd_hook, "Claude Code hook entry point (reads hook JSON on stdin)")
-    sp.add_argument("event", choices=["prompt", "session-start", "session-end", "pretool", "posttool"])
+    sp.add_argument("event", choices=["prompt", "session-start", "session-end", "pretool", "posttool", "stop"])
     sp = c("context", cmd_context, "Persona addenda, knowledge maps, teams and the brief")
     sp.add_argument("--self", dest="self_", action="store_true", help="as Stella's own session")
     sp.add_argument("--team", action="store_true")

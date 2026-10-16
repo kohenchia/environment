@@ -59,6 +59,8 @@ def describe(ev: dict) -> str:
         return f"#{ev['seq']} note: {_clip(ev.get('text', ''))}"
     if t == "correction":
         return f"#{ev['seq']} correction: {_clip(ev.get('text', ''))}"
+    if t == "push_deferred":
+        return f"#{ev['seq']} {ev.get('text', 'not pushed, deferred')}"
     if t == "push":
         return f"#{ev['seq']} pushed {ev.get('repo')} {ev.get('sha', '')[:7]} to {ev.get('ref')}"
     if t == "pass_env":
@@ -78,7 +80,7 @@ def describe(ev: dict) -> str:
     return f"#{ev['seq']} {t}"
 
 
-QUIET = {"ack", "started", "push_question", "push_intent", "clear_alert", "reaped", "wake", "wrapped_up"}
+QUIET = {"ack", "started", "clear_alert", "reaped", "wake", "wrapped_up"}
 
 
 def delta(session_id: str, since: int, st: State | None = None) -> list[str]:
