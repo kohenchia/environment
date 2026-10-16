@@ -117,7 +117,7 @@ def test_respawn_resumes_a_running_team_on_the_new_setting(env, tmux, env_claude
     assert "--resume sid-1" in args and "Restarted with pass_env on" in args
     # the old process's SessionEnd is not mistaken for the team quitting
     env.hook("session-end", {"session_id": "sid-1", "reason": "other"}, env={"STELLA_TEAM": "t-re"})
-    assert "without reporting done" not in env.run("attention").stdout
+    assert "ended (reason" not in env.run("attention").stdout
     assert any(e["type"] == "respawned" and e["team"] == "t-re" for e in env.events())
 
 
@@ -138,9 +138,9 @@ def test_two_respawns_expect_two_old_processes_and_keep_needs_you(env, tmux, env
     for _ in range(2):  # both killed processes report their end, late
         env.hook("session-end", {"session_id": "sid-2", "reason": "other"}, env={"STELLA_TEAM": "t-two"})
     att = env.run("attention").stdout
-    assert "without reporting done" not in att and "needs you" in att
+    assert "ended (reason" not in att and "needs you" in att
     env.hook("session-end", {"session_id": "sid-2", "reason": "exit"}, env={"STELLA_TEAM": "t-two"})
-    assert "without reporting done" in env.run("attention").stdout  # a third end is a real exit
+    assert "ended (reason: exit)" in env.run("attention").stdout  # a third end is a real exit
 
 
 def test_respawn_skips_a_team_without_a_window(env, env_claude):
