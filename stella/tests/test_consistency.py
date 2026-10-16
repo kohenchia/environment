@@ -36,13 +36,13 @@ def test_never_addressed_session_gets_nothing(env):
     assert env.events() == []
 
 
-def test_hq_treats_every_message_as_addressed(env):
-    hq = {"STELLA_HQ": "1"}
-    start = env.hook("session-start", {"session_id": "H", "source": "startup"}, env=hq)
-    assert "This is HQ" in start["additionalContext"]
-    out = env.say("H", "review the deploy script", env=hq)
+def test_stellas_own_session_treats_every_message_as_addressed(env):
+    own = {"STELLA_SELF": "1"}
+    start = env.hook("session-start", {"session_id": "H", "source": "startup"}, env=own)
+    assert "This is your own session, Stella" in start["additionalContext"]
+    out = env.say("H", "review the deploy script", env=own)
     assert "Recorded as ledger #1" in out
-    assert env.events()[0]["session_label"] == "HQ"
+    assert env.events()[0]["session_label"] == "stella"
 
 
 def test_first_turn_gets_context_then_short_reminder(env):

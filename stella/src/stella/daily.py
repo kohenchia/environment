@@ -148,9 +148,9 @@ def _daily_prompt(date: dt.date, digest_path: Path) -> str:
                            journal=journal, stella=CALL)
 
 
-def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = None) -> int:
+def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = None, claude: str | None = None) -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [settings().claude_bin, "-p", prompt, "--permission-mode", "bypassPermissions"]
+    cmd = [claude or settings().claude_bin, "-p", prompt, "--permission-mode", "bypassPermissions"]
     if model:
         cmd += ["--model", model]
     with log.open("w") as out:
@@ -163,12 +163,12 @@ def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = No
             return 124
 
 
-def run_daily(date: dt.date) -> int:
+def run_daily(date: dt.date, claude: str | None = None) -> int:
     if not sessions_on(date):
         ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: no sessions, nothing to log")
         return 0
     p = digest(date)
-    rc = headless(_daily_prompt(date, p), store_dir() / "runs" / f"daily-{date:%Y-%m-%d}.log")
+    rc = headless(_daily_prompt(date, p), store_dir() / "runs" / f"daily-{date:%Y-%m-%d}.log", claude=claude)
     ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: {'written' if rc == 0 else f'FAILED (exit {rc})'}")
     if rc != 0:
         ledger.append("alert", by="scheduler", key=f"daily:{date}", text=f"daily log for {date} failed; see runs/daily-{date}.log")
@@ -187,7 +187,7 @@ You are Stella's reflection pass. Read: the work digest {digest}; the priorities
 Do not ask questions; this run is unattended."""
 
 
-def run_nightly(date: dt.date) -> list[str]:
+def run_nightly(date: dt.date, claude: str | None = None) -> list[str]:
     report: list[str] = []
     report += leak.rebuild()
     g = leak.guard()
@@ -213,7 +213,7 @@ def run_nightly(date: dt.date) -> list[str]:
     morning = store_dir() / "digests" / f"{date + dt.timedelta(days=1):%Y-%m-%d}-morning.md"
     prompt = REFLECT.format(mark=MARK, date=date, digest=p, priorities=store_dir() / "priorities.md",
                             canon=store_dir() / "canon.md", stella=CALL, owner=settings().owner, morning=morning)
-    rc = headless(prompt, store_dir() / "runs" / f"reflect-{date:%Y-%m-%d}.log")
+    rc = headless(prompt, store_dir() / "runs" / f"reflect-{date:%Y-%m-%d}.log", claude=claude)
     report.append(f"reflection: exit {rc}")
     if rc == 0 and morning.exists():
         ledger.append("alert", by="scheduler", key=f"morning:{morning.stem}", text=f"morning digest ready: {morning}")

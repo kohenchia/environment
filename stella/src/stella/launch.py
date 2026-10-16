@@ -60,7 +60,7 @@ class Launched:
 def _unique_name(base: str) -> str:
     st = state.fold()
     name, n = base, 2
-    reserved = {"stella", "stella-cron"}  # HQ and the scheduler
+    reserved = {"stella"}  # Stella's own window
     while name in reserved or (name in st.teams and st.teams[name].status in {"running", "needs-you"}):
         name, n = f"{base}-{n}", n + 1
     return name

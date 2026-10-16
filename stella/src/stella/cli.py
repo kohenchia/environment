@@ -25,7 +25,7 @@ def cmd_hook(a):
 def cmd_context(a):
     from stella import context
 
-    mode = "hq" if a.hq else "team" if a.team else "turn"
+    mode = "self" if a.self_ else "team" if a.team else "turn"
     print(context.render(mode, include_brief=not a.no_brief))
 
 
@@ -213,23 +213,23 @@ def cmd_search(a):
         print("no matches")
 
 
-def cmd_hq(a):
-    from stella import hq
+def cmd_run(a):
+    from stella import run
 
-    print(hq.open_hq(fresh=a.fresh, here=a.here))
+    print(run.run(fresh=a.fresh))
 
 
 def cmd_scheduler(a):
-    from stella import hq, scheduler, tmuxctl
+    from stella import scheduler
 
     if a.ensure:
-        srv = tmuxctl.find_server()
-        if not srv:
-            raise SystemExit("no tmux server running")
-        print(f"scheduler window {hq.ensure_scheduler(srv)}")
+        print(scheduler.ensure_daemon())
+        return
+    if a.stop:
+        print(scheduler.stop_daemon())
         return
     if a.once:
-        print(scheduler.tick() or "nothing due")
+        print(scheduler.run_once(in_session=a.in_session) or "nothing due")
         return
     return scheduler.run_forever()
 
@@ -403,7 +403,7 @@ def build() -> argparse.ArgumentParser:
     sp = c("hook", cmd_hook, "Claude Code hook entry point (reads hook JSON on stdin)")
     sp.add_argument("event", choices=["prompt", "session-start", "session-end", "pretool"])
     sp = c("context", cmd_context, "Persona addenda, knowledge maps, teams and the brief")
-    sp.add_argument("--hq", action="store_true")
+    sp.add_argument("--self", dest="self_", action="store_true", help="as Stella's own session")
     sp.add_argument("--team", action="store_true")
     sp.add_argument("--no-brief", action="store_true")
     c("brief", cmd_brief, "The state brief: open orders, teams, what needs the owner")
@@ -459,12 +459,13 @@ def build() -> argparse.ArgumentParser:
     sp = c("search", cmd_search, "Search the whole ledger")
     sp.add_argument("query")
     sp.add_argument("--limit", type=int, default=10)
-    sp = c("hq", cmd_hq, "Open (or switch to) HQ, the persistent Stella session")
-    sp.add_argument("--fresh", action="store_true", help="start a new HQ conversation (nothing is lost: state is on disk)")
-    sp.add_argument("--here", action="store_true", help="run HQ in this terminal")
+    sp = c("run", cmd_run, "Run Stella: her own session, where every message is to her (and the scheduler in the background)")
+    sp.add_argument("--fresh", action="store_true", help="start a new conversation (nothing is lost: state is on disk)")
     sp = c("scheduler", cmd_scheduler, "Run the daily/nightly scheduler")
-    sp.add_argument("--ensure", action="store_true", help="make sure the scheduler window is running")
+    sp.add_argument("--ensure", action="store_true", help="start the background scheduler unless it is running")
+    sp.add_argument("--stop", action="store_true", help="stop the background scheduler")
     sp.add_argument("--once", action="store_true", help="run whatever is due, then exit")
+    sp.add_argument("--in-session", action="store_true", help=argparse.SUPPRESS)
     sp = c("daily", cmd_daily, "Write the daily log now")
     sp.add_argument("--date")
     sp.add_argument("--digest-only", action="store_true")

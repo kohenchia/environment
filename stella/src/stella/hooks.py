@@ -1,11 +1,12 @@
 """Claude Code hook handlers. `stella hook <event>` reads the hook JSON on stdin.
 
-* UserPromptSubmit: decide whether the message is addressed to Stella (in HQ,
-  always). If it is: record it verbatim in the ledger *before the model runs*,
+* UserPromptSubmit: decide whether the message is addressed to Stella (in
+  Stella's own session, always). If it is: record it verbatim in the ledger *before the model runs*,
   then inject the persona, what other sessions recorded since this session last
   looked, and possible conflicts. If it isn't: hand the turn back to the session.
-* SessionStart: in HQ, inject the full context and brief (also after /compact).
-  In a team window, record which session is the lead.
+* SessionStart: in Stella's own session, inject the full context and brief (also
+  after /compact). In a team window, record which session is the lead. Anywhere,
+  if the scheduler is down and a run is overdue, start a catch-up pass.
 * SessionEnd: a team lead that exits without `stella done` raises an attention item.
 * PreToolUse: the push gate and the leak guard.
 """
@@ -18,7 +19,7 @@ import re
 import sys
 import traceback
 
-from stella import address, brief, context, gate, leak, ledger, notify, sessions, state, targets
+from stella import address, brief, context, gate, leak, ledger, notify, run, scheduler, sessions, state, targets
 from stella.config import settings
 
 HANDBACK = (
@@ -39,8 +40,8 @@ def _deny(reason: str) -> None:
 
 def _label(data: dict) -> str:
     team = os.environ.get("STELLA_TEAM")
-    if os.environ.get("STELLA_HQ") == "1":
-        return "HQ"
+    if run.is_self():
+        return "stella"
     if team:
         return f"team {team}"
     cwd = data.get("cwd") or ""
@@ -66,8 +67,7 @@ def _affirmed_question(text: str, session: str, st: state.State) -> dict | None:
     if not address.is_affirmative(text) or not st.push_questions:
         return None
     q = st.push_questions[-1]
-    hq = os.environ.get("STELLA_HQ") == "1"
-    if q.get("session") not in {session, None} and not hq:
+    if q.get("session") not in {session, None} and not run.is_self():
         return None
     if (ledger.now() - ledger.parse_ts(q)).total_seconds() > settings().push_intent_minutes * 60:
         return None
@@ -82,9 +82,9 @@ def prompt(data: dict) -> None:
         return
     text = data.get("prompt") or ""
     sid = data.get("session_id") or "unknown"
-    hq = os.environ.get("STELLA_HQ") == "1"
+    own = run.is_self()
     team = os.environ.get("STELLA_TEAM")
-    addressed = hq or address.is_addressed(text)
+    addressed = own or address.is_addressed(text)
     sess = sessions.load(sid)
 
     if not addressed:
@@ -121,10 +121,10 @@ def prompt(data: dict) -> None:
         return
 
     parts: list[str] = []
-    if not hq and not sess.get("context_loaded"):
+    if not own and not sess.get("context_loaded"):
         parts.append(context.render("turn", include_brief=True))
         sess["context_loaded"] = True
-    elif not hq:
+    elif not own:
         parts.append("This turn is addressed to you, Stella (follow the `stella` skill). After it, the owner is talking to the session again.")
     parts.append(f"Recorded as ledger #{order['seq']} ({kind}).")
     if intent:
@@ -157,16 +157,15 @@ def session_start(data: dict) -> None:
             pass
     source = data.get("source")
     team = os.environ.get("STELLA_TEAM")
-    if os.environ.get("STELLA_HQ") == "1":
+    scheduler.catch_up_if_needed()
+    if run.is_self():
         try:
-            text = context.render("hq", include_brief=True)
+            text = context.render("self", include_brief=True)
             st = state.fold()
             sess = sessions.load(sid)
-            sess.update(cursor=st.last_seq, context_loaded=True, hq=True)
+            sess.update(cursor=st.last_seq, context_loaded=True, own=True)
             sessions.save(sid, sess)
-            from stella import hq
-
-            hq.remember_session(sid)
+            run.remember_session(sid)
         except Exception as e:  # noqa: BLE001
             text = UNAVAILABLE.format(err=f"{type(e).__name__}: {e}")
         _emit("SessionStart", text)

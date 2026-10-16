@@ -23,9 +23,9 @@ def _ext_section(key: str, title: str) -> list[str]:
 def render(mode: str = "turn", include_brief: bool = True) -> str:
     s = settings()
     lines = [f"# Stella context (owner: {s.owner})"]
-    if mode == "hq":
+    if mode == "self":
         lines.append(
-            f"This is HQ, the persistent Stella session. Every message here is from {s.owner} to you, Stella."
+            f"This is your own session, Stella (`stella run`). Every message here is from {s.owner} to you."
         )
     elif mode == "turn":
         lines.append(

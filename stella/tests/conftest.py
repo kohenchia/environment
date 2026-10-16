@@ -28,6 +28,7 @@ class Env:
             "STELLA_STORE": str(self.store),
             "STELLA_CONFIG": str(self.config),
             "STELLA_TRANSCRIPTS": str(tmp / "transcripts"),
+            "STELLA_NO_CATCHUP": "1",
             "GIT_CONFIG_GLOBAL": str(tmp / "gitconfig"),
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
