@@ -189,7 +189,9 @@ def session_end(data: dict) -> None:
     t = st.teams.get(team)
     if t and t.status not in {"done", "ended"}:
         ledger.append("ended", by="hook", team=team, session=data.get("session_id"), reason=data.get("reason"))
-        notify.notify("Stella", f"Team {team} exited without reporting done")
+        t.end_reason = data.get("reason")
+        if t.end_reason != state.DELIBERATE_END:
+            notify.notify("Stella", "T" + t.ended_text()[1:])
 
 
 _WRITEY = re.compile(r"(>|\btee\b|\bsed\s+-i|\bperl\s+-[pi]|<<|\bcp\b|\bmv\b|\bgit\s+commit\b|\bpython3?\b|\bcat\b.*>|\bprintf\b|\becho\b)")

@@ -14,7 +14,7 @@ import datetime as dt
 
 from stella import ledger
 from stella.config import settings
-from stella.state import State, conflicts
+from stella.state import State, conflicts, end_phrase
 
 
 def _age(ts: dt.datetime, now: dt.datetime) -> str:
@@ -52,7 +52,7 @@ def describe(ev: dict) -> str:
     if t == "done":
         return f"#{ev['seq']} {ev.get('team')} finished: {_clip(ev.get('text', ''))}"
     if t == "ended":
-        return f"#{ev['seq']} {ev.get('team')} exited without reporting done"
+        return f"#{ev['seq']} {ev.get('team')} {end_phrase(ev.get('reason'))}"
     if t == "close":
         return f"#{ev['seq']} closed order #{ev.get('order')} as {ev.get('status')}"
     if t == "note":
