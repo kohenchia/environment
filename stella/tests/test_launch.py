@@ -133,3 +133,17 @@ def test_clean_exit_closes_the_window_but_a_crash_keeps_it(env, tmux):
     windows = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", "work", "-F", "#{window_name}"],
                              capture_output=True, text=True).stdout.split()
     assert "quits" not in windows and "crashes" in windows
+
+
+def test_lead_prompt_tells_the_team_to_state_requests_in_full(env, tmux, fake_claude):
+    env.say("A", "S, build q")
+    env.run("launch", "builder", "--order", "1", "--name", "bq", env=tmux)
+    prompt = (env.store / "launch" / "bq.prompt.md").read_text()
+    assert "STATES THE REQUEST IN FULL" in prompt and 'Never write "I have asked"' in prompt
+
+
+def test_needs_you_report_reminds_the_team_to_say_it_in_the_window(env):
+    env.say("A", "S, build r")
+    out = env.run("report", "br", "which database?", "--needs-you").stdout
+    assert "must state the request in full" in out
+    assert "must state" not in env.run("report", "br", "built half").stdout

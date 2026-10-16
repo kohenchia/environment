@@ -194,6 +194,12 @@ def cmd_report(a):
     if a.needs_you:
         notify.notify(f"Stella: {a.team} needs you", a.message)
     print(f"recorded #{ev['seq']}")
+    if a.needs_you:
+        print(
+            "The owner reads this window, not the ledger. Your next message must state the request in full:"
+            " the question, the options, your recommendation, and what you will do meanwhile."
+            " Do not say that you reported or asked."
+        )
 
 
 def cmd_done(a):
