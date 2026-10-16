@@ -1,12 +1,13 @@
 """Finishing with unpushed work: the session pushes, so the push prompt appears. It is the prompt, or nothing.
 
-When a session ends its turn (the Stop hook) or a team reports done (`stella done`) while commits sit unpushed in
-a repo with a remote that the session worked in, `check` refuses once and tells the session to run the push now.
+When a session ends its turn (the Stop hook) or a team reports done (`stella done`) while commits THAT SESSION MADE sit
+unpushed in a repo with a remote, `check` refuses once and tells the session to run the push now.
 The push goes through the PreToolUse prompt (`gate.check_bash`): the owner answers yes, no (defer) or asks for the
 diff. Nothing here pushes, approves or asks the owner to run anything.
 
-* Repos the session worked in: the one it runs in (not for Stella's own session, which runs from anywhere) and
-  every repo a `git commit` of this session ran in (recorded by the PostToolUse hook).
+* Ownership is provenance (`provenance`): the commits the PostToolUse hook, the post-commit hook or the transcripts say this
+  session made. Never another session's or effort's commit in the same repo, never one a remote branch already has, and
+  a commit with no record is nobody's to push (it is an unowned item on Stella's list). Where the session runs does not matter.
 * One reminder per repo head per session, so the hook cannot loop; a head the session already asked about, whose
   push was then not approved, is a deferral: recorded once, reported as "not pushed, deferred", never asked again.
 """

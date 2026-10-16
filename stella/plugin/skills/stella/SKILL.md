@@ -216,15 +216,21 @@ asks for itself. (Guarded repos, `~/.local/bin/stella gate status`, also run the
   outstanding list. Treat a declined push as deferred, not rejected: when the owner asks for outstanding
   items, list each guarded repo with unpushed commits (`git -C <repo> log --oneline @{u}..`), and show the
   diff (`stella diff <repo>`) when asked.
-- **The hooks enforce it.** If a session ends its turn, or a team runs `stella done`, with unpushed commits in a
-  repo it worked in, the Stop hook (or `done`) refuses once per head and says to push now: do that, and the prompt
-  appears. Do not loop on it: after one reminder per head, or after a no, it lets go. A no is recorded as
+- **The hooks enforce it.** If a session ends its turn, or a team runs `stella done`, with unpushed commits that
+  session made, the Stop hook (or `done`) refuses once per head and says to push now: do that, and the prompt
+  appears. Only the commits that session made count (ownership is recorded when a commit is made: `stella provenance`);
+  another effort's commits in the same repo are never its business. Do not loop on it: after one reminder per head, or after a no, it lets go. A no is recorded as
   deferred; report it as "not pushed, deferred" with the repo, branch and commit.
 - **A deferred push is on the owner's list.** The Stop hook raises a `stella attention` item, "deferred push:
   <repo> <branch> (N commits)", that stays in the brief and the morning digest until the commits are on the
   remote (it then clears itself) or the owner drops it with `ack`. When you mention it, never tell the owner to
   run anything: offer to raise the push prompt again, and on a yes tell the owning session to push (`stella tell`)
   or run the push yourself so the prompt appears.
+- **Unowned business.** Commits and files whose session is gone, and old commits with no ownership record, appear in
+  `stella attention` as one line each: `unowned: <repo> <branch> N unpushed commits (...): push (...) / drop (...)?`.
+  Nobody else will ever mention them, so you do: ask the owner. On a yes, run the push command in the line yourself, so
+  the prompt appears (never tell the owner to run it); on "drop", `stella ack <key>`. They never block a session's `gg`.
+  `stella provenance unowned` lists the old backlog behind the one `unowned, old:` summary line.
 - A declined push is the only reason work stays unpushed. Your own work in a repo with a remote follows the
   same rule: commit, then push (the prompt asks).
 

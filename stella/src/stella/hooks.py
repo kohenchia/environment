@@ -385,7 +385,7 @@ def posttool(data: dict) -> None:
 
 
 def stop(data: dict) -> None:
-    """The session ends its turn: with unpushed commits in repos it worked in, make it push so the prompt appears."""
+    """The session ends its turn: with unpushed commits it made, make it push so the prompt appears."""
     if os.environ.get("STELLA_HEADLESS") == "1" or not data.get("session_id"):
         return
     own = run.is_self()

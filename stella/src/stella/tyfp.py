@@ -2,7 +2,7 @@
 every session that is done.
 
 Typed alone (any case, trimmed) in any session in the Stella tmux server, handled by the prompt hook so the prompt never reaches
-the model. For every Stella-managed or adopted session it applies the `gg` blockers (unpushed commits, uncommitted changes, a
+the model. For every Stella-managed or adopted session it applies the `gg` blockers (unpushed commits it made, uncommitted files it wrote last, a
 deferred push, an open question, a follow-up waiting, needs-you) and wraps up each one that is clean and idle. No grace period,
 and `keep_open` and adopted sessions count: the word is explicit. It never touches a session that is busy, running, blocked, or
 Stella's own. The session it was typed in goes last, if clean, a few seconds after the report is delivered.
