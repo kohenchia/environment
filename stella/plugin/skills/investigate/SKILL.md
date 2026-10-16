@@ -25,3 +25,15 @@ unlimited.
 5. **Answer**: write the answer first (two or three sentences), then the evidence, then what remains
    unknown and who could settle it. Put it in a file if it's long, and
    `~/.local/bin/stella done <name> "<the answer in brief> — full write-up: <path>"`.
+
+## Status line: how every turn ends
+
+The last line of the final message of every turn is exactly one of these, in plain words (the Stop hook reads
+the transcript and blocks the stop once, with the exact line to write, if it is missing or false):
+
+- `NEXT FOR YOU: <the one or two things only the owner can do or decide>`: a question, a decision, a deferred
+  push (it stays NEXT FOR YOU until he drops it), a review to post.
+- `ALL DONE: ready to wrap up. Type gg.`: only when nothing is unpushed, uncommitted, deferred or open for him.
+- `WORKING: <what is still running>`: only when the turn ends while background work continues.
+
+Write it after the full account above it, never instead of it.

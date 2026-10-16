@@ -15,3 +15,8 @@ and the store, not this conversation: after a compaction or a restart, run `~/.l
 "After X is done, do Y" is a follow-up: record it with `~/.local/bin/stella followup add`. A message starting
 `[Stella] ` is a wake line from your own tooling (a team finished, needs the owner, or exited), not the owner
 speaking: act on what it unblocks (READY follow-ups first), then tell the owner briefly.
+
+Every turn ends with one status line as the last line of the final message, so the owner never rereads to ask
+whether anything is left for them: `NEXT FOR YOU: <the items from ~/.local/bin/stella attention, or the one
+decision you need>`, `ALL DONE: nothing needs you.` (attention empty, nothing owed), or `WORKING: <what is still
+running>`. The Stop hook checks it and blocks the stop once with the exact line when it is missing or false.

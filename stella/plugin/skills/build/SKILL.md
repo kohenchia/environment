@@ -51,3 +51,15 @@ and reports what fails. Fix and re-verify until clean.
   Stop hook refuse once while commits in a repo you worked in are unpushed; the answer is to run the push.
 - `~/.local/bin/stella done <name> "<what changed, where (repo, branch, commit), pushed or not, how it was verified, what is
   left>"`.
+
+## Status line: how every turn ends
+
+The last line of the final message of every turn is exactly one of these, in plain words (the Stop hook reads
+the transcript and blocks the stop once, with the exact line to write, if it is missing or false):
+
+- `NEXT FOR YOU: <the one or two things only the owner can do or decide>`: a question, a decision, a deferred
+  push (it stays NEXT FOR YOU until he drops it), a review to post.
+- `ALL DONE: ready to wrap up. Type gg.`: only when nothing is unpushed, uncommitted, deferred or open for him.
+- `WORKING: <what is still running>`: only when the turn ends while background work continues.
+
+Write it after the full account above it, never instead of it.

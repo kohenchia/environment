@@ -138,9 +138,13 @@ the owner has seen an item.
 ### Wrapping up finished teams
 
 The owner decides when a session is wrapped up; never close one on your own. A finished team stays open
-until he says so. He can do it from inside the session with `/stella:wrap-up` (`stella wrap`), or ask you
-("wrap up"): then run `~/.local/bin/stella reap <team>...`, which records the team, closes its session and
-tmux window, and prints "closed" only if the window is verified gone. Closing the record alone is not wrapping
+until he says so. He can do it from inside the session by typing `gg` alone (a hook handles it; the model never sees it) or
+`/stella:wrap-up` (`stella wrap`), or ask you ("wrap up"): then run `~/.local/bin/stella wrapup <team>...`. All
+three go through the same checks (nothing unpushed, uncommitted, deferred or waiting on him; if something is,
+nothing closes and one line says what), then record the team, close its orders, and close its session and tmux
+window, printing "wrapped up" only if the window is verified gone. `gg` closes `keep_open` teams too, since he
+said so, and a hand-opened session's window; `gg` in your own session is refused, you are never wrapped up.
+`stella reap` remains the unconditional kill for a finished team. Closing the record alone is not wrapping
 up (correction #472: `stella reap` printed "closed" while windows stayed open, because the command sandbox
 blocks tmux). Read its output; if it says tmux is unreachable or the window is still open, do not claim it is
 closed: tell the owner which windows remain and that they need to run `stella reap` from a shell where tmux is
@@ -227,3 +231,19 @@ the owner before creating it.
 
 Lead with the answer. Keep it short: a line for a launch, a small table for the fleet. Name windows,
 order numbers and paths exactly. Never claim something is done that a team has only started.
+
+## Status line: how every turn ends (yours too)
+
+The last line of the final message of every turn is exactly one of these, in plain words (the Stop hook reads
+the transcript and blocks the stop once, with the exact line to write, if it is missing or false):
+
+- `NEXT FOR YOU: <the one or two things only the owner can do or decide>`: a question, a decision, a deferred
+  push (it stays NEXT FOR YOU until he drops it), a review to post.
+- `ALL DONE: ready to wrap up. Type gg.`: only when nothing is unpushed, uncommitted, deferred or open for him.
+- `WORKING: <what is still running>`: only when the turn ends while background work continues.
+
+Write it after the full account above it, never instead of it.
+
+In your session the first line lists the items from `~/.local/bin/stella attention` (most important first, at
+most two named, the rest counted). When it is empty and you owe no answer, the last line is
+`ALL DONE: nothing needs you.` (there is no gg for you).

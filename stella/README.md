@@ -59,13 +59,41 @@ stella doctor    # check everything
 | **Push prompt** | When a Claude session runs a command that pushes from any git repo with a remote (`git push`, `gh pr create`, …), the tool hook asks Claude Code to show you its yes/no prompt first, showing `Push <repo> -> <branch> (N commits)`, the newest subjects, `FORCE` for a force push, and where to see the full diff (a background tmux window `push-diff` you jump to and back, or a file if tmux is unreachable; `stella diff [repo]` prints it anywhere). Yes runs the push; no stops it and leaves it outstanding. It looks at the parsed command, so text that merely mentions a push (a commit message, a grep, a heredoc) never asks. A yes is remembered per repo and head commit for every session and subagent (recorded by a PostToolUse hook after the push ran), so the same head is asked once; a plain push with nothing ahead of its upstream is not asked. A `git push` you type in a terminal is plain git. Teams push their own branch before reporting done, and it is structural: a Stop hook (and `stella done`) refuses once, per repo head and session, when a session finishes with unpushed commits in a repo it worked in (its directory, and repos it committed to), telling the session to run the push now so this prompt appears. A no is recorded as deferred ("not pushed, deferred"), reported once and never asked again for that head. There is no command for you to run: it is the prompt, or nothing; `stella launch --auto-push` skips the prompt when you said up front to push |
 | **Extensions** | Directories listed in `~/.config/stella/extensions.toml` that add teams, knowledge maps, persona and playbook addenda, doctor checks, the daily-log prompt, and leak-guard rules. The core never names one |
 
+### The status line
+
+Every turn of every session in the Stella tmux server (team leads, one-off teams, windows you opened by hand,
+and Stella's own) ends with exactly one last line, so you never reread the output to ask "is anything left for me?":
+
+```
+NEXT FOR YOU: approve the push of environment status-gg (2 commits); answer the open question: which database?
+ALL DONE: ready to wrap up. Type gg.
+WORKING: the nightly eval is still running
+```
+
+`NEXT FOR YOU` is the one or two things only you can do or decide (a question, a decision, a deferred push, a
+review to post); `ALL DONE` means nothing is unpushed, uncommitted, deferred or open for you; `WORKING` only when
+background work continues after the turn. It is structural: the Stop hook reads the turn's last assistant message
+and, when the line is missing or contradicts the facts (ALL DONE with unpushed commits, a deferred push, an open
+needs-you flag or uncommitted changes), blocks the stop once with the exact line to write (never a loop: the
+second stop of the turn passes). A deferred push is `NEXT FOR YOU` until you drop it (`stella ack push-deferred:<repo>@<sha>`)
+or its commit reaches a remote. In Stella's session `NEXT FOR YOU` lists the items from `stella attention`, and
+the empty case is `ALL DONE: nothing needs you.` (she is never wrapped up, so no gg). The rule is also in the
+lead prompt, the team skills, Stella's persona, and the per-turn hook context.
+
 ### Wrapping up a session
 
 You decide when a session is done. Nothing closes sessions automatically unless you turn it on.
 
-* **In a session:** type `/stella:wrap-up` (or run `stella wrap`). It records the team as wrapped up and
-  closes that session's tmux window a few seconds later. It reports unpushed or uncommitted work first;
-  the work stays on disk.
+* **`gg`:** type exactly `gg` (alone, any case) as a prompt in any Claude session in the Stella tmux server.
+  A UserPromptSubmit hook handles it, so the prompt never reaches the model. It first checks that nothing is
+  unpushed, uncommitted, deferred or waiting on you. If something is, it does **not** close: it says what blocks
+  it in one line and, when an unpushed commit is the blocker, raises Claude Code's push prompt (never a command
+  for you to run); a deferred push is not asked again, answer or drop it. If clean, it records the team as
+  wrapped up, closes its orders, and closes the session and its tmux window (verified gone; an alert is raised
+  if it stays). It closes `keep_open` teams (review) too, since you said so. In a session that is not a team it
+  closes just that window after the same checks. In Stella's own session it is refused with one line.
+* **In a session:** type `/stella:wrap-up` (or run `stella wrap`); from outside, `stella wrapup <team>`. Same
+  checks and closing as `gg`, one code path.
 * **Resume picker:** `claude --resume` hides a transcript whose first `entrypoint` is `sdk-cli` (a `claude -p` run), even if it was later resumed by hand. `stella reopen` and the nightly job rewrite that origin to `cli` (`stella fix-resume [name|id]` does it on demand; a transcript touched in the last minute is skipped). Sessions are listed under the directory they started in, by name.
 * **From Stella:** `stella reap <team>` closes a finished team's window and verifies it is gone.
 * **What is ready:** `stella wrapup --dry-run` and the brief's "Finished, not wrapped up" section list each

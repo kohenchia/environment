@@ -25,7 +25,7 @@ import re
 import sys
 import traceback
 
-from stella import address, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, targets, wake, wrapup
+from stella import address, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, wake, wrapup
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -77,6 +77,8 @@ def prompt(data: dict) -> None:
     sid = data.get("session_id") or "unknown"
     own = run.is_self()
     team = os.environ.get("STELLA_TEAM")
+    if status.is_gg(text):
+        return _gg(data)
     addressed = own or address.is_addressed(text)
     sess = sessions.load(sid)
 
@@ -92,10 +94,15 @@ def prompt(data: dict) -> None:
         if team and not sess.get("seen_first"):
             sess["seen_first"] = True
             sessions.save(sid, sess)
+        parts = []
         if sess.get("last_addressed"):
             sess["last_addressed"] = False
             sessions.save(sid, sess)
-            _emit("UserPromptSubmit", HANDBACK)
+            parts.append(HANDBACK)
+        if team or _in_stella_tmux():
+            parts.append(status.turn_rule(False))
+        if parts:
+            _emit("UserPromptSubmit", "\n\n".join(parts))
         return
 
     try:
@@ -122,6 +129,7 @@ def prompt(data: dict) -> None:
     elif not own:
         parts.append("This turn is addressed to you, Stella (follow the `stella` skill). After it, the owner is talking to the session again.")
     parts.append(f"Recorded as ledger #{order['seq']} ({kind}).")
+    parts.append(status.turn_rule(own))
     if delta:
         parts.append("Since this session last looked, other sessions recorded:\n" + "\n".join(f"- {d}" for d in delta))
     if conflicts:
@@ -142,6 +150,34 @@ def prompt(data: dict) -> None:
     _emit("UserPromptSubmit", "\n\n".join(parts))
 
 
+def _in_stella_tmux() -> bool:
+    sock = os.environ.get("TMUX", "").split(",", 1)[0]
+    return bool(sock and os.environ.get("TMUX_PANE") and wrapup.in_stella_server(sock))
+
+
+def _block_prompt(reason: str) -> None:
+    """The prompt never reaches the model; the owner sees the reason."""
+    print(json.dumps({"decision": "block", "reason": reason}))
+
+
+def _gg(data: dict) -> None:
+    """The owner typed `gg`: wrap this session up (the same code path as `stella wrap` and `stella wrapup <team>`)."""
+    sid, cwd = data.get("session_id") or "", data.get("cwd") or os.getcwd()
+    try:
+        w = wrapup.wrap_session(sid, cwd, delay=float(os.environ.get("STELLA_GG_DELAY") or 2))
+    except Exception as e:  # noqa: BLE001
+        return _block_prompt(f"gg failed ({type(e).__name__}: {e}); nothing closed.")
+    if w.closed or not w.push_blocks:
+        return _block_prompt(w.message)
+    # An unpushed commit blocks the close: the model runs the push, so Claude Code's own prompt appears.
+    res = finish.check(sid, cwd, own=False, may_block=True)
+    how = res.block or "Run the push for the unpushed commits again (`git push -u origin <branch>`), so the push prompt appears."
+    _emit("UserPromptSubmit",
+          f"The owner typed `gg` to wrap this session up, and it did not close: {w.message}. Do not ask in chat and tell"
+          f" them nothing to run. {how}\nThen say in one line what still blocks the close, if anything, and end with the"
+          " status line (NEXT FOR YOU: … while something is open; ALL DONE: ready to wrap up. Type gg. if nothing is).")
+
+
 FOLLOWUPS = "Your open follow-ups (act on READY ones; `~/.local/bin/stella followup close N` when done):\n"
 
 
@@ -158,7 +194,7 @@ def _system_note(sid: str, sess: dict) -> None:
     except Exception as e:  # noqa: BLE001
         _emit("UserPromptSubmit", UNAVAILABLE.format(err=f"{type(e).__name__}: {e}"))
         return
-    parts = [SYSTEM_NOTE.format(owner=settings().owner)]
+    parts = [SYSTEM_NOTE.format(owner=settings().owner), status.turn_rule(True)]
     if newer:
         parts.append(newer)
     if followups:
@@ -293,11 +329,22 @@ def stop(data: dict) -> None:
     """The session ends its turn: with unpushed commits in repos it worked in, make it push so the prompt appears."""
     if os.environ.get("STELLA_HEADLESS") == "1" or not data.get("session_id"):
         return
-    res = finish.check(data["session_id"], data.get("cwd") or os.getcwd(), own=run.is_self(),
+    own = run.is_self()
+    team = os.environ.get("STELLA_TEAM")
+    res = finish.check(data["session_id"], data.get("cwd") or os.getcwd(), own=own,
                        may_block=not data.get("stop_hook_active"))
     out: dict = {}
-    if res.block:
-        out.update(decision="block", reason=res.block)
+    reason = res.block
+    if own or team or _in_stella_tmux():
+        try:
+            t = state.fold().teams.get(team or "")
+            line = status.stop_reason(data, data["session_id"], own, t, push_block=bool(res.block))
+        except Exception:  # noqa: BLE001 - a broken check must not trap the session
+            line = None
+        if line:
+            reason = f"{res.block}\n\n{line}" if res.block else line
+    if reason:
+        out.update(decision="block", reason=reason)
     if res.deferred:
         out["systemMessage"] = "; ".join(res.deferred)
     if out:

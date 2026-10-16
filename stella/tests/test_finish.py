@@ -10,7 +10,8 @@ S = "sess-1"
 
 
 def _stop(env, cwd, sid=S, active=False, extra_env=None):
-    r = env.run("hook", "stop", input=json.dumps({"session_id": sid, "cwd": str(cwd), "stop_hook_active": active}),
+    r = env.run("hook", "stop", input=json.dumps({"session_id": sid, "cwd": str(cwd), "stop_hook_active": active,
+                                                  "last_assistant_message": "NEXT FOR YOU: x"}),
                 env=extra_env)
     return json.loads(r.stdout) if r.stdout.strip() else {}
 

@@ -7,7 +7,7 @@ playbook, the team list, and the state brief.
 
 from __future__ import annotations
 
-from stella import brief, extensions, registry, state
+from stella import brief, extensions, registry, state, status
 from stella.config import settings
 
 
@@ -35,6 +35,7 @@ def render(mode: str = "turn", include_brief: bool = True) -> str:
         )
     elif mode == "team":
         lines.append("You are a team lead launched by Stella. These are the knowledge sources and rules you share with her.")
+        lines.append(status.TURN_RULE)
     lines += _ext_section("persona", "Persona addenda")
     lines += _ext_section("knowledge", "Knowledge map")
     lines += _ext_section("playbook", "Engineering playbook addenda")

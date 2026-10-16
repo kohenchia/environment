@@ -216,6 +216,12 @@ def cmd_wrap(a):
 def cmd_wrapup(a):
     from stella import wrapup
 
+    if a.close_window:  # internal: the detached helper of `gg` / `stella wrap`
+        return wrapup.close_window(a.close_window, a.delay)
+    if a.team:
+        for name in a.team:
+            print(wrapup.wrap_team(name, dry_run=a.dry_run).message)
+        return
     wrapped, kept = wrapup.sweep(dry_run=a.dry_run)
     print(wrapup.report(wrapped, kept, a.dry_run))
 
@@ -535,8 +541,25 @@ def cmd_install(a):
     print("\n".join(install.install(plugin=not a.no_plugin, gate_=not a.no_gate)))
 
 
+EPILOG = """\
+gg: type exactly `gg` (alone, any case) as a prompt in any Claude session in the Stella tmux server and that session
+wraps itself up, the same as /stella:wrap-up, `stella wrap` and `stella wrapup <team>`. It first checks that nothing is
+unpushed, uncommitted, deferred or waiting on the owner; if something is, it does not close, says what in one line and,
+for an unpushed commit, raises the push prompt. If clean, it closes the session and its window (verified), closes the
+team's orders and writes `wrapped_up`. keep_open teams (review) close too. In a session that is not a team it closes
+just that window. In Stella's own session it is refused: she is never wrapped up.
+
+status line: every turn of every session in the Stella tmux server ends with exactly one last line:
+`NEXT FOR YOU: <what only the owner can do or decide>`, `ALL DONE: ready to wrap up. Type gg.`, or
+`WORKING: <what is still running>`. The Stop hook checks it and blocks the stop once, with the exact line to write,
+when it is missing or contradicts the facts (ALL DONE with unpushed commits, a deferred push, an open question or
+uncommitted changes).
+"""
+
+
 def build() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="stella", description=__doc__)
+    p = argparse.ArgumentParser(prog="stella", description=__doc__, epilog=EPILOG,
+                                formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     def c(name, fn, help_):
@@ -602,11 +625,14 @@ def build() -> argparse.ArgumentParser:
     sp = c("reap", cmd_reap, "Close the windows of finished teams (all finished ones, or those named)")
     sp.add_argument("name", nargs="*")
     sp.add_argument("--force", action="store_true", help="also close a team that has not reported done")
-    sp = c("wrap", cmd_wrap, "(in a session) wrap up this session: record it closed, then close its tmux window")
+    sp = c("wrap", cmd_wrap, "(in a session) wrap up this session after the `gg` checks: record it closed, then close its tmux window")
     sp.add_argument("--delay", type=float, default=3, help="seconds before the window closes, so the reply can finish")
     sp.add_argument("--dry-run", action="store_true", help="say what would close; change nothing")
-    sp = c("wrapup", cmd_wrapup, "Check finished teams for wrap-up readiness; the scheduler wraps the clean ones only if wrapup_auto is on")
+    sp = c("wrapup", cmd_wrapup, "Check finished teams for wrap-up readiness (the scheduler wraps the clean ones only if wrapup_auto is on); with team names, wrap those up now, as `gg` does")
+    sp.add_argument("team", nargs="*", help="wrap up these teams now (same checks as `gg`: nothing unpushed, uncommitted, deferred or waiting on the owner; keep_open does not matter)")
     sp.add_argument("--dry-run", action="store_true", help="list what would be wrapped up and why the rest stays open; change nothing")
+    sp.add_argument("--close-window", help=argparse.SUPPRESS)  # internal: SOCKET|WINDOW, closed after --delay and verified
+    sp.add_argument("--delay", type=float, default=3, help=argparse.SUPPRESS)
     sp = c("report", cmd_report, "(team leads) report progress, or that the owner is needed")
     sp.add_argument("team")
     sp.add_argument("message")
