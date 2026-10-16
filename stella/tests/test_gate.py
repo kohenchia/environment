@@ -1,6 +1,7 @@
 """Requirement 20: a Claude session's push from a guarded repo asks the owner first; the owner's own push is plain git."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,8 @@ def test_the_diff_pane_is_queued_for_the_scheduler_and_closes_when_the_push_is_a
     _commit(env, repo)
     monkeypatch.setenv("STELLA_STORE", str(env.store))
     lock = scheduler._try_lock()  # a running scheduler
+    (env.store / "scheduler.pid").write_text(str(os.getpid()))
+    (env.store / "scheduler.diffs").write_text(str(os.getpid()))
     try:
         tmux = {"TMUX": f"{env.tmp}/sock,1,0", "TMUX_PANE": "%7"}
         out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"}, env=tmux)
@@ -400,3 +403,26 @@ def test_a_push_from_a_shell_variable_path_asks_without_naming_the_wrong_repo(en
     assert out.get("permissionDecision") == "ask"
     assert "cannot resolve" in out.get("permissionDecisionReason", "") and "0 commits" not in out["permissionDecisionReason"]
     assert _pretool(env, f"cd {repo} && git push", repo) == "ask"  # a literal path still resolves
+
+
+def test_a_push_with_dash_c_only_asks_about_that_repo_not_the_sessions_own(env, repo):
+    other = env.tmp / "other"
+    env.git(env.tmp, "clone", "-q", str(env.tmp / "remote.git"), str(other))
+    _commit(env, other)
+    reason = _pretool_out(env, f"stella push -C {other}", repo)["permissionDecisionReason"]
+    assert reason.count("▲ PUSH") == 1 and "other → main" in reason and "dotfiles" not in reason
+
+
+def test_a_scheduler_that_predates_the_diff_pane_is_not_promised(env, repo, monkeypatch):
+    from stella import scheduler
+
+    _commit(env, repo)
+    monkeypatch.setenv("STELLA_STORE", str(env.store))
+    lock = scheduler._try_lock()
+    (env.store / "scheduler.pid").write_text(str(os.getpid()))  # running, but no scheduler.diffs: an old process
+    try:
+        out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"},
+                       env={"TMUX": f"{env.tmp}/sock,1,0", "TMUX_PANE": "%7"})
+        assert "pane on the right" not in out["permissionDecisionReason"] and not list((env.store / "pushdiff").glob("*.json"))
+    finally:
+        lock.close()

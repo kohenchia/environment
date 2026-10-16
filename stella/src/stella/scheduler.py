@@ -182,6 +182,14 @@ def running_pid() -> int | None:
         return -1
 
 
+def serves_diffs(pid: int) -> bool:
+    """Whether the running scheduler (started after push-diff panes existed) opens them."""
+    try:
+        return int((store_dir() / "scheduler.diffs").read_text()) == pid
+    except (OSError, ValueError):
+        return False
+
+
 # ---------------------------------------------------------------- entry points
 
 
@@ -191,6 +199,7 @@ def run_forever(interval: int = 60) -> int:
         print("another stella scheduler is already running")
         return 1
     (store_dir() / "scheduler.pid").write_text(str(os.getpid()))
+    (store_dir() / "scheduler.diffs").write_text(str(os.getpid()))  # this scheduler opens the push-diff panes
     every = settings().wake_check_minutes * 60
     print(f"{ledger.now():%Y-%m-%d %H:%M} stella scheduler: daily log for each day that ends (runs from {settings().daily_time} after local midnight); checking every {interval}s;"
           f" wake-line backstop every {every // 60}m", flush=True)

@@ -244,7 +244,8 @@ def _touched(pushes: list[tuple[list[str], str, Path]], command: str) -> dict[Pa
             touched.setdefault(r, Path(os.path.expanduser(str(path))))
 
     for seg, _, here in pushes:
-        add(here)
+        if "-C" not in seg:  # `-C <dir>` replaces the directory the command runs from: the session's own repo is not pushed
+            add(here)
         for i, tok in enumerate(seg):
             if tok in {"-C", "--git-dir", "--work-tree", "-R", "--repo"} and i + 1 < len(seg):
                 add(here / os.path.expanduser(seg[i + 1]))
@@ -389,7 +390,8 @@ def open_diff(touched: dict[Path, Path], sid: str) -> str:
         pass
     from stella import scheduler
 
-    if not scheduler.running_pid():
+    pid = scheduler.running_pid()
+    if not pid or not scheduler.serves_diffs(pid):  # a scheduler started before this existed never opens it
         marker.unlink(missing_ok=True)
         return ""
     req = {"sock": sock, "pane": pane, "marker": str(marker), "token": token, "ts": time.time(),
