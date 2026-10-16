@@ -110,9 +110,18 @@ You decide when a session is done. Nothing closes sessions automatically unless 
 * **Adopted sessions:** a Claude session you started by hand in the Stella tmux server is registered on its first prompt
   under its window name (archetype `adopted`), so `stella tell`, `stella fleet`, `stella pass-env --respawn`, `gg`,
   `tyfp` and `stella wrapup <team>` work on it like on a launched one. The automatic sweep never closes it.
-* **A hook cannot reach tmux** (the command sandbox blocks it), so `gg`, `tyfp` and the adoption are queued for the
-  scheduler (started from a terminal), which acts only after checking that the pane still holds the session that asked
-  (its Claude process runs under that pane and no other Claude shares the window). Keep it running (`stella run`).
+* **No tmux, no scheduler:** a hook runs in Claude Code's command sandbox, which blocks the tmux socket and `ps`
+  but allows reading process info (libproc) and signalling your own processes. So `gg` closes its own window itself,
+  at once (`direct.py`): it finds its Claude process and the window's pane process (the shell the window was started
+  with, or Claude itself after `exec`) by walking up the process tree, records the wrap-up, then sends SIGHUP to the
+  pane process and SIGTERM to Claude (SIGKILL after 2 s if either is left); tmux then closes the pane and the sidebar
+  closes the window. A clean `gg` prints at most `Wrapped up.`. Identity is the process tree, never an environment
+  variable, so a `gg` can only close the window it was typed in; it refuses if its session file names another session
+  or another Claude shares the pane. `tyfp` reaches the other sessions the same way: through the file each Claude
+  writes (`~/.claude/sessions/<pid>.json`: pid, session id, window, idle or busy), checked against the live process
+  (same start time, under a pane process of tmux). From a terminal, where tmux is reachable, `tyfp`/`sweep` still kill
+  the window through tmux. Only the explicit last resort is queued for the scheduler: a `tyfp` or an adoption where the
+  process tree cannot be read at all.
 * **In a session:** type `/stella:wrap-up` (or run `stella wrap`); from outside, `stella wrapup <team>`. Same
   checks and closing as `gg`, one code path.
 * **Resume picker:** `claude --resume` hides a transcript whose first `entrypoint` is `sdk-cli` (a `claude -p` run), even if it was later resumed by hand. `stella reopen` and the nightly job rewrite that origin to `cli` (`stella fix-resume [name|id]` does it on demand; a transcript touched in the last minute is skipped). Sessions are listed under the directory they started in, by name.

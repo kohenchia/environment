@@ -318,7 +318,11 @@ def test_gg_needs_neither_tmux_nor_the_scheduler(env, led, window):
     """The hook's sandbox denies the tmux socket: here the socket is not even there. The window closes anyway, at once, silently."""
     r, wid, sock, tm, pane = _setup(env, led, window)
     e = _gg_env(env, sock, pane, **TEAM)
-    e["TMUX"] = f"{env.tmp}/no-such-socket,0,0"
+    deny = env.tmp / "deny"  # a tmux that is refused, as in the hook's sandbox
+    deny.mkdir()
+    (deny / "tmux").write_text("#!/bin/sh\necho 'error connecting (Operation not permitted)' >&2\nexit 1\n")
+    (deny / "tmux").chmod(0o755)
+    e["PATH"] = f"{deny}:{env.env['PATH']}"
     out = _gg(env, e, cwd=r)
     assert out["reason"] == "Wrapped up."  # one calm line; no scheduler, pane or "blocked" in it
     assert _wait_gone(tm) and "wrapped_up" in _types(env)
@@ -438,6 +442,10 @@ def test_a_window_that_also_holds_another_claude_is_not_closed(env, led, window)
     _gg(env, e, cwd=r, sid="sess-beta")
     time.sleep(1.2)
     assert tm("list-panes", "-t", wid).stdout.count("\n") == 1 or "beta" in _names(tm)
+
+
+def _process(env, sock):
+    env.run("wrapup", "--process-requests", env={"TMUX": f"{sock},0,0"})
 
 
 def test_the_sweeps_notice_names_the_window_it_closed(env, led, window, monkeypatch):
@@ -602,6 +610,29 @@ def test_tyfp_from_a_sandboxed_hook_goes_through_the_scheduler(env, led, window,
     th.join()
     assert out["decision"] == "block" and "ok1" in out["reason"] and "typer" in out["reason"]
     assert _wait_gone(tm, "ok1")
+
+
+def test_tyfp_from_a_sandboxed_hook_closes_other_windows_directly_by_their_session_files(env, led, window):
+    """No tmux and no scheduler: each session is found from the file Claude wrote (pid, session id, window, idle or busy)."""
+    sock, tm, w = _fleet(env, led, window)
+    r, wid, pane = w["typer"]
+    e = _gg_env(env, sock, pane, STELLA_TEAM="typer")
+    deny = env.tmp / "deny"
+    deny.mkdir()
+    (deny / "tmux").write_text("#!/bin/sh\nexit 1\n")
+    (deny / "tmux").chmod(0o755)
+    e["PATH"] = f"{deny}:{env.env['PATH']}"
+    for name, (_, wid_, pane_) in w.items():
+        (env.tmp / "claude-sessions" / f"{name}.json").write_text(json.dumps(
+            {"pid": _pane_claude(sock, pane_), "sessionId": f"sess-{name}", "name": name, "tmux": f"work:{wid_}.{pane_}",
+             "status": "busy" if name == "busy" else "idle"}))
+    out = _gg(env, e, "tyfp", cwd=r, sid="sess-typer")
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "ok1" in ctx and "ok2" in ctx and "left open: busy: its session is busy" in ctx
+    time.sleep(2)
+    left = _names(tm) - {"zsh", "sh", "bash"}
+    assert {"busy", "blocked", "pushy"} <= left and not ({"ok1", "ok2", "keep", "typer"} & left)
+    assert not (env.store / "tyfp").exists()  # no queue
 
 
 def test_sweep_now_is_the_same_thing_from_the_command_line(env, led, window):

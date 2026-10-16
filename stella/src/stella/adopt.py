@@ -6,8 +6,8 @@ registered under its window name as a team of archetype `adopted`, so `stella te
 automatic sweep (`stella sweep`); only `gg` or the owner's explicit word closes it.
 
 The prompt hook asks for the adoption on a session's first prompt. A hook runs in the session's command sandbox, which
-cannot reach tmux (the window name is a tmux fact), so then the request is queued and the scheduler, which can, registers it
-(`process_requests`, the same loop that closes windows for `gg`).
+cannot reach tmux, so the window and name are read from the session's own file (`direct`); only if that fails is the request
+queued for the scheduler (`process_requests`), the explicit last resort.
 """
 
 from __future__ import annotations

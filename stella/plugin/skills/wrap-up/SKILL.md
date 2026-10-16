@@ -11,13 +11,13 @@ prompt, through the same code as below.
 
 1. Run `~/.local/bin/stella wrap`. It first checks that nothing is unpushed, uncommitted, deferred or waiting on
    the owner. If something is, it closes nothing and says what in one line. If clean, it records this team (if it
-   is one) as wrapped up, closes its orders, and closes this session's tmux window a few seconds later
+   is one) as wrapped up, closes its orders, and closes this session's tmux window itself (no tmux, no scheduler) a few seconds later
    (`keep_open` teams too: he asked). A session that is not a team just loses its window. Stella's own session
    is never wrapped up.
 2. Read its output. If it names an unpushed commit, push it now (`git push -u origin <branch>`: Claude Code
    shows the owner the yes/no prompt; never tell him to run anything), then run `stella wrap` again. For
-   anything else it names, say it in one line and end with `NEXT FOR YOU: <that>`. If it says it is not inside
-   tmux, or cannot reach tmux, tell the owner to type `/exit` and close the window themselves.
+   anything else it names, say it in one line and end with `NEXT FOR YOU: <that>`. If it says it is not in
+   a tmux window or could not find its window, tell the owner to type `/exit` and close the window themselves.
 3. When it closed, reply with one short line saying the window is closing. Do not start other work: the window
    is about to go.
 
