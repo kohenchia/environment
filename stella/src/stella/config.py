@@ -39,6 +39,7 @@ class Settings:
     repos_dir: Path = field(default_factory=lambda: _expand("~/github"))
     claude_bin: str = "claude"
     claude_query_bin: str = ""
+    hq_permission_mode: str = "default"
     daily_time: str = "20:00"
     stale_days: int = 7
     brief_lines: int = 60
@@ -85,6 +86,7 @@ def settings() -> Settings:
         "tmux_expected_app",
         "claude_bin",
         "claude_query_bin",
+        "hq_permission_mode",
         "daily_time",
         "stale_days",
         "brief_lines",

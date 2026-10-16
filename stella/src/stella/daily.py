@@ -14,6 +14,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from stella import extensions, gate, leak, ledger, notify
 from stella.config import BIN, settings, store_dir
 
 MARK = "[stella-job]"
+_COMMAND = re.compile(r"<command-name>(.*?)</command-name>.*?(?:<command-args>(.*?)</command-args>)?", re.S)
 
 
 def transcripts_dir() -> Path:
@@ -80,7 +82,12 @@ def sessions_on(date: dt.date) -> list[dict]:
             msg = d.get("message") or {}
             if t == "user" and not d.get("isMeta") and not d.get("toolUseResult"):
                 text = _text_of(msg.get("content"))
-                if text and not text.startswith(("<local-command-stdout", "<system-reminder", "[Request interrupted")):
+                if text and not text.startswith(("<local-command-stdout", "<local-command-caveat", "<system-reminder", "[Request interrupted")):
+                    cmd = _COMMAND.search(text)
+                    if cmd:
+                        text = (cmd.group(1) + " " + (cmd.group(2) or "")).strip()
+                        if prompts and prompts[-1][1] == text:
+                            continue
                     prompts.append((when, text))
             elif t == "assistant":
                 text = _text_of(msg.get("content"))

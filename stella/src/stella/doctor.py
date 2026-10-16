@@ -51,7 +51,9 @@ def checks() -> list[tuple[str, str, str]]:
     add(FAIL if err else OK, "session list (`agents --json`)", err or f"{len(rows)} sessions")
 
     srv = tmuxctl.find_server()
-    if not srv:
+    if not srv and tmuxctl.last_error:
+        add(FAIL, "tmux reachable from agent shells", tmuxctl.last_error)
+    elif not srv:
         add(WARN, "tmux server", "none running; teams fall back to background sessions")
     else:
         app = tmuxctl.server_app(srv)

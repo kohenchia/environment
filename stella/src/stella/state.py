@@ -134,6 +134,10 @@ def fold(since_events=None) -> State:
             o = st.orders.get(ev.get("order", -1))
             if o:
                 o.team = name
+        elif t == "reaped":
+            team = st.teams.get(ev.get("team", ""))
+            if team:
+                team.acked = True
         elif t in {"report", "done", "ended", "started"}:
             team = st.teams.get(ev.get("team", ""))
             if not team:

@@ -166,6 +166,27 @@ def st_socket(team: str) -> str | None:
     return sock
 
 
+def cmd_reap(a):
+    from stella import tmuxctl
+
+    st = state.fold()
+    names = a.name or [t.name for t in st.teams.values() if t.status in {"done", "ended"}]
+    for name in names:
+        t = st.teams.get(name)
+        if not t:
+            print(f"no team {name}")
+            continue
+        if t.status not in {"done", "ended"} and not a.force:
+            print(f"{name} is {t.status}; not closing (use --force)")
+            continue
+        srv = tmuxctl.server_for_socket(st_socket(name))
+        if srv and t.window and tmuxctl.window_exists(srv, t.window):
+            srv.run("kill-window", "-t", t.window, check=False)
+        ledger.append("ack", by="cli", key=f"team:{name}:{t.status}")
+        ledger.append("reaped", by="cli", team=name)
+        print(f"closed {name}")
+
+
 def cmd_report(a):
     from stella import notify
 
@@ -425,6 +446,9 @@ def build() -> argparse.ArgumentParser:
     sp = c("tell", cmd_tell, "Send a message to a running team lead")
     sp.add_argument("team")
     sp.add_argument("message")
+    sp = c("reap", cmd_reap, "Close the windows of finished teams (all finished ones, or those named)")
+    sp.add_argument("name", nargs="*")
+    sp.add_argument("--force", action="store_true", help="also close a team that has not reported done")
     sp = c("report", cmd_report, "(team leads) report progress, or that the owner is needed")
     sp.add_argument("team")
     sp.add_argument("message")

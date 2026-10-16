@@ -30,7 +30,7 @@ from pathlib import Path
 from stella import ledger, leak, state
 from stella.config import BIN, settings, store_dir
 
-BLOCKED_URL = "stella-gate:blocked-use-stella-push"
+BLOCKED_URL = "file:///STELLA-PUSH-GATE/push-with-stella-push"
 
 
 # ---------------------------------------------------------------- repos

@@ -24,11 +24,23 @@ class Server:
         return subprocess.run([*self.args, *a], capture_output=True, text=True, check=check)
 
 
+SANDBOXED = (
+    "This shell may not connect to tmux (\"Operation not permitted\"): the session's command sandbox"
+    " blocks it. Ask the owner to allow the `stella` command in their sandbox's tool allowlist; until"
+    " then, the owner can run `stella launch …` or `stella hq` in a terminal."
+)
+last_error: str | None = None
+
+
 def _alive(args: list[str]) -> bool:
+    global last_error
     try:
-        return subprocess.run([*args, "list-sessions"], capture_output=True).returncode == 0
+        r = subprocess.run([*args, "list-sessions"], capture_output=True, text=True)
     except FileNotFoundError:
         return False
+    if r.returncode != 0 and "not permitted" in r.stderr:
+        last_error = SANDBOXED
+    return r.returncode == 0
 
 
 def find_server() -> Server | None:

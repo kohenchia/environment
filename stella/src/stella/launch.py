@@ -119,6 +119,8 @@ def launch(
         return Launched(name, None, "dry-run", directory, script, {})
 
     srv = tmuxctl.find_server()
+    if not srv and tmuxctl.last_error:
+        raise SystemExit(tmuxctl.last_error)
     window = sock = None
     if srv:
         window = tmuxctl.new_window(srv, name, directory, str(script))

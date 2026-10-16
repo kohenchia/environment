@@ -66,7 +66,7 @@ def describe(ev: dict) -> str:
     return f"#{ev['seq']} {t}"
 
 
-QUIET = {"ack", "started", "push_question", "push_intent", "clear_alert"}
+QUIET = {"ack", "started", "push_question", "push_intent", "clear_alert", "reaped"}
 
 
 def delta(session_id: str, since: int, st: State | None = None) -> list[str]:

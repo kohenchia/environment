@@ -31,7 +31,7 @@ def last_session() -> str | None:
 
 def command(fresh: bool) -> str:
     s = settings()
-    parts = [s.claude_bin, "--name", WINDOW, "--agent", "stella:stella"]
+    parts = [s.claude_bin, "--name", WINDOW, "--agent", "stella:stella", "--permission-mode", s.hq_permission_mode]
     sid = None if fresh else last_session()
     if sid:
         parts += ["--resume", sid]
@@ -53,6 +53,8 @@ def open_hq(fresh: bool = False, here: bool = False) -> str:
     if here:
         os.execvp("sh", ["sh", "-c", cmd])
     srv = tmuxctl.find_server()
+    if not srv and tmuxctl.last_error:
+        return tmuxctl.last_error
     if not srv:
         return "No tmux server is running. Start one from your terminal (your usual tmux entry point), then run `stella hq` inside it, or run `stella hq --here`."
     cron = ensure_scheduler(srv)
