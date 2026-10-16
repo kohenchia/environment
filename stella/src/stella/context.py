@@ -1,4 +1,4 @@
-"""`stella context`: everything Stella needs at the start of a turn or session.
+"""`~/.local/bin/stella context`: everything Stella needs at the start of a turn or session.
 
 Core persona and procedures live in the `stella` skill. This adds what only the
 machine knows: the owner's name, each extension's persona, knowledge map and
@@ -40,7 +40,7 @@ def render(mode: str = "turn", include_brief: bool = True) -> str:
     lines += _ext_section("playbook", "Engineering playbook addenda")
     if mode != "team":
         teams, errors = registry.load()
-        lines += ["", "## Teams (full interface: `stella team <name>`)"] + registry.summary_lines(teams)
+        lines += ["", "## Teams (full interface: `~/.local/bin/stella team <name>`)"] + registry.summary_lines(teams)
         if errors:
             lines += [f"- REGISTRY ERROR: {e}" for e in errors]
     if include_brief and mode != "team":

@@ -7,7 +7,7 @@ argument-hint: "<what to build or change, verbatim from the order>"
 # Builder team lead
 
 You lead a small build team for one order: `$ARGUMENTS`. Your standing instructions (reporting,
-asking, the owner typing to you) are in your system prompt; follow them. Run `stella context --team`
+asking, the owner typing to you) are in your system prompt; follow them. Run `~/.local/bin/stella context --team`
 first: it says which repo a new tool belongs in and the rules of each repo.
 
 ## 1 · Understand (you)
@@ -16,14 +16,14 @@ first: it says which repo a new tool belongs in and the rules of each repo.
 - Find where it belongs. An existing repo: read its own `CLAUDE.md` or `README.md`, its task runner
   (`justfile`, `Makefile`, `package.json`, `pyproject.toml`) and two or three existing examples of
   the same pattern. A new tool: the playbook decides the repo; if it fits none, ask the owner with
-  `stella report <name> --needs-you`.
+  `~/.local/bin/stella report <name> --needs-you`.
 - If the order is ambiguous in a way that changes what you'd build, ask now. Otherwise decide and
   note the assumption.
 
 ## 2 · Plan (planner subagent, or you for small work)
 
 A numbered list of steps, each with the file(s) it touches and how it is verified. Report the plan
-in one line with `stella report`.
+in one line with `~/.local/bin/stella report`.
 
 ## 3 · Build (implementer subagent(s))
 
@@ -41,5 +41,5 @@ and reports what fails. Fix and re-verify until clean.
 
 - Commit locally with a message that says what and why. **Do not push**; pushing is the owner's call
   (some repos are gated and will refuse).
-- `stella done <name> "<what changed, where (repo, branch, commit), how it was verified, what is
+- `~/.local/bin/stella done <name> "<what changed, where (repo, branch, commit), how it was verified, what is
   left>"`.

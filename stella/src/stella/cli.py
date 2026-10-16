@@ -1,4 +1,4 @@
-"""stella: the command line Stella and her teams use. `stella --help` lists commands."""
+"""stella: the command line Stella and her teams use. `~/.local/bin/stella --help` lists commands."""
 
 from __future__ import annotations
 
@@ -426,7 +426,7 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("text")
     sp = c("attention", cmd_attention, "What needs the owner")
     sp.add_argument("--json", action="store_true")
-    sp = c("ack", cmd_ack, "Acknowledge attention items (keys from `stella attention`, or 'all')")
+    sp = c("ack", cmd_ack, "Acknowledge attention items (keys from `~/.local/bin/stella attention`, or 'all')")
     sp.add_argument("key", nargs="+")
     sp = c("fleet", cmd_fleet, "Every session on this machine, and what Stella launched")
     sp.add_argument("--json", action="store_true")

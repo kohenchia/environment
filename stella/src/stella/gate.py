@@ -28,7 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stella import ledger, leak, state
-from stella.config import BIN, settings, store_dir
+from stella.config import BIN, CALL, settings, store_dir
 
 BLOCKED_URL = "file:///STELLA-PUSH-GATE/push-with-stella-push"
 
@@ -114,7 +114,7 @@ def check_bash(command: str, cwd: str) -> Verdict:
     if not roots:
         return Verdict(False)
     stripped = command.strip()
-    if re.match(rf"^({re.escape(str(BIN))}|stella)\s+(push|review-push)\b", stripped):
+    if re.match(rf"^({re.escape(str(BIN))}|{re.escape(CALL)}|stella)\s+(push|review-push)\b", stripped):
         return Verdict(False)
 
     here = Path(os.path.expanduser(cwd or os.getcwd()))
@@ -149,7 +149,7 @@ def check_bash(command: str, cwd: str) -> Verdict:
     if not touched:
         return Verdict(False)
     names = ", ".join(alias(t) for t in sorted(touched))
-    how = f"Pushing {names} needs the owner's approval: ask them to run `stella review-push {alias(sorted(touched)[0])}`, or to tell Stella explicitly to push it; then use `stella push {alias(sorted(touched)[0])}`."
+    how = f"Pushing {names} needs the owner's approval: ask them to run `stella review-push {alias(sorted(touched)[0])}`, or to tell Stella explicitly to push it; then use `{CALL} push {alias(sorted(touched)[0])}`."
     if _PUSHY.search(command) or _GH_API_WRITE.search(command):
         return Verdict(True, f"STELLA PUSH GATE: blocked a push from a guarded repo ({names}). {how}")
     if re.search(r"\bgit\b[^;&|\n]*\b(config)\b", command) and _CONFIG_KEYS.search(command):

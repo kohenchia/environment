@@ -17,6 +17,8 @@ from pathlib import Path
 CORE_ROOT = Path(__file__).resolve().parents[2]  # .../stella (the core project)
 PLUGIN_DIR = CORE_ROOT / "plugin"
 BIN = CORE_ROOT / "bin" / "stella"
+# How agents invoke the CLI. Always this exact spelling, so a sandbox allowlist entry for it matches.
+CALL = "~/.local/bin/stella"
 
 
 def _expand(p: str | os.PathLike[str]) -> Path:

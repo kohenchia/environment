@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stella import ledger, registry, state, tmuxctl
-from stella.config import BIN, settings, store_dir
+from stella.config import CALL, settings, store_dir
 
 _NAME = re.compile(r"[^a-z0-9-]+")
 
@@ -26,7 +26,7 @@ def slug(text: str, limit: int = 32) -> str:
 
 def lead_prompt(name: str, archetype: str, order_seq: int | None, order_text: str, extra: str = "") -> str:
     owner = settings().owner
-    stella = str(BIN)
+    stella = CALL
     order_ref = f"order #{order_seq}" if order_seq else "an order"
     return f"""You are the lead of the team "{name}", launched by Stella, {owner}'s chief of staff, to carry out {order_ref}.
 

@@ -79,7 +79,7 @@ def delta(session_id: str, since: int, st: State | None = None) -> list[str]:
     lines = [describe(e) for e in reversed(evs)]
     if len(lines) > cap:
         extra = len(lines) - (cap - 1)
-        lines = lines[: cap - 1] + [f"+{extra} earlier events: `stella log --since {since}`"]
+        lines = lines[: cap - 1] + [f"+{extra} earlier events: `~/.local/bin/stella log --since {since}`"]
     return lines
 
 
@@ -145,7 +145,7 @@ def render(st: State) -> str:
     if omitted:
         out.append(
             "+" + ", ".join(f"{n} more in {t.lower()}" for t, n in omitted.items())
-            + ": `stella orders`, `stella attention`, `stella fleet`"
+            + ": `~/.local/bin/stella orders`, `… attention`, `… fleet`"
         )
     if len(out) == 1:
         out.append("Nothing open.")

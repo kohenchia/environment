@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 from stella import extensions, gate, leak, ledger, notify
-from stella.config import BIN, settings, store_dir
+from stella.config import CALL, settings, store_dir
 
 MARK = "[stella-job]"
 _COMMAND = re.compile(r"<command-name>(.*?)</command-name>.*?(?:<command-args>(.*?)</command-args>)?", re.S)
@@ -145,7 +145,7 @@ def _daily_prompt(date: dt.date, digest_path: Path) -> str:
     journal = store_dir() / "journal" / f"{date:%Y-%m-%d}.md"
     journal.parent.mkdir(parents=True, exist_ok=True)
     return template.format(mark=MARK, date=f"{date:%Y-%m-%d}", digest=digest_path, owner=settings().owner,
-                           journal=journal, stella=BIN)
+                           journal=journal, stella=CALL)
 
 
 def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = None) -> int:
@@ -212,7 +212,7 @@ def run_nightly(date: dt.date) -> list[str]:
     p = digest(date)
     morning = store_dir() / "digests" / f"{date + dt.timedelta(days=1):%Y-%m-%d}-morning.md"
     prompt = REFLECT.format(mark=MARK, date=date, digest=p, priorities=store_dir() / "priorities.md",
-                            canon=store_dir() / "canon.md", stella=BIN, owner=settings().owner, morning=morning)
+                            canon=store_dir() / "canon.md", stella=CALL, owner=settings().owner, morning=morning)
     rc = headless(prompt, store_dir() / "runs" / f"reflect-{date:%Y-%m-%d}.log")
     report.append(f"reflection: exit {rc}")
     if rc == 0 and morning.exists():

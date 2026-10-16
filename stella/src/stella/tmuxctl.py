@@ -27,7 +27,7 @@ class Server:
 SANDBOXED = (
     "This shell may not connect to tmux (\"Operation not permitted\"): the session's command sandbox"
     " blocks it. Ask the owner to allow the `stella` command in their sandbox's tool allowlist; until"
-    " then, the owner can run `stella launch …` or `stella hq` in a terminal."
+    " then, the owner can run `~/.local/bin/stella launch …` or `~/.local/bin/stella hq` in a terminal."
 )
 last_error: str | None = None
 

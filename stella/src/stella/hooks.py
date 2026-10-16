@@ -128,14 +128,14 @@ def prompt(data: dict) -> None:
         parts.append("This turn is addressed to you, Stella (follow the `stella` skill). After it, the owner is talking to the session again.")
     parts.append(f"Recorded as ledger #{order['seq']} ({kind}).")
     if intent:
-        parts.append(f"Recorded as an explicit push approval for {intent['repo']} at {intent['sha'][:7]}: run `stella push {intent['repo']}`.")
+        parts.append(f"Recorded as an explicit push approval for {intent['repo']} at {intent['sha'][:7]}: run `~/.local/bin/stella push {intent['repo']}`.")
     if delta:
         parts.append("Since this session last looked, other sessions recorded:\n" + "\n".join(f"- {d}" for d in delta))
     if conflicts:
         parts.append(
             "POSSIBLE CONFLICT with open orders (same target). Decide whether the new order contradicts them;"
             " if it does, ask the owner before acting, then record the outcome with"
-            " `stella decide \"...\" --supersedes N`:\n" + "\n".join(f"- {c}" for c in conflicts)
+            " `~/.local/bin/stella decide \"...\" --supersedes N`:\n" + "\n".join(f"- {c}" for c in conflicts)
         )
     sess["cursor"] = st.last_seq
     sess["last_addressed"] = True
