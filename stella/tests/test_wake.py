@@ -11,11 +11,11 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
 import pytest
+from conftest import sock_dir
 
 from stella import config, ledger, scheduler, wake
 
@@ -295,7 +295,7 @@ def _typed(path: Path, timeout=3.0) -> str:
 
 @pytest.fixture
 def fake(quiet, monkeypatch):
-    sock = Path(tempfile.mkdtemp(prefix="sw", dir="/tmp")) / "s"
+    sock = sock_dir("sw") / "s"
     subprocess.run(["tmux", "-S", str(sock), "new-session", "-d", "-s", "work"], check=True, env=quiet.env)
     for k in ("STELLA_STORE", "STELLA_CONFIG", "TMUX_TMPDIR", "HOME", "STELLA_NO_WAKE"):
         monkeypatch.setenv(k, quiet.env[k])

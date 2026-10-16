@@ -25,7 +25,7 @@ import signal
 import subprocess
 import time
 
-from stella import daily, ledger
+from stella import daily, ledger, safety
 from stella.config import BIN, headless_env, settings, store_dir
 
 CATCH_UP_EVERY = 30 * 60  # seconds between catch-up attempts from sessions
@@ -284,7 +284,7 @@ def stop_daemon() -> str:
     pid = running_pid()
     if not pid or pid < 0:
         return "Scheduler not running."
-    os.kill(pid, signal.SIGTERM)
+    safety.kill(pid, signal.SIGTERM)
     return f"Stopped the scheduler (pid {pid})."
 
 

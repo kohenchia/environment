@@ -11,6 +11,7 @@ import os
 import subprocess
 from dataclasses import dataclass
 
+from stella import safety
 from stella.config import settings
 
 
@@ -21,6 +22,7 @@ class Server:
     via: str  # "caller" | "default"
 
     def run(self, *a: str, check: bool = True, timeout: float | None = None) -> subprocess.CompletedProcess:
+        safety.check_tmux(self.args)
         return subprocess.run([*self.args, *a], capture_output=True, text=True, check=check, timeout=timeout)
 
 
@@ -34,6 +36,7 @@ last_error: str | None = None
 
 def _alive(args: list[str]) -> bool:
     global last_error
+    safety.check_tmux(args)
     try:
         r = subprocess.run([*args, "list-sessions"], capture_output=True, text=True)
     except FileNotFoundError:

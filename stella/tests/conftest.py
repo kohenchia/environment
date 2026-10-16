@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -15,6 +17,34 @@ BIN = ROOT / "bin" / "stella"
 
 
 os.environ.setdefault("STELLA_NO_NOTIFY", "1")  # in-process calls too
+
+# The owner's real tmux server must be unreachable from here, whatever shell pytest is started in (running the suite inside a real
+# tmux once got the server killed). Before anything is imported or collected: no $TMUX/$TMUX_PANE, tmux's default socket in a
+# throwaway directory, no real Claude process to find above us. Sockets are short-path directories under /tmp (macOS limit: 104
+# characters), all inside SOCK_ROOT; `stella.safety` refuses any tmux socket outside the roots and any signal to a process that is
+# not the test's own, in this process and in every `stella` subprocess (Env passes the variables on).
+SOCK_ROOT = Path(tempfile.mkdtemp(prefix="stt", dir="/tmp")).resolve()
+for _k in ("TMUX", "TMUX_PANE"):
+    os.environ.pop(_k, None)
+os.environ["TMUX_TMPDIR"] = str(SOCK_ROOT / "tmux")
+os.environ["STELLA_CLAUDE_PID"] = "0"
+os.environ["STELLA_TEST_PID"] = str(os.getpid())
+os.environ["STELLA_TEST_ROOTS"] = str(SOCK_ROOT)
+(SOCK_ROOT / "tmux").mkdir()
+
+
+def sock_dir(prefix: str = "st") -> Path:
+    """A short directory for a test tmux socket, inside the one place the safety checks allow."""
+    return Path(tempfile.mkdtemp(prefix=prefix, dir=SOCK_ROOT))
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _test_roots(tmp_path_factory):
+    """The pytest base temp directory is a root too (the tests' own stores, homes and repos live there)."""
+    base = str(Path(tmp_path_factory.getbasetemp()).resolve())
+    os.environ["STELLA_TEST_ROOTS"] = os.pathsep.join([str(SOCK_ROOT), base])
+    yield
+    shutil.rmtree(SOCK_ROOT, ignore_errors=True)
 
 
 class Env:
@@ -37,6 +67,8 @@ class Env:
             "STELLA_NO_NOTIFY": "1",
             # tmux's default socket lives here, so nothing a test runs can reach the owner's own server
             "TMUX_TMPDIR": str(tmp / "tmux"),
+            "STELLA_TEST_ROOTS": os.environ["STELLA_TEST_ROOTS"],
+            "STELLA_TEST_PID": os.environ["STELLA_TEST_PID"],
             "GIT_CONFIG_GLOBAL": str(tmp / "gitconfig"),
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",

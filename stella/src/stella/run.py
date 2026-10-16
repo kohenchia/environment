@@ -19,7 +19,7 @@ import signal
 import subprocess
 import sys
 
-from stella import daily, ledger, passenv, scheduler, tmuxctl
+from stella import daily, ledger, passenv, safety, scheduler, tmuxctl
 from stella.config import BIN, settings, store_dir
 
 WINDOW = "stella"
@@ -185,7 +185,7 @@ def stop(keep_scheduler: bool = False) -> str:
     current = running()
     if current:
         try:
-            os.kill(current["pid"], signal.SIGTERM)
+            safety.kill(current["pid"], signal.SIGTERM)
             out.append(f"Stopped Stella's session (pid {current['pid']}).")
         except ProcessLookupError:
             out.append("Stella's session had already exited.")

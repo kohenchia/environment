@@ -3,11 +3,11 @@
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 
 import pytest
+from conftest import sock_dir
 
 pytestmark = pytest.mark.skipif(not shutil.which("tmux"), reason="needs tmux")
 
@@ -20,7 +20,7 @@ cat > "{out}/typed.txt"
 
 @pytest.fixture
 def tmux(env):
-    sock = Path(tempfile.mkdtemp(prefix="st", dir="/tmp")) / "s"
+    sock = sock_dir("st") / "s"
     subprocess.run(["tmux", "-S", str(sock), "new-session", "-d", "-s", "work"], check=True, env=env.env)
     yield {"TMUX": f"{sock},0,0"}
     subprocess.run(["tmux", "-S", str(sock), "kill-server"], env=env.env)
@@ -98,7 +98,7 @@ def test_no_tmux_falls_back_to_background(env, fake_claude):
 def test_survives_a_server_restart(env, fake_claude):
     """16b: kill the server, start a new one, launch again; nothing to reconfigure."""
     for i in range(2):
-        sock = Path(tempfile.mkdtemp(prefix="st", dir="/tmp")) / "s"
+        sock = sock_dir("st") / "s"
         subprocess.run(["tmux", "-S", str(sock), "new-session", "-d", "-s", "work"], check=True, env=env.env)
         env.say("A", f"S, build round {i}")
         r = env.run("launch", "builder", "--text", f"round {i}", "--name", f"r{i}", env={"TMUX": f"{sock},0,0"})

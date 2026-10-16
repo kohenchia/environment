@@ -147,3 +147,9 @@ uv run pytest
 ```
 
 Tests run the real CLI against a throwaway store and config; tmux tests use a private socket.
+
+The suite is safe to run inside your own tmux: `tests/conftest.py` unsets `$TMUX`/`$TMUX_PANE`, moves tmux's default socket to a
+throwaway directory and pins `STELLA_CLAUDE_PID=0`, and `stella.safety` (active when `STELLA_TEST_ROOTS` is set, which also reaches
+every `stella` subprocess) refuses any tmux socket outside the tests' directories and any signal to a process that is not a
+descendant of a test tmux server or of pytest. A test that needs tmux makes its socket with `conftest.sock_dir()`.
+`tests/test_tmux_safety.py` is the guard. Outside tests the refusals are structural only: never pid 1, the caller, or a tmux server.

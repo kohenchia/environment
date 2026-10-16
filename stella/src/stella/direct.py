@@ -30,7 +30,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from stella import ledger
+from stella import ledger, safety
 from stella.config import BIN
 
 PROC_PIDTBSDINFO = 3
@@ -219,7 +219,10 @@ def _signal(p: Proc, sig: int) -> None:
     if not now or is_tmux(now) or (p.start and now.start and now.start != p.start) or p.pid <= 1 or p.pid == os.getpid():
         return
     try:
-        os.kill(p.pid, sig)
+        safety.kill(p.pid, sig)  # under pytest this raises for any pid that is not the test's own (see `safety`)
+    except safety.UnsafeSignal:
+        if safety.roots() is not None:
+            raise
     except OSError:
         pass
 

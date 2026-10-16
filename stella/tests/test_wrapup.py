@@ -4,10 +4,10 @@ import datetime as dt
 import json
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest
+from conftest import sock_dir
 
 
 class Ledger:
@@ -225,7 +225,7 @@ sleep 600
 def window(env):
     if not shutil.which("tmux"):
         pytest.skip("needs tmux")
-    sock = Path(tempfile.mkdtemp(prefix="st", dir="/tmp")) / "s"
+    sock = sock_dir("st") / "s"
     tm = lambda *a: subprocess.run(["tmux", "-S", str(sock), *a], capture_output=True, text=True, env=env.env)  # noqa: E731
     tm("new-session", "-d", "-s", "work")
     line = "─" * 40
