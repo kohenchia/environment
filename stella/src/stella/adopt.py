@@ -53,7 +53,7 @@ def register(st: state.State, sid: str, cwd: str, sock: str, window: str, wname:
 
 
 def adopt(sid: str, cwd: str, sock: str, pane: str, claude_pid: int | None) -> str | None:
-    """Register the calling session, now if tmux can be reached from here, else by queueing it for the scheduler."""
+    """Register the calling session, now: through tmux if it can be reached from here, else from its session file; queued for the scheduler only as a last resort."""
     st = state.fold()
     if not sid or known(st, sid):
         return None
@@ -62,7 +62,12 @@ def adopt(sid: str, cwd: str, sock: str, pane: str, claude_pid: int | None) -> s
     if "\t" in out:
         wid, wname = out.split("\t", 1)
         return register(st, sid, cwd, sock, wid, wname)
-    d = _queue_dir()
+    from stella import direct
+
+    me = direct.of_pid(claude_pid, sid)  # a hook's sandbox: the session file names the window and the session
+    if not isinstance(me, str) and me.window and me.name:
+        return register(st, sid, cwd, sock, me.window, me.name)
+    d = _queue_dir()  # last resort: the scheduler registers it
     d.mkdir(parents=True, exist_ok=True)
     (d / (re.sub(r"[^A-Za-z0-9]", "_", sock + pane) + ".json")).write_text(json.dumps(
         {"sock": sock, "pane": pane, "sid": sid, "cwd": cwd, "claude_pid": claude_pid, "ts": time.time()}))

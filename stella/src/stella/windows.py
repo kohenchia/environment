@@ -163,6 +163,11 @@ def claude_ancestor(pid: int | None = None, procs=None) -> int | None:
     if not pid and os.environ.get("STELLA_CLAUDE_PID", "").isdigit():  # set where the process tree cannot be walked (tests)
         return int(os.environ["STELLA_CLAUDE_PID"])
     procs = procs if procs is not None else _procs()
+    if not procs and not pid:  # a hook's sandbox hides the process table: ask the kernel directly
+        from stella import direct
+
+        c = direct.claude_ancestor()
+        return c.pid if c else None
     p = pid or os.getpid()
     for _ in range(40):
         if p not in procs:

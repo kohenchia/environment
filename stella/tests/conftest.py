@@ -27,6 +27,8 @@ class Env:
             p.mkdir(parents=True, exist_ok=True)
         self.env = {
             "PATH": os.environ["PATH"],
+            "STELLA_CLAUDE_PID": "0",  # a hook under test must never find the real Claude session above pytest and close its window
+            "STELLA_CLAUDE_SESSIONS": "/nonexistent",
             "HOME": str(self.home),
             "STELLA_STORE": str(self.store),
             "STELLA_CONFIG": str(self.config),

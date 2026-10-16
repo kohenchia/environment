@@ -210,7 +210,7 @@ def run_forever(interval: int = 60) -> int:
             print(f"error: {e}", flush=True)
         sweep_wrapup()
         end = time.monotonic() + interval
-        while time.monotonic() < end:  # a session that typed gg and cannot reach tmux waits on this
+        while time.monotonic() < end:  # the last-resort queues (tyfp, adoption) are served here
             time.sleep(min(3, max(0.1, end - time.monotonic())))
             _close_queued()
 

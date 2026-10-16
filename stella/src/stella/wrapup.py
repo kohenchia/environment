@@ -39,7 +39,7 @@ from stella import ledger, notify, state, tmuxctl
 from stella.config import BIN, settings, store_dir
 
 GIT_TIMEOUT = 10
-REQUEST_STALE = 120  # seconds a queued `gg` stays valid
+REQUEST_STALE = 120  # seconds a queued last-resort request stays valid
 FINISHED = {"done", "ended"}
 
 
@@ -256,12 +256,19 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
     srv = window = None
     if t.window and not gone:
         srv, window = _window(t.name, t)
-        if srv is None:
-            return no("tmux is not reachable from here, so its window cannot be checked or closed")
-        if explicit and window and window_of(srv, t) != window:
-            return no(f"its window {window} does not look like its own (id reused?); left alone")
-        if window and (t.status == "done" or explicit) and not typed_in and not session_idle(srv, window):
-            return no("its session is busy or not at its prompt")
+        if srv is None:  # a hook's sandbox: no tmux, but the session can be found and closed directly
+            from stella import direct
+
+            tgt = direct.of_team(t)
+            if isinstance(tgt, str):
+                return no(f"its window cannot be reached from here: {tgt}")
+            if (t.status == "done" or explicit) and not typed_in and not tgt.idle:
+                return no("its session is busy or not at its prompt")
+        else:
+            if explicit and window and window_of(srv, t) != window:
+                return no(f"its window {window} does not look like its own (id reused?); left alone")
+            if window and (t.status == "done" or explicit) and not typed_in and not session_idle(srv, window):
+                return no("its session is busy or not at its prompt")
     if explicit:
         from stella import status
 
@@ -458,42 +465,37 @@ def finish_wrap(st: state.State, t: state.Team, who: str, checked: list[str], re
     ledger.append("wrapped_up", by=who, team=t.name, checked=checked, orders=carried or None)
 
 
-def wrap_session(sid: str, cwd: str, delay: float = 3, dry_run: bool = False) -> Wrap:
+def wrap_session(sid: str, cwd: str, delay: float = 0, dry_run: bool = False) -> Wrap:
     """Wrap up the session this runs in (the owner typed `gg`, or ran `stella wrap`): check that nothing is unpushed,
     uncommitted, deferred or waiting on the owner; if so, do not close. Otherwise record the team (if it is one) as
-    wrapped up with its orders closed, and close the tmux window `delay` seconds later (so the hook or reply that
-    ran this can finish), verifying that it is gone. A session that is not a team just loses its window."""
-    from stella import run, status
+    wrapped up with its orders closed, and close the session's own window at once, with no tmux and no scheduler (see
+    `direct`): the window is the one this process runs in, found from the process tree, so no other window can be hit.
+    `delay` > 0 (the CLI, whose reply must be read first) closes it that many seconds later. A session that is not
+    a team just loses its window."""
+    from stella import direct, run, status
 
     if run.is_self():
         return Wrap(False, "gg: Stella's own session is never wrapped up.")
-    pane = os.environ.get("TMUX_PANE")
     tm = os.environ.get("TMUX", "")
-    if not pane or not tm:
-        return Wrap(False, "not inside tmux: nothing to close; type /exit to end this session.")
-    sock = tm.split(",", 1)[0]
-    if not in_stella_server(sock):
+    if tm and not in_stella_server(tm.split(",", 1)[0]):
         return Wrap(False, "gg: this tmux server is not Stella's; nothing closed. Type /exit to end this session.")
     st = state.fold()
     t = st.teams.get(os.environ.get("STELLA_TEAM") or "") or state.team_for_session(st, sid)
     bl = status.blockers(st, sid, cwd, own=False, t=t)
     if bl:
         return Wrap(False, _blocked(bl), bl)
-    srv = tmuxctl.Server(["tmux", "-S", sock], sock, "caller")
-    window = srv.run("display-message", "-p", "-t", pane, "#{window_id}", check=False).stdout.strip()
-    if not window:
-        # A hook runs in the session's command sandbox, which cannot reach tmux. The checks above passed, so ask
-        # the scheduler (started from a terminal, it can) to close the window.
-        if dry_run:
-            return Wrap(False, "would queue the close for the scheduler: this shell cannot reach tmux")
-        return _queue(sid, cwd, sock, pane, t)
+    tgt = direct.own(sid)
+    if isinstance(tgt, str):
+        return Wrap(False, f"gg: nothing closed: {tgt}. Type /exit to end this session.")
     if dry_run:
-        return Wrap(False, f"would close window {window}" + (f" and record team {t.name} as wrapped up" if t else ""))
+        return Wrap(False, f"would close the window of process {tgt.pane.pid}" + (f" and record team {t.name} as wrapped up" if t else ""))
     if t:
         finish_wrap(st, t, "owner", ["the owner typed gg", "nothing unpushed, uncommitted, deferred or open for the owner"])
-    subprocess.Popen([str(BIN), "wrapup", "--close-window", f"{sock}|{window}", "--delay", f"{delay:g}"],
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-    return Wrap(True, f"wrapped up: window {window} closes in {delay:g}s" + (f"; team {t.name} recorded as wrapped up" if t else ""))
+    if delay > 0:
+        direct.close_later(tgt, delay)
+    elif not direct.close_now(tgt):
+        return Wrap(False, "gg: everything is recorded, but the window did not close; type /exit to end this session.")
+    return Wrap(True, "Wrapped up.")
 
 
 def wrap_team(name: str, dry_run: bool = False) -> Wrap:
@@ -524,24 +526,7 @@ def wrap_current(delay: float = 3, dry_run: bool = False) -> str:
     return wrap_session(os.environ.get("STELLA_SESSION_ID", ""), os.getcwd(), delay, dry_run).message
 
 
-def close_window(spec: str, delay: float) -> None:
-    """Detached helper of `wrap_session`: close the window after `delay`, verify it is gone, and raise an alert if not."""
-    import time
-
-    sock, _, window = spec.partition("|")
-    time.sleep(delay)
-    srv = tmuxctl.Server(["tmux", "-S", sock], sock, "recorded")
-    srv.run("kill-window", "-t", window, check=False)
-    time.sleep(0.5)
-    if tmuxctl.window_exists(srv, window):
-        ledger.append("alert", by="wrapup", key=f"window-open:{window}", text=f"gg: window {window} did not close")
-
-
-# ---------------------------------------------------------------- when the session cannot reach tmux
-
-
-def _queue_dir() -> Path:
-    return store_dir() / "gg"
+# ---------------------------------------------------------------- last resort: a request queued for the scheduler
 
 
 def verify_pane(srv: tmuxctl.Server, req: dict):
@@ -578,29 +563,10 @@ def verify_pane(srv: tmuxctl.Server, req: dict):
     return p
 
 
-def _queue(sid: str, cwd: str, sock: str, pane: str, t: state.Team | None) -> Wrap:
-    import time
-
-    from stella import scheduler, windows
-
-    d = _queue_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"{re.sub(r'[^A-Za-z0-9]', '_', sock + pane)}.json").write_text(json.dumps(
-        {"sock": sock, "pane": pane, "sid": sid, "cwd": cwd, "team": t.name if t else None,
-         "claude_pid": windows.claude_ancestor(), "ts": time.time()}))
-    if not scheduler.running_pid():
-        return Wrap(False, "gg: nothing blocks it, but this session cannot reach tmux and the scheduler is not running to close"
-                           " it; run `stella run` in a terminal, or type /exit.")
-    return Wrap(True, "nothing blocks it; the scheduler closes the window within seconds (this session cannot reach tmux). If it stays open, `stella attention` says why.")
-
-
 def process_requests() -> list[str]:
-    """Scheduler side of `_queue`: for each queued request, verify the pane still holds the session that typed `gg`, re-check
-    the blockers, then record and close THAT window only, verified. Anything off is an alert and closes nothing. It never
-    runs the sweep. Also registers the sessions queued for adoption."""
-    import time
-
-    from stella import adopt, status, tyfp
+    """Scheduler side of the last-resort queues: a `tyfp` or an adoption that a session could neither do directly (see `direct`)
+    nor through tmux. `gg` has no queue: it closes its own window itself."""
+    from stella import adopt, tyfp
 
     out = []
     try:
@@ -608,35 +574,7 @@ def process_requests() -> list[str]:
     except Exception as e:  # noqa: BLE001
         print(f"tyfp error: {type(e).__name__}: {e}", flush=True)
     try:
-        adopt.process_requests()
+        out += adopt.process_requests()
     except Exception as e:  # noqa: BLE001
         print(f"adopt error: {type(e).__name__}: {e}", flush=True)
-    for f in sorted(_queue_dir().glob("*.json")):
-        try:
-            req = json.loads(f.read_text())
-        except (OSError, ValueError):
-            req = None
-        f.unlink(missing_ok=True)
-        if not req or time.time() - req.get("ts", 0) > REQUEST_STALE:
-            continue  # a stale request never closes anything
-        srv = tmuxctl.Server(["tmux", "-S", req["sock"]], req["sock"], "recorded")
-        key = f"gg:{req['pane']}"
-        pane = verify_pane(srv, req)
-        if isinstance(pane, str):
-            ledger.append("alert", by="wrapup", key=key, text=f"gg: nothing closed, {pane}")
-            continue
-        window = pane["window_id"]
-        st = state.fold()
-        t = st.teams.get(req.get("team") or "") or state.team_for_session(st, req.get("sid") or "")
-        bl = status.blockers(st, req.get("sid") or "", req.get("cwd") or "", own=False, t=t)
-        if bl:
-            ledger.append("alert", by="wrapup", key=key, text=_blocked(bl) + f" (window {window})")
-            continue
-        if t:
-            finish_wrap(st, t, "owner", ["the owner typed gg", "nothing unpushed, uncommitted, deferred or open for the owner"])
-        srv.run("kill-window", "-t", window, check=False)
-        if tmuxctl.window_exists(srv, window):
-            ledger.append("alert", by="wrapup", key=key, text=f"gg: window {window} did not close")
-        else:
-            out.append(window)
     return out

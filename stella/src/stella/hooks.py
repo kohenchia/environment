@@ -25,7 +25,7 @@ import re
 import sys
 import traceback
 
-from stella import address, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
+from stella import address, direct, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -182,16 +182,15 @@ def _tyfp(data: dict) -> None:
         return _block_prompt("not inside tmux: nothing to sweep.")
     if not wrapup.in_stella_server(sock):
         return _block_prompt("tyfp: this tmux server is not Stella's; nothing closed.")
+    me = direct.claude_ancestor()
     req = {"sock": sock, "pane": pane, "sid": sid, "cwd": cwd, "team": os.environ.get("STELLA_TEAM"), "own": run.is_self(),
-           "claude_pid": windows.claude_ancestor()}
+           "claude_pid": me.pid if me else windows.claude_ancestor()}
     try:
-        reachable = bool(tmuxctl.Server(["tmux", "-S", sock], sock, "caller").run(
-            "display-message", "-p", "-t", pane, "#{window_id}", check=False).stdout.strip())
-        if reachable:
+        if req["claude_pid"]:
             rep = tyfp.run(sock, req, delay=float(os.environ.get("STELLA_GG_DELAY") or 2))
             res = {"text": rep.text(), "pushes": rep.pushes}
-        else:  # the hook's sandbox cannot reach tmux: the scheduler can
-            res = tyfp.ask(req) or {"text": "tyfp: nothing done: this session cannot reach tmux and the scheduler did not answer;"
+        else:  # last resort: no process info here, so the scheduler (started from a terminal) does it
+            res = tyfp.ask(req) or {"text": "tyfp: nothing done: this session could not be identified and the scheduler did not answer;"
                                             " start it with `stella run` in a terminal.", "pushes": []}
     except Exception as e:  # noqa: BLE001
         return _block_prompt(f"tyfp failed ({type(e).__name__}: {e}); nothing more closed.")
@@ -213,7 +212,7 @@ def _gg(data: dict) -> None:
     """The owner typed `gg`: wrap this session up (the same code path as `stella wrap` and `stella wrapup <team>`)."""
     sid, cwd = data.get("session_id") or "", data.get("cwd") or os.getcwd()
     try:
-        w = wrapup.wrap_session(sid, cwd, delay=float(os.environ.get("STELLA_GG_DELAY") or 2))
+        w = wrapup.wrap_session(sid, cwd, delay=float(os.environ.get("STELLA_GG_DELAY") or 0))
     except Exception as e:  # noqa: BLE001
         return _block_prompt(f"gg failed ({type(e).__name__}: {e}); nothing closed.")
     if w.closed or not w.push_blocks:

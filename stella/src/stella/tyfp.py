@@ -11,21 +11,21 @@ The result is ONE report: `wrapped up: <names>`, then `left open: <name>: <reaso
 unpushed commit also gets its push raised through Claude Code's prompt (the typing session runs the push; never a command for
 the owner). The same code serves `stella sweep --now`.
 
-A hook cannot reach tmux (its sandbox), so then it queues the request and the scheduler runs it (`process_requests`), the way it
-closes windows for `gg`; the hook waits for the result for a few seconds.
+A hook cannot reach tmux (its sandbox), so it closes windows directly (`direct`): by pane process, found from each session's file.
+Only when even that is impossible (no process info) does it queue the request for the scheduler (`process_requests`) and wait a
+few seconds for the result: the explicit last resort.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from stella import ledger, state, status, tmuxctl, wrapup
-from stella.config import BIN, store_dir
+from stella import direct, ledger, state, status, tmuxctl, wrapup
+from stella.config import store_dir
 
 WAIT = 25  # seconds the hook waits for the scheduler's report (the hook's own timeout is 30)
 _WORD = re.compile(r"^tyfp$", re.I)
@@ -79,13 +79,21 @@ def run(sock: str | None, typed: dict | None = None, dry_run: bool = False, dela
             wrapup.finish_wrap(st, t, "owner", v.checked, record_reap=False)
             rep.wrapped.append(t.name)
             continue
-        window = wrapup.window_of(srv, t) if srv else None
-        if not window:
-            rep.left.append((t.name, "its window does not look like its own; left alone"))
-            continue
-        srv.run("kill-window", "-t", window, check=False)
-        if tmuxctl.window_exists(srv, window):
-            rep.left.append((t.name, f"window {window} did not close"))
+        if srv:
+            window = wrapup.window_of(srv, t)
+            if not window:
+                rep.left.append((t.name, "its window does not look like its own; left alone"))
+                continue
+            srv.run("kill-window", "-t", window, check=False)
+            closed = not tmuxctl.window_exists(srv, window)
+        else:  # a hook's sandbox: the session's own processes, found from its session file (see `direct`)
+            tgt = direct.of_team(t)
+            if isinstance(tgt, str):
+                rep.left.append((t.name, _one_line(tgt)))
+                continue
+            closed = direct.close_now(tgt)
+        if not closed:
+            rep.left.append((t.name, "its window did not close"))
             continue
         wrapup.finish_wrap(st, t, "owner", v.checked)
         rep.wrapped.append(t.name)
@@ -109,17 +117,16 @@ def _typed_in_last(st, now, srv, typed, typed_team, rep: Report, dry_run: bool, 
         if bl and all(b.kind == "push" for b in bl):
             rep.pushes += [b.command for b in bl if b.command]
         return
-    pane = wrapup.verify_pane(srv, typed) if srv else "tmux is not reachable"
-    if isinstance(pane, str):
-        rep.left.append((name, _one_line(pane)))
+    tgt = direct.of_pid(typed.get("claude_pid"), typed.get("sid") or "")
+    if isinstance(tgt, str):
+        rep.left.append((name, _one_line(tgt)))
         return
     if dry_run:
         rep.wrapped.append(name)
         return
     if typed_team:
         wrapup.finish_wrap(st, typed_team, "owner", v.checked)
-    subprocess.Popen([str(BIN), "wrapup", "--close-window", f"{srv.socket}|{pane['window_id']}", "--delay", f"{delay:g}"],
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    direct.close_later(tgt, delay)  # after the report has been delivered
     rep.wrapped.append(name)
 
 

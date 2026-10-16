@@ -216,11 +216,13 @@ def cmd_wrap(a):
 def cmd_wrapup(a):
     from stella import wrapup
 
-    if a.process_requests:  # internal: what the scheduler does for a `gg` typed where tmux is unreachable
+    if a.process_requests:  # internal: what the scheduler does for the last-resort queues (tyfp, adoption)
         print("\n".join(f"closed {w}" for w in wrapup.process_requests()))
         return
-    if a.close_window:  # internal: the detached helper of `gg` / `stella wrap`
-        return wrapup.close_window(a.close_window, a.delay)
+    if a.close_pids:  # internal: the detached helper of `stella wrap` / `tyfp`
+        from stella import direct
+
+        return direct.run_helper(a.close_pids, a.delay)
     if not a.team:
         raise SystemExit("stella wrapup needs the team to wrap up: `stella wrapup <team>` closes that one team. "
                          "To check every finished team (the automatic sweep) run `stella sweep`.")
@@ -644,13 +646,13 @@ def build() -> argparse.ArgumentParser:
     sp = c("reap", cmd_reap, "Close the windows of finished teams (all finished ones, or those named)")
     sp.add_argument("name", nargs="*")
     sp.add_argument("--force", action="store_true", help="also close a team that has not reported done")
-    sp = c("wrap", cmd_wrap, "(in a session) wrap up this session after the `gg` checks: record it closed, then close its tmux window")
+    sp = c("wrap", cmd_wrap, "(in a session) wrap up this session after the `gg` checks: record it closed, then close its tmux window at once, without tmux or the scheduler")
     sp.add_argument("--delay", type=float, default=3, help="seconds before the window closes, so the reply can finish")
     sp.add_argument("--dry-run", action="store_true", help="say what would close; change nothing")
     sp = c("wrapup", cmd_wrapup, "Wrap up the ONE named team now, as `gg` does for the session it is typed in (same checks; nothing else is touched)")
     sp.add_argument("team", nargs="*", help="the team to wrap up (nothing unpushed, uncommitted, deferred or waiting on the owner; keep_open does not matter)")
     sp.add_argument("--dry-run", action="store_true", help="say what would close; change nothing")
-    sp.add_argument("--close-window", help=argparse.SUPPRESS)  # internal: SOCKET|WINDOW, closed after --delay and verified
+    sp.add_argument("--close-pids", help=argparse.SUPPRESS)  # internal: PANE_PID:START,CLAUDE_PID:START, closed after --delay
     sp.add_argument("--delay", type=float, default=3, help=argparse.SUPPRESS)
     sp.add_argument("--process-requests", action="store_true", help=argparse.SUPPRESS)
     sp = c("sweep", cmd_sweep, "The AUTOMATIC sweep over EVERY finished team (not `gg`, which wraps up one session): records gone teams, and closes the clean finished ones only if wrapup_auto is on")

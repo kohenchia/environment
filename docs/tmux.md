@@ -125,7 +125,7 @@ Splits inherit the current directory, so `Cmd+D` in a project tab lands you in t
 | `Cmd+N` / `Cmd+Q` / `Cmd+±` | New window / quit / font size (Alacritty defaults) |
 
 Mouse works throughout: click a tab in the status bar to switch to it, click a pane to focus it,
-drag a border to resize, scroll to enter copy mode. Copy-mode yanks reach the macOS clipboard
+scroll to enter copy mode. Copy-mode yanks reach the macOS clipboard
 through OSC 52 (`set-clipboard on` in tmux, `osc52 = "OnlyCopy"` in Alacritty).
 
 ### Clicking a link
