@@ -21,11 +21,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 import traceback
 
-from stella import address, direct, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
+from stella import address, bashwrites, direct, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -315,9 +314,6 @@ def session_end(data: dict) -> None:
         wake.kick()
 
 
-_WRITEY = re.compile(r"(>|\btee\b|\bsed\s+-i|\bperl\s+-[pi]|<<|\bcp\b|\bmv\b|\bgit\s+commit\b|\bpython3?\b|\bcat\b.*>|\bprintf\b|\becho\b)")
-
-
 def pretool(data: dict) -> None:
     tool = data.get("tool_name", "")
     ti = data.get("tool_input") or {}
@@ -325,12 +321,13 @@ def pretool(data: dict) -> None:
     if tool == "Bash":
         cmd = ti.get("command", "")
         g = leak.guard()
-        if g.configured and _WRITEY.search(cmd):
-            root = leak.protected_root(cwd, g) or next((r for r in g.protect if str(r) in cmd or str(r).replace(os.path.expanduser("~"), "~") in cmd), None)
-            if root:
-                hit = _leak_hit(cmd, "command", g)
-                if hit:
-                    return _deny(hit)
+        if g.configured:  # only what the command writes into a protected repo is scanned; a read never is
+            for w in bashwrites.writes(cmd, cwd):
+                for target in w.targets:
+                    if leak.protected_root(target, g):
+                        hit = _leak_hit(w.text + ("\n" + str(target) if w.paths else ""), str(target), g)
+                        if hit:
+                            return _deny(hit)
         v = gate.check_bash(cmd, cwd)
         if v.decision == "ask":
             finish.remember_asked(data.get("session_id") or "", v.asked)
@@ -338,6 +335,8 @@ def pretool(data: dict) -> None:
         return
     if tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
         path = ti.get("file_path") or ti.get("notebook_path") or ""
+        if path and not os.path.isabs(os.path.expanduser(path)):
+            path = os.path.join(cwd, path)
         g = leak.guard()
         if g.configured and leak.protected_root(path, g):
             content = "\n".join(
@@ -359,7 +358,7 @@ def _leak_hit(text: str, where: str, g: leak.Guard) -> str | None:
         return None
     terms = sorted({h.term for h in hits})
     return (
-        "STELLA LEAK GUARD: this repo must stay free of extension-private information, and the content contains: "
+        f"STELLA LEAK GUARD: this repo must stay free of extension-private information, and what is written to {where} contains: "
         + ", ".join(repr(t) for t in terms[:10])
         + ". Rewrite it generically (a fictional example, or no example)."
     )
