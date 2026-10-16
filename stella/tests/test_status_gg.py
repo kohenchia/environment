@@ -278,3 +278,25 @@ def test_wrap_and_wrapup_are_documented_with_gg(env):
     for f in ("README.md", "plugin/skills/wrap-up/SKILL.md"):
         assert "`gg`" in (root / f).read_text(), f
     assert "gg:" in env.run("--help").stdout and "NEXT FOR YOU" in env.run("--help").stdout
+
+
+def test_gg_from_a_sandbox_that_cannot_reach_tmux_is_queued_for_the_scheduler(env, led, window):
+    r, wid, sock, tm, pane = _setup(env, led, window)
+    out = _gg(env, _gg_env(env, sock, "%999", **TEAM), cwd=r)  # tmux answers nothing for this pane, as in a sandbox
+    assert out["decision"] == "block" and "scheduler" in out["reason"] and "could not find" not in out["reason"]
+    [req] = list((env.store / "gg").glob("*.json"))
+    assert "wrapped_up" not in _types(env)  # nothing recorded until the window can really be closed
+    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane}))  # the scheduler reaches the real pane
+    env.run("wrapup", "--process-requests", env={"TMUX": f"{sock},0,0"})
+    assert _wait_gone(tm) and "wrapped_up" in _types(env) and not list((env.store / "gg").glob("*.json"))
+
+
+def test_a_queued_gg_is_rechecked_when_the_scheduler_gets_to_it(env, led, window):
+    r, wid, sock, tm, pane = _setup(env, led, window)
+    _gg(env, _gg_env(env, sock, "%999", **TEAM), cwd=r)
+    [req] = list((env.store / "gg").glob("*.json"))
+    req.write_text(json.dumps({**json.loads(req.read_text()), "pane": pane}))
+    (r / "wip.txt").write_text("x\n")
+    env.run("wrapup", "--process-requests", env={"TMUX": f"{sock},0,0"})
+    assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
+    assert "uncommitted changes in proj" in env.run("attention").stdout

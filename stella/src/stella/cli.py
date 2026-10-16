@@ -216,6 +216,9 @@ def cmd_wrap(a):
 def cmd_wrapup(a):
     from stella import wrapup
 
+    if a.process_requests:
+        print("\n".join(f"closed {w}" for w in wrapup.process_requests()))
+        return
     if a.close_window:  # internal: the detached helper of `gg` / `stella wrap`
         return wrapup.close_window(a.close_window, a.delay)
     if a.team:
@@ -633,6 +636,7 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true", help="list what would be wrapped up and why the rest stays open; change nothing")
     sp.add_argument("--close-window", help=argparse.SUPPRESS)  # internal: SOCKET|WINDOW, closed after --delay and verified
     sp.add_argument("--delay", type=float, default=3, help=argparse.SUPPRESS)
+    sp.add_argument("--process-requests", action="store_true", help=argparse.SUPPRESS)  # internal: what the scheduler does for `gg`
     sp = c("report", cmd_report, "(team leads) report progress, or that the owner is needed")
     sp.add_argument("team")
     sp.add_argument("message")

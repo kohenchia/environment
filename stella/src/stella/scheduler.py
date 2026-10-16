@@ -209,7 +209,19 @@ def run_forever(interval: int = 60) -> int:
             ledger.append("alert", by="scheduler", key="scheduler:error", text=f"scheduler error: {type(e).__name__}: {e}")
             print(f"error: {e}", flush=True)
         sweep_wrapup()
-        time.sleep(interval)
+        end = time.monotonic() + interval
+        while time.monotonic() < end:  # a session that typed gg and cannot reach tmux waits on this
+            time.sleep(min(3, max(0.1, end - time.monotonic())))
+            _close_queued()
+
+
+def _close_queued() -> None:
+    from stella import wrapup
+
+    try:
+        wrapup.process_requests()
+    except Exception as e:  # noqa: BLE001
+        print(f"gg error: {type(e).__name__}: {e}", flush=True)
 
 
 def sweep_wrapup() -> None:

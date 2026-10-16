@@ -28,6 +28,7 @@ Sessions Stella did not launch are never touched: only teams in the ledger are l
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 import subprocess
@@ -429,15 +430,19 @@ def wrap_session(sid: str, cwd: str, delay: float = 3, dry_run: bool = False) ->
     sock = tm.split(",", 1)[0]
     if not in_stella_server(sock):
         return Wrap(False, "gg: this tmux server is not Stella's; nothing closed. Type /exit to end this session.")
-    srv = tmuxctl.Server(["tmux", "-S", sock], sock, "caller")
-    window = srv.run("display-message", "-p", "-t", pane, "#{window_id}", check=False).stdout.strip()
-    if not window:
-        return Wrap(False, "could not find this session's tmux window (is tmux blocked by the command sandbox?)")
     st = state.fold()
     t = st.teams.get(os.environ.get("STELLA_TEAM") or "")
     bl = status.blockers(st, sid, cwd, own=False, t=t)
     if bl:
         return Wrap(False, _blocked(bl), bl)
+    srv = tmuxctl.Server(["tmux", "-S", sock], sock, "caller")
+    window = srv.run("display-message", "-p", "-t", pane, "#{window_id}", check=False).stdout.strip()
+    if not window:
+        # A hook runs in the session's command sandbox, which cannot reach tmux. The checks above passed, so ask
+        # the scheduler (started from a terminal, it can) to close the window.
+        if dry_run:
+            return Wrap(False, "would queue the close for the scheduler: this shell cannot reach tmux")
+        return _queue(sid, cwd, sock, pane, t)
     if dry_run:
         return Wrap(False, f"would close window {window}" + (f" and record team {t.name} as wrapped up" if t else ""))
     if t:
@@ -486,3 +491,58 @@ def close_window(spec: str, delay: float) -> None:
     time.sleep(0.5)
     if tmuxctl.window_exists(srv, window):
         ledger.append("alert", by="wrapup", key=f"window-open:{window}", text=f"gg: window {window} did not close")
+
+
+# ---------------------------------------------------------------- when the session cannot reach tmux
+
+
+def _queue_dir() -> Path:
+    return store_dir() / "gg"
+
+
+def _queue(sid: str, cwd: str, sock: str, pane: str, t: state.Team | None) -> Wrap:
+    from stella import scheduler
+
+    d = _queue_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{re.sub(r'[^A-Za-z0-9]', '_', sock + pane)}.json").write_text(json.dumps(
+        {"sock": sock, "pane": pane, "sid": sid, "cwd": cwd, "team": t.name if t else None}))
+    if not scheduler.running_pid():
+        return Wrap(False, "gg: nothing blocks it, but this session cannot reach tmux and the scheduler is not running to close"
+                           " it; run `stella run` in a terminal, or type /exit.")
+    return Wrap(True, "wrapped up: nothing blocks it; the scheduler closes the window within seconds (this session cannot reach tmux)")
+
+
+def process_requests() -> list[str]:
+    """Scheduler side of `_queue`: re-check, then record and close each queued window, verified. A failure is an alert."""
+    out = []
+    for f in sorted(_queue_dir().glob("*.json")):
+        try:
+            req = json.loads(f.read_text())
+        except (OSError, ValueError):
+            req = None
+        f.unlink(missing_ok=True)
+        if not req:
+            continue
+        from stella import status
+
+        srv = tmuxctl.Server(["tmux", "-S", req["sock"]], req["sock"], "recorded")
+        window = srv.run("display-message", "-p", "-t", req["pane"], "#{window_id}", check=False).stdout.strip()
+        st = state.fold()
+        t = st.teams.get(req.get("team") or "")
+        key = f"gg:{req['pane']}"
+        if not window:
+            ledger.append("alert", by="wrapup", key=key, text=f"gg: could not find the window of pane {req['pane']}; nothing closed")
+            continue
+        bl = status.blockers(st, req.get("sid") or "", req.get("cwd") or "", own=False, t=t)
+        if bl:
+            ledger.append("alert", by="wrapup", key=key, text=_blocked(bl) + f" (window {window})")
+            continue
+        if t:
+            finish_wrap(st, t, "owner", ["the owner typed gg", "nothing unpushed, uncommitted, deferred or open for the owner"])
+        srv.run("kill-window", "-t", window, check=False)
+        if tmuxctl.window_exists(srv, window):
+            ledger.append("alert", by="wrapup", key=key, text=f"gg: window {window} did not close")
+        else:
+            out.append(window)
+    return out
