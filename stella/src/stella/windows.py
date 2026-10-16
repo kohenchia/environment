@@ -159,14 +159,17 @@ def _classify(t: Target, st, me: dict, srv) -> None:
 
 
 def live_teams(srv=None) -> set[str] | None:
-    """The names of the teams whose lead is alive in a tmux pane right now (by its `--name` or its window's
-    name, whatever the window is called). None when that cannot be told: no tmux server reachable from here, or
+    """The names of the teams that still have a lead alive in a tmux pane (by its `--name` or its window's
+    name, whatever the window is called) or a window of that name. None when that cannot be told: no tmux server reachable from here, or
     the process list unreadable. Never guesses a team is gone."""
     srv = srv or tmuxctl.find_server() or tmuxctl.server_for_socket(run._load().get("socket"))
     procs = _procs()
     if not srv or not procs:
         return None
-    return {t.team for t in discover(srv, with_agents=False, procs=procs) if t.team}
+    names = {t.team for t in discover(srv, with_agents=False, procs=procs) if t.team}
+    # A lead that has ended leaves the owner's shell in its window (see launch.write_script): the window is
+    # not gone. Matched by name only: window ids are reused after a tmux restart, so an old id proves nothing.
+    return names | {p["window_name"] for p in _panes(srv)}
 
 
 # ------------------------------------------------------------ restart

@@ -92,3 +92,12 @@ def test_the_scheduler_records_gone_teams_even_with_auto_wrapup_off(env, led, tm
     subprocess.run([sys.executable, "-c", "from stella import scheduler; scheduler.sweep_wrapup()"], check=True,
                    env={**env.env, **tmux, "PYTHONPATH": str(ROOT / "src")}, capture_output=True)
     assert "wrapped_up" in _types(env)
+
+
+def test_a_window_left_holding_the_owners_shell_is_not_gone(env, led, tmux):  # noqa: F811
+    r = _repo(env)
+    _gone_team(led, "shelled", r)
+    sock = tmux["TMUX"].split(",")[0]
+    subprocess.run(["tmux", "-S", sock, "new-window", "-d", "-t", "work:", "-n", "shelled", "sleep 60"], check=True)
+    assert "shelled" not in env.run("wrapup", env=tmux).stdout
+    assert "wrapped_up" not in _types(env)
