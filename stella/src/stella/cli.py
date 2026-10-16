@@ -165,6 +165,28 @@ def st_socket(team: str) -> str | None:
     return sock
 
 
+def cmd_reopen(a):
+    from stella import launch
+
+    print(launch.reopen(a.target, a.dir, a.dry_run))
+
+
+def cmd_fix_resume(a):
+    from stella import resume
+
+    ids: set[str] = set()
+    for target in a.target:
+        f = resume.lookup(target)
+        if f:
+            ids.add(f.session_id)
+        else:
+            print(f"{target}: no transcript with that name or id")
+    if a.all or not a.target:
+        ids |= {sid for t in state.fold().teams.values() for sid in t.sessions}
+    for line in resume.heal_known(ids) or ["nothing to change: every one of these sessions is already listed"]:
+        print(line)
+
+
 def cmd_reap(a):
     from stella import wrapup
 
@@ -541,6 +563,13 @@ def build() -> argparse.ArgumentParser:
     sp = c("tell", cmd_tell, "Send a message to a running team lead")
     sp.add_argument("team")
     sp.add_argument("message")
+    sp = c("reopen", cmd_reopen, "Reopen a finished session in a tmux window, by team name, session name or id (resumes it where it started)")
+    sp.add_argument("target")
+    sp.add_argument("--dir", help="start somewhere else than the directory it was started in")
+    sp.add_argument("--dry-run", action="store_true")
+    sp = c("fix-resume", cmd_fix_resume, "List sessions in the `claude --resume` picker that it hides (headless origin): the named ones, or all of Stella's")
+    sp.add_argument("target", nargs="*", help="session names or ids; none means every session Stella launched")
+    sp.add_argument("--all", action="store_true", help="the named ones and all of Stella's")
     sp = c("reap", cmd_reap, "Close the windows of finished teams (all finished ones, or those named)")
     sp.add_argument("name", nargs="*")
     sp.add_argument("--force", action="store_true", help="also close a team that has not reported done")

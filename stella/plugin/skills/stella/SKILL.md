@@ -92,6 +92,7 @@ Write the design into `--text` together with the task:
 
 - `~/.local/bin/stella fleet` shows every session on the machine, which ones you launched, their state and their
   last report.
+- A lead that exits (`/quit`) leaves the owner a shell in its window, so a live window is no sign of a live lead: `tell` refuses it (`window_dead`). To bring a session back, `~/.local/bin/stella reopen <team|session name|id>` (opens a window in the directory it started in and makes it visible to `claude --resume`; if the owner can't find a session in `claude --resume`, `~/.local/bin/stella fix-resume <name>`).
 - `~/.local/bin/stella tell <team> "<message>"` types the message into the lead's window, prefixed `[Stella]`. If
   the team has no window, it tells you to use the SendMessage tool instead; do that.
 - Leads report with `~/.local/bin/stella report` and `~/.local/bin/stella done`; finishing raises a desktop notification and

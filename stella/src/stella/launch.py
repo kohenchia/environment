@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stella import ledger, passenv, registry, state, tmuxctl
-from stella.config import CALL, settings, store_dir
+from stella.config import BIN, CALL, settings, store_dir
 
 _NAME = re.compile(r"[^a-z0-9-]+")
 
@@ -60,27 +60,44 @@ How this team works:
 {extra}""".rstrip() + "\n"
 
 
+LEAD_EXITED = "@stella_lead_exited"  # window option: the lead has ended and the pane now holds the owner's shell
+
+
 def write_script(script: Path, name: str, directory: str, mode: str, order_seq: int | None, claude_args: list[str],
-                 creds: dict[str, str | None], auto_push: bool = False) -> None:
+                 creds: dict[str, str | None], auto_push: bool = False, team: bool = True) -> None:
     """The window's command. pass_env variables that are off are unset here (a tmux server's
-    environment may carry them); values that are on come in through tmux -e and never touch disk."""
+    environment may carry them); values that are on come in through tmux -e and never touch disk.
+
+    Claude runs as a child of the script, and when it ends (/quit, a crash) the script becomes the owner's
+    login shell in the same directory, so the window outlives the lead: they can run things or resume.
+    `stella reap` closes it by killing the window. The end itself is recorded by the SessionEnd hook; a
+    crash sends none, so the script feeds the hook the missing event. `team=False` is a reopened
+    session that is not one of Stella's teams: no team name in its environment, no hook feed."""
     s = settings()
     prompt_file = store_dir() / "launch" / f"{name}.prompt.md"
+    extra = f" --append-system-prompt-file {shlex.quote(str(prompt_file))}" if team or prompt_file.exists() else ""
     script.write_text(
         "#!/bin/sh\n"
         f"cd {shlex.quote(directory)} || exit 1\n"
-        f"export STELLA_TEAM={shlex.quote(name)}\n"
+        + (f"export STELLA_TEAM={shlex.quote(name)}\n" if team else "")
         + (f"export STELLA_ORDER={order_seq}\n" if order_seq else "")
         + ("export STELLA_AUTO_PUSH=1\n" if auto_push else "")
         + "".join(f"unset {k}\n" for k, v in creds.items() if v is None)
-        + f"{shlex.quote(s.claude_bin)} --name {shlex.quote(name)} --permission-mode {shlex.quote(mode)}"
-        f" --append-system-prompt-file {shlex.quote(str(prompt_file))} {' '.join(shlex.quote(a) for a in claude_args)}\n"
-        # A clean exit (/quit) closes the window. A crash waits for a key so its last output can be read.
-        # This is done here, not with tmux's remain-on-exit, because that option is per window and would
-        # also keep any shell the owner opens beside the lead after a failing command and `exit`.
-        'rc=$?\n'
-        'if [ "$rc" -ne 0 ]; then printf "\\n[stella] claude exited with status %s. Press Enter to close.\\n" "$rc"; read -r _; fi\n'
-        'exit "$rc"\n'
+        + f'[ -n "$TMUX" ] && tmux set-option -wu -t "$TMUX_PANE" {LEAD_EXITED} >/dev/null 2>&1\n'
+        + f"{shlex.quote(s.claude_bin)} --name {shlex.quote(name)} --permission-mode {shlex.quote(mode)}{extra}"
+        f" {' '.join(shlex.quote(a) for a in claude_args)}\n"
+        "rc=$?\n"
+        # Tell Stella the pane is a plain shell now (`tell` must not type a message into it).
+        f'[ -n "$TMUX" ] && tmux set-option -w -t "$TMUX_PANE" {LEAD_EXITED} 1 >/dev/null 2>&1\n'
+        + (
+            # A SessionEnd hook records every exit it sees. A non-zero status with no record (killed, crashed)
+            # is fed to the same hook so the lead still counts as ended; one already recorded changes nothing.
+            f'if [ "$rc" -ne 0 ]; then printf \'{{"reason":"other"}}\' | {shlex.quote(str(BIN))} hook session-end >/dev/null 2>&1; fi\n'
+            if team else ""
+        )
+        + 'if [ "$rc" -ne 0 ]; then printf "\\n[stella] claude exited with status %s.\\n" "$rc"; fi\n'
+        f'printf "\\n[stella] claude ended. This is your shell in %s: run things, or `claude --resume` to go on.\\n" "$PWD"\n'
+        'exec "${SHELL:-/bin/sh}" -l\n'
     )
     script.chmod(0o755)
 
@@ -254,6 +271,43 @@ def respawn(name: str, why: str) -> str:
 def respawn_all(why: str) -> list[str]:
     st = state.fold()
     return [respawn(t.name, why) for t in st.teams.values() if t.status in {"running", "needs-you"} and t.window]
+
+
+def reopen(target: str, directory: str | None = None, dry_run: bool = False) -> str:
+    """Open a window that resumes a finished session, named for it, in the directory it started in (the one
+    `claude --resume` lists it under). `target` is a team name, a session name or a session id. The session
+    is made listable by the resume picker first. A team comes back as the same team."""
+    from stella import daily, resume
+
+    st = state.fold()
+    t = st.teams.get(target)
+    found = resume.lookup(t.session_id if t and t.session_id else target)
+    if not found:
+        return f"{target}: no transcript with that name or id under {daily.transcripts_dir()}"
+    name = t.name if t else (found.title or target)
+    directory = os.path.expanduser(directory or (t.directory if t and t.directory else found.cwd) or "~")
+    srv = tmuxctl.find_server()
+    if srv and tmuxctl.find_window(srv, name):
+        return f"{name}: a window of that name is already open; close it first or give it another name"
+    if dry_run:
+        return f"would reopen {name} (session {found.session_id}) in {directory}"
+    note = resume.make_listable(found.path)
+    launch_ev = next((e for e in reversed(list(ledger.events())) if e["type"] == "launch" and e.get("team") == name), {})
+    d = store_dir() / "launch"
+    d.mkdir(parents=True, exist_ok=True)
+    script = d / f"{name}.reopen.sh"
+    creds = passenv.resolve()
+    mode = launch_ev.get("mode") or settings().permission_mode
+    write_script(script, name, directory, mode, t.order if t else None, ["--resume", found.session_id], creds,
+                 bool(launch_ev.get("auto_push")), team=t is not None)
+    if not srv:
+        return tmuxctl.last_error or f"{name}: no tmux server is running; run `cd {directory} && claude --resume {found.session_id}`"
+    window = tmuxctl.new_window(srv, name, directory, str(script), env={k: v for k, v in creds.items() if v is not None})
+    if t:
+        ledger.append("launch", by="cli", team=name, archetype=t.archetype, order=t.order, dir=directory, window=window,
+                      socket=srv.socket, via=f"tmux ({srv.via} server)", mode=mode, auto_push=launch_ev.get("auto_push"),
+                      pass_env=passenv.effective(), reopened=found.session_id, session=os.environ.get("STELLA_SESSION_ID"))
+    return f"reopened {name} in window {window}, {directory}" + (f" ({note})" if note else "")
 
 
 def background_teams() -> list[str]:

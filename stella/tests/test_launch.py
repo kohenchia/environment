@@ -129,16 +129,95 @@ def test_launch_forwards_only_pass_env_variables(env, tmux, fake_claude):
     assert "t0ken" not in script
 
 
-def test_clean_exit_closes_the_window_but_a_crash_keeps_it(env, tmux):
+def _windows(sock):
+    return subprocess.run(["tmux", "-S", sock, "list-windows", "-t", "work", "-F", "#{window_name}"],
+                          capture_output=True, text=True).stdout.split()
+
+
+def _pane(sock, window, fmt):
+    return subprocess.run(["tmux", "-S", sock, "list-panes", "-t", f"work:{window}", "-F", fmt],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _ended(env, team):
+    return [e for e in env.events() if e["type"] == "ended" and e["team"] == team]
+
+
+def _type(sock, window, line, done, timeout=15):
+    """Type into the window's shell until `done` (a file the line writes) appears: the shell may still be starting."""
+    end = time.time() + timeout
+    while time.time() < end and not (done.exists() and done.read_text().strip()):
+        subprocess.run(["tmux", "-S", sock, "send-keys", "-t", f"work:{window}", line, "Enter"], check=True)
+        time.sleep(0.7)
+    return _wait(done, 3)
+
+
+def _wait_for(cond, timeout=10):
+    end = time.time() + timeout
+    while time.time() < end:
+        if cond():
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_quitting_the_lead_leaves_a_shell_in_the_same_window_and_directory(env, tmux, fake_claude):
+    (env.home / ".zshrc").write_text("")  # so a login zsh does not offer its first-run wizard
+    quits = env.tmp / "claude-quits-now"
+    quits.write_text(f'#!/bin/sh\necho "$@" > "{fake_claude}/args.txt"\nexit 0\n')
+    quits.chmod(0o755)
+    env.write_config(claude_bin=str(quits), tmux_session="work")
     sock = tmux["TMUX"].split(",")[0]
-    for name, claude in (("quits", "true"), ("crashes", "false")):
-        env.write_config(claude_bin=claude, tmux_session="work")
+    where = env.tmp / "work dir"
+    where.mkdir()
+    env.say("A", "S, build q1")
+    env.run("launch", "builder", "--order", "1", "--name", "q1", "--dir", str(where), env=tmux)
+    _wait(fake_claude / "args.txt")
+    # the lead ended: the window stays, as a shell, in the lead's directory
+    assert _wait_for(lambda: _pane(sock, "q1", "#{@stella_lead_exited}") == "1")
+    time.sleep(0.5)
+    assert "q1" in _windows(sock)
+    assert os.path.realpath(_pane(sock, "q1", "#{pane_current_path}")) == os.path.realpath(where)
+    assert os.path.realpath(_type(sock, "q1", f"pwd > '{env.tmp}/shell.txt'", env.tmp / "shell.txt").strip()) == os.path.realpath(where)
+    # nothing may be typed into that shell on the lead's behalf
+    assert "no open Stella window" in env.run("tell", "q1", "hello", env=tmux).stdout
+    assert not (env.tmp / "hello").exists()
+    # the lead's STELLA_TEAM is still in that shell's environment
+    assert _type(sock, "q1", f"echo $STELLA_TEAM > '{env.tmp}/team.txt'", env.tmp / "team.txt").strip() == "q1"
+    # and a finished team's window is still closed by reap
+    env.run("done", "q1", "finished")
+    assert "closed q1" in env.run("reap", "q1", env=tmux).stdout
+    assert "q1" not in _windows(sock)
+
+
+def test_a_typed_quit_is_one_deliberate_end_and_a_crash_is_one_unexpected_end(env, tmux):
+    sock = tmux["TMUX"].split(",")[0]
+    stella = Path(__file__).resolve().parents[1] / "bin" / "stella"
+    # /quit: Claude's SessionEnd hook runs, then it exits 0
+    quits = env.tmp / "claude-quits"
+    quits.write_text(f"#!/bin/sh\necho '{{\"reason\":\"prompt_input_exit\"}}' | {stella} hook session-end\nexit 0\n")
+    # killed after its hook ran (a signal): still one end, not two
+    both = env.tmp / "claude-both"
+    both.write_text(f"#!/bin/sh\necho '{{\"reason\":\"other\"}}' | {stella} hook session-end\nexit 137\n")
+    # crashed, no hook at all
+    crashes = env.tmp / "claude-crashes"
+    crashes.write_text("#!/bin/sh\nexit 1\n")
+    for p in (quits, both, crashes):
+        p.chmod(0o755)
+    for name, claude in (("quits", quits), ("both", both), ("crashes", crashes)):
+        env.write_config(claude_bin=str(claude), tmux_session="work")
         env.say("A", f"S, build {name}")
         env.run("launch", "builder", "--order", "1", "--name", name, env=tmux)
-    time.sleep(1.5)
-    windows = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", "work", "-F", "#{window_name}"],
-                             capture_output=True, text=True).stdout.split()
-    assert "quits" not in windows and "crashes" in windows
+    assert _wait_for(lambda: all(_ended(env, n) for n in ("quits", "both", "crashes")))
+    time.sleep(1)
+    assert [e["reason"] for e in _ended(env, "quits")] == ["prompt_input_exit"]
+    assert [e["reason"] for e in _ended(env, "both")] == ["other"]
+    assert [e["reason"] for e in _ended(env, "crashes")] == ["other"]
+    # every one of them keeps its window, as a shell, and is not mistaken for a live lead
+    assert {"quits", "both", "crashes"} <= set(_windows(sock))
+    attention = env.run("attention").stdout
+    assert "crashes exited unexpectedly" in attention and "quits exited unexpectedly" not in attention
+    assert "was closed by hand" not in env.run("attention").stderr
 
 
 def test_lead_prompt_tells_the_team_to_state_requests_in_full(env, tmux, fake_claude):
@@ -155,12 +234,13 @@ def test_needs_you_report_reminds_the_team_to_say_it_in_the_window(env):
     assert "must state" not in env.run("report", "br", "built half").stdout
 
 
-def test_launch_script_waits_after_a_crash_but_not_after_a_clean_exit(env, tmux, fake_claude):
+def test_launch_script_runs_the_lead_then_the_owners_shell(env, tmux, fake_claude):
     env.say("A", "S, build w")
     env.run("launch", "builder", "--order", "1", "--name", "bw", env=tmux)
     script = (env.store / "launch" / "bw.sh").read_text()
-    assert "exec " not in script.split("rc=$?")[0].splitlines()[-1]
-    assert 'rc=$?' in script and 'read -r _' in script and script.rstrip().endswith('exit "$rc"')
+    assert "exec " not in script.split("rc=$?")[0]  # the lead is a child, not the window's process
+    assert script.rstrip().endswith('exec "${SHELL:-/bin/sh}" -l')
+    assert "export STELLA_TEAM=bw" in script
     sock = tmux["TMUX"].split(",")[0]
     opt = subprocess.run(["tmux", "-S", sock, "show-options", "-w", "-t", "work:bw", "remain-on-exit"],
                          capture_output=True, text=True).stdout
@@ -205,3 +285,30 @@ def test_the_lead_is_told_to_push_and_auto_push_launches_say_so(env, tmux, fake_
     env.run("launch", "builder", "--order", "1", "--name", "pq", "--auto-push", env=tmux)
     assert "told you up front to push" in (env.store / "launch" / "pq.prompt.md").read_text()
     assert "export STELLA_AUTO_PUSH=1" in (env.store / "launch" / "pq.sh").read_text()
+
+
+def test_reopen_resumes_a_session_by_name_in_its_own_directory_and_lists_it(env, tmux, fake_claude):
+    import json
+
+    sock = tmux["TMUX"].split(",")[0]
+    where = env.tmp / "monorepo"
+    where.mkdir()
+    sid = "11111111-2222-4333-8444-555555555555"
+    d = env.tmp / "transcripts" / "-proj"
+    d.mkdir(parents=True)
+    t = d / f"{sid}.jsonl"
+    t.write_text("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in (
+        {"type": "user", "entrypoint": "sdk-cli", "cwd": str(where), "sessionId": sid},
+        {"type": "custom-title", "customTitle": "pr-9-sam", "sessionId": sid})))
+    old = time.time() - 3600
+    os.utime(t, (old, old))
+    out = env.run("reopen", "pr-9-sam", env=tmux).stdout
+    assert "reopened pr-9-sam" in out and "now listed" in out
+    args = _wait(fake_claude / "args.txt")
+    assert f"--resume {sid}" in args and "--name pr-9-sam" in args
+    assert "pr-9-sam" in _windows(sock)
+    assert os.path.realpath(_pane(sock, "pr-9-sam", "#{pane_current_path}")) == os.path.realpath(where)
+    assert '"sdk-cli"' not in t.read_text()
+    # not a team: no team name in the window's environment, so no team hooks fire for it
+    assert "STELLA_TEAM" not in (env.store / "launch" / "pr-9-sam.reopen.sh").read_text()
+    assert "already open" in env.run("reopen", "pr-9-sam", env=tmux).stdout

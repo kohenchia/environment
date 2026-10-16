@@ -80,8 +80,8 @@ def new_window(srv: Server, name: str, directory: str, command: str, env: dict[s
         "new-window", "-d", "-P", "-F", "#{window_id}", "-t", f"={session}:", "-n", name, "-c", directory,
         *env_args, command,
     ).stdout.strip()
-    # No remain-on-exit: the launch script itself waits after a crash (see launch.py), so a shell the owner
-    # opens next to the lead closes normally on `exit`, whatever the last command's status was.
+    # No remain-on-exit: the launch script itself outlives the lead as the owner's shell (see launch.py), so a
+    # shell the owner opens next to the lead closes normally on `exit`, whatever the last command's status was.
     srv.run("set-option", "-w", "-t", out, "remain-on-exit", "off", check=False)
     return out
 
@@ -102,8 +102,10 @@ def find_window(srv: Server, name: str) -> str | None:
 
 def window_dead(srv: Server, window: str) -> bool:
     # The tmux sidebar (bin/tmux-sidebar) is a pane of every window and is never dead; look past it.
-    r = srv.run("list-panes", "-t", window, "-f", "#{!=:#{@sidebar},1}", "-F", "#{pane_dead}", check=False)
-    return r.returncode != 0 or r.stdout.strip().startswith("1")
+    # "Dead" also means the lead has ended and the pane is the owner's shell (launch.write_script marks it):
+    # nothing may be typed into it for the lead.
+    r = srv.run("list-panes", "-t", window, "-f", "#{!=:#{@sidebar},1}", "-F", "#{pane_dead}#{@stella_lead_exited}", check=False)
+    return r.returncode != 0 or r.stdout.strip().startswith("1") or r.stdout.strip().endswith("1")
 
 
 def send_text(srv: Server, window: str, text: str, timeout: float | None = None) -> None:

@@ -239,6 +239,10 @@ Do not ask questions; this run is unattended."""
 def run_nightly(win: Window, claude: str | None = None) -> list[str]:
     date = win.label
     report: list[str] = []
+    from stella import resume, state
+
+    healed = resume.heal_known({sid for t in state.fold().teams.values() for sid in t.sessions})
+    report += [f"resume picker: {h}" for h in healed]
     report += leak.rebuild()
     g = leak.guard()
     if g.configured:
