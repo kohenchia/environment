@@ -19,7 +19,7 @@ import tomllib
 from pathlib import Path
 
 from stella import ledger
-from stella.config import settings, store_dir
+from stella.config import HEADLESS_ARGS, settings, store_dir
 
 CANON_TEMPLATE = """# Stella canon
 
@@ -157,14 +157,14 @@ def run_eval(only: list[str] | None = None, model: str = "sonnet") -> dict:
             [settings().query_bin, "-p",
              f"[stella-job] You are Stella. Read the canon at {canon} and apply its 'How to decide' procedure to this "
              f"situation. Do not ask questions.\n\nSituation: {c['situation']}\n\nAnswer with: Decision, Confidence, Principles.",
-             "--model", model],
+             "--model", model, *HEADLESS_ARGS],
             capture_output=True, text=True, timeout=600, env=_env())
         answer = decide.stdout.strip()
         grade = subprocess.run(
             [settings().query_bin, "-p",
              "[stella-job] Grade whether the ANSWER reaches the same decision as EXPECTED, for the same essential reason. "
              "Reply with PASS or FAIL on the first line, then one sentence.\n\n"
-             f"EXPECTED: {c['expected']}\n\nANSWER: {answer}", "--model", model],
+             f"EXPECTED: {c['expected']}\n\nANSWER: {answer}", "--model", model, *HEADLESS_ARGS],
             capture_output=True, text=True, timeout=300, env=_env())
         verdict = grade.stdout.strip()
         results[c["id"]] = {"pass": verdict.upper().startswith("PASS"), "answer": answer[:2000], "grade": verdict[:500]}

@@ -321,7 +321,7 @@ def cmd_stop(a):
 
 
 def cmd_pass_env(a):
-    from stella import config, launch, passenv, run
+    from stella import config, passenv, windows
 
     if a.action in {"on", "off"}:
         passenv.set_mode(a.action, by="cli")
@@ -341,19 +341,33 @@ def cmd_pass_env(a):
                   " restarted: `~/.local/bin/stella pass-env --respawn` (or name teams with --team).")
         return
     why = f"Restarted with pass_env {passenv.effective()}."
-    for line in ([launch.respawn(n, why) for n in a.team] if a.team else launch.respawn_all(why)):
-        print(line)
-    if a.team:
-        return
-    for name in launch.background_teams():
-        print(f"{name}: runs without a tmux window, so it can't be restarted in place; stop it and relaunch it")
-    print(run.respawn_self(why), flush=True)
+    for line in windows.restart_all(why, only_teams=a.team or None):
+        print(line, flush=True)
+    if not a.team:
+        for name in windows.background_teams():
+            print(f"{name}: runs without a tmux window, so it can't be restarted in place; stop it and relaunch it")
 
 
 def cmd_respawn_self(a):
-    from stella import run
+    from pathlib import Path
 
-    run.respawn_self_now(a.why)
+    from stella import windows
+
+    if a.plan:  # the detached helper started by `pass-env --respawn`
+        windows.run_plan(Path(a.plan))
+        return
+    from stella import run, tmuxctl
+
+    srv = tmuxctl.find_server() or tmuxctl.server_for_socket(run._load().get("socket"))
+    me = [t for t in windows.discover(srv) if t.kind == "stella"] if srv else []
+    if not me:
+        print("Stella: not running in any tmux pane; `stella run` will start her on the current setting.")
+        return
+    if reason := windows.skip_reason(me[0]):
+        print(f"Stella: skipped, {reason}")
+        return
+    windows._later(srv, me, a.why or "Restarted.")
+    print(f"Stella: restarting in {me[0].window_name} {me[0].pane_id} in a moment, conversation resumed")
 
 
 def cmd_scheduler(a):
@@ -623,13 +637,13 @@ def build() -> argparse.ArgumentParser:
     sp = c("stop", cmd_stop, "Stop Stella: her session and the background scheduler (launched teams keep running)")
     sp.add_argument("--keep-scheduler", action="store_true", help="stop only her session")
     sp = c("pass-env", cmd_pass_env, "Show or switch whether sessions Stella starts get the pass_env variables;"
-           " --respawn restarts running teams (and Stella) on the current setting")
+           " --respawn restarts every Claude window in the tmux server (teams, Stella, hand-opened ones) on the current setting")
     sp.add_argument("action", nargs="?", default="status", choices=["status", "on", "off"])
-    sp.add_argument("--respawn", action="store_true", help="restart running teams and Stella, resuming their conversations")
-    sp.add_argument("--team", action="append", default=[], help="with --respawn: only this team (repeatable; Stella is left alone)")
-    sp = sub.add_parser("respawn-self")  # internal: the detached half of `pass-env --respawn`
-    sp.set_defaults(fn=cmd_respawn_self)
-    sp.add_argument("why")
+    sp.add_argument("--respawn", action="store_true", help="restart every Claude window in the tmux server (teams, hand-opened ones, then Stella), resuming their conversations")
+    sp.add_argument("--team", action="append", default=[], help="with --respawn: only this team (repeatable; Stella and hand-opened windows are left alone)")
+    sp = c("respawn-self", cmd_respawn_self, "Restart Stella's own session in her pane, conversation resumed (what `pass-env --respawn` does last)")
+    sp.add_argument("why", nargs="?", default="")
+    sp.add_argument("--plan", help=argparse.SUPPRESS)  # internal: the detached helper's list of restarts
     sp = c("scheduler", cmd_scheduler, "Run the daily/nightly scheduler")
     sp.add_argument("--ensure", action="store_true", help="start the background scheduler unless it is running")
     sp.add_argument("--stop", action="store_true", help="stop the background scheduler")

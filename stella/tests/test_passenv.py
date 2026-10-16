@@ -250,3 +250,14 @@ def test_headless_runs_are_listed_by_the_resume_picker(env, env_claude):
     env.run("nightly", "--date", "2026-01-02", env={"CLAUDE_CODE_ENTRYPOINT": "sdk-cli"})
     entries = (out / "entry.txt").read_text().split()
     assert entries and set(entries) == {"stella"}
+
+
+def test_headless_runs_load_no_mcp_server(env, env_claude):
+    """A plugin's MCP server may run a login helper that needs the login keychain; a scheduler run has none."""
+    out, _ = env_claude
+    probe = env.tmp / "claude-args"
+    probe.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" >> "{out}/headless-args.txt"\n')
+    probe.chmod(0o755)
+    env.write_config(claude_bin=str(probe))
+    env.run("nightly", "--date", "2026-01-02")
+    assert "--strict-mcp-config" in (out / "headless-args.txt").read_text().splitlines()

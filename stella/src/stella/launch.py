@@ -235,42 +235,26 @@ def respawning(name: str) -> bool:
     return True
 
 
-def respawn(name: str, why: str) -> str:
-    """Restart a running team's lead in its own window, resuming its conversation, with the
-    pass_env variables as the switch says now. Its work so far is kept; a tool call in
-    flight is interrupted."""
-    from stella import run
-
-    st = state.fold()
-    t = st.teams.get(name)
+def respawn_team(srv, name: str, pane: str, session_id: str, why: str, creds: dict[str, str | None], label: str = "") -> str:
+    """Restart a team's lead in its pane, resuming its conversation, with the pass_env variables as
+    the switch says now. Its work so far is kept; a tool call in flight is interrupted."""
+    t = state.fold().teams.get(name)
     if not t:
         return f"{name}: no such team"
     launch_ev = next((e for e in reversed(list(ledger.events())) if e["type"] == "launch" and e.get("team") == name), {})
-    srv = tmuxctl.server_for_socket(launch_ev.get("socket"))
-    if not srv or not t.window or not tmuxctl.window_exists(srv, t.window):
-        return f"{name}: no open window; not restarted"
-    if not run.resumable(t.session_id):
-        return f"{name}: no conversation recorded to resume; not restarted"
-    creds = passenv.resolve()
     d = store_dir() / "launch"
     script = d / f"{name}.resume.sh"
     directory = launch_ev.get("dir") or t.directory or os.path.expanduser("~")
     write_script(script, name, directory, launch_ev.get("mode") or "default", t.order,
-                 ["--resume", t.session_id or "", RESPAWN_NOTE.format(why=why)], creds,
-                 bool(launch_ev.get("auto_push")))
+                 ["--resume", session_id, RESPAWN_NOTE.format(why=why)], creds, bool(launch_ev.get("auto_push")))
     _marker(name).write_text(str(_pending(name) + 1))
-    err = tmuxctl.respawn(srv, t.window, directory, str(script), env={k: v for k, v in creds.items() if v is not None})
+    err = tmuxctl.respawn(srv, pane, directory, str(script), env={k: v for k, v in creds.items() if v is not None})
     if err:
         respawning(name)  # nothing was killed: take the expectation back
-        return f"{name}: tmux could not restart {t.window} ({err}); not restarted"
+        return f"{name}: tmux could not restart {label or pane} ({err}); not restarted"
     ledger.append("respawned", by="cli", team=name, window=t.window, pass_env=passenv.mode(),
                   session=os.environ.get("STELLA_SESSION_ID"))
-    return f"{name}: restarted in {t.window}, conversation resumed"
-
-
-def respawn_all(why: str) -> list[str]:
-    st = state.fold()
-    return [respawn(t.name, why) for t in st.teams.values() if t.status in {"running", "needs-you"} and t.window]
+    return f"{name}: restarted in {label or pane}, conversation resumed"
 
 
 def reopen(target: str, directory: str | None = None, dry_run: bool = False) -> str:
@@ -308,9 +292,3 @@ def reopen(target: str, directory: str | None = None, dry_run: bool = False) -> 
                       socket=srv.socket, via=f"tmux ({srv.via} server)", mode=mode, auto_push=launch_ev.get("auto_push"),
                       pass_env=passenv.effective(), reopened=found.session_id, session=os.environ.get("STELLA_SESSION_ID"))
     return f"reopened {name} in window {window}, {directory}" + (f" ({note})" if note else "")
-
-
-def background_teams() -> list[str]:
-    """Running teams started without tmux: they have no window, so they can't be restarted in place."""
-    st = state.fold()
-    return [t.name for t in st.teams.values() if t.status in {"running", "needs-you"} and not t.window]

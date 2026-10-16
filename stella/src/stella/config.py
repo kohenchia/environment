@@ -21,6 +21,14 @@ BIN = CORE_ROOT / "bin" / "stella"
 CALL = "~/.local/bin/stella"
 
 
+HEADLESS_ARGS = ["--strict-mcp-config"]
+"""Flags for every `claude -p` run Stella starts. Without `--mcp-config`, `--strict-mcp-config` loads no
+MCP server at all, plugin-provided ones included. A plugin's server may fetch its credentials by running a
+login helper at startup, and a headless run (started by the scheduler, detached from the owner's terminal)
+may have no login keychain to store that helper's token cache in: macOS then pops up "a keychain cannot
+be found to store token_cache". The jobs Stella runs this way use no MCP tool."""
+
+
 def headless_env(base: dict[str, str] | None = None) -> dict[str, str]:
     """The environment for a `claude -p` run Stella starts. STELLA_HEADLESS keeps her hooks quiet.
     CLAUDE_CODE_ENTRYPOINT names the session's origin; its default for `-p`, `sdk-cli`, is one

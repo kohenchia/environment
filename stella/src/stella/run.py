@@ -84,10 +84,10 @@ def running() -> dict | None:
 # ---------------------------------------------------------------- run
 
 
-def _argv(fresh: bool, note: str | None = None) -> list[str]:
+def _argv(fresh: bool, note: str | None = None, sid: str | None = None) -> list[str]:
     s = settings()
     argv = [s.claude_bin, "--name", WINDOW, "--agent", "stella:stella", "--permission-mode", s.permission_mode]
-    sid = None if fresh else _load().get("session_id")
+    sid = None if fresh else (sid or _load().get("session_id"))
     if resumable(sid):
         argv += ["--resume", sid] + ([note] if note else [])
     return argv
@@ -173,55 +173,6 @@ def _command(argv: list[str], creds: dict[str, str | None]) -> str:
     # Stella's own session is never a team, whatever the tmux server's environment says.
     unset = "".join(f"unset {k}; " for k in ["STELLA_TEAM", "STELLA_ORDER"] + [k for k, v in creds.items() if v is None])
     return f"export {ENV}=1; {unset}cd ~ && exec " + " ".join(shlex.quote(a) for a in argv)
-
-
-def respawn_self(why: str) -> str:
-    """Restart Stella's own session where it runs, resuming her conversation, with the
-    pass_env variables as the switch says now. The restart kills everything in her pane,
-    including this process when she is the caller, so a detached helper does it a moment
-    later, after this command has printed and returned."""
-    current = running()
-    if not current:
-        return "Stella: not running; `stella run` will start her on the current setting."
-    where = current.get("window") or current.get("pane")
-    srv = tmuxctl.find_server()
-    sid = _load().get("session_id")
-    if not srv or not where or not resumable(sid):
-        return "Stella: can't restart her in place (no tmux pane or conversation recorded); `stella stop`, then `stella run`."
-    passenv.resolve()  # fail here, where it can be seen, not in the helper
-    log = store_dir() / "runs" / "respawn-self.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    with log.open("a") as out:
-        subprocess.Popen([str(BIN), "respawn-self", why], stdin=subprocess.DEVNULL, stdout=out,
-                         stderr=subprocess.STDOUT, start_new_session=True)
-    return f"Stella: restarting in {where} in a moment, conversation resumed"
-
-
-def respawn_self_now(why: str) -> None:
-    import time
-
-    time.sleep(1.5)  # let the caller finish its turn's output
-    current = running()
-    where = current and (current.get("window") or current.get("pane"))
-    srv = tmuxctl.find_server()
-    if not where or not srv:
-        print(f"{ledger.now():%Y-%m-%d %H:%M} Stella not running in a pane; nothing restarted", flush=True)
-        return
-    creds = passenv.resolve()
-    note = f"[Stella-restart] {why} Your conversation was resumed in a fresh process."
-    argv = _argv(False, note=note)
-    from stella import wake  # here: wake imports this module
-
-    wake.expect(note)  # so her prompt hook knows the note as a system note, not an order
-    err = tmuxctl.respawn(srv, where, os.path.expanduser("~"), _command(argv, creds),
-                          env={k: v for k, v in creds.items() if v is not None})
-    if err:
-        ledger.append("alert", by="cli", key="stella:respawn", text=f"could not restart Stella in {where}: {err}")
-        return
-    time.sleep(0.5)
-    pid = srv.run("display-message", "-p", "-t", where, "#{pane_pid}", check=False).stdout.strip()
-    _update(pid=int(pid) if pid.isdigit() else None, socket=srv.socket)  # a respawn must keep the wake line's target
-    ledger.append("respawned", by="cli", team=WINDOW, window=where, pass_env=passenv.mode())
 
 
 # ---------------------------------------------------------------- stop

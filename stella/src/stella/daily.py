@@ -24,7 +24,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from stella import extensions, leak, ledger, notify, passenv
-from stella.config import CALL, headless_env, settings, store_dir
+from stella.config import CALL, HEADLESS_ARGS, headless_env, settings, store_dir
 
 MARK = "[stella-job]"
 _COMMAND = re.compile(r"<command-name>(.*?)</command-name>.*?(?:<command-args>(.*?)</command-args>)?", re.S)
@@ -191,7 +191,7 @@ def _daily_prompt(win: Window, digest_path: Path) -> str:
 
 def headless(prompt: str, log: Path, timeout: int = 1800, model: str | None = None, claude: str | None = None) -> int:
     log.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [claude or settings().claude_bin, "-p", prompt, "--permission-mode", "bypassPermissions"]
+    cmd = [claude or settings().claude_bin, "-p", prompt, "--permission-mode", "bypassPermissions", *HEADLESS_ARGS]
     if model:
         cmd += ["--model", model]
     with log.open("w") as out:
