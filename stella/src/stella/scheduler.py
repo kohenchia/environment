@@ -124,7 +124,10 @@ def tick(now: dt.datetime | None = None, claude: str | None = None) -> list[str]
 
     from stella import state
 
+    from stella import finish
+
     now = now or ledger.now()
+    finish.clear_pushed(state.fold())  # a deferred push that has since reached its remote leaves the owner's list
     st = _load()
     wins = due(now, last_cutoff(st))
     if not wins:

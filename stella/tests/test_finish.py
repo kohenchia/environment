@@ -146,3 +146,45 @@ def test_nothing_in_the_core_tells_anyone_to_run_a_push_command():
     hits = [str(p) for p in list(root.glob("src/**/*.py")) + list(root.glob("plugin/**/*")) + [root / "README.md"]
             if p.is_file() and any(w in p.read_text() for w in ("review-push", "stella push", "push-question"))]
     assert hits == []
+
+
+# ---- a deferred push stays on the owner's list until it is pushed or dropped
+
+
+def _deferred(env, repo):
+    _commit(env, repo)
+    _pre(env, "git push", repo)
+    _stop(env, repo)
+
+
+def test_a_deferred_push_is_an_attention_item_in_the_brief(env, repo):
+    _deferred(env, repo)
+    out = env.run("attention").stdout
+    assert "deferred push: dotfiles main (1 commit)" in out and "run " not in out.split("deferred push")[1]
+    assert "deferred push: dotfiles main (1 commit)" in env.run("brief").stdout
+
+
+def test_the_item_clears_itself_once_the_commits_are_pushed(env, repo):
+    _deferred(env, repo)
+    env.git(repo, "push", "-q", "origin", "main")  # raised again through the prompt, and approved
+    assert "Nothing needs you" in env.run("attention").stdout
+    assert "deferred push" not in env.run("brief").stdout
+
+
+def test_the_owner_can_drop_the_item(env, repo):
+    _deferred(env, repo)
+    key = env.run("attention", "--json").stdout
+    key = json.loads(key)[0]["key"]
+    env.run("ack", key)
+    assert "Nothing needs you" in env.run("attention").stdout
+
+
+def test_the_morning_digest_prompt_lists_deferred_pushes():
+    from stella import daily
+
+    assert "deferred push:" in daily.REFLECT
+
+
+def test_a_session_cannot_forge_a_deferral(env):
+    r = env.run("log", "push_deferred", "--text", "x", check=False)
+    assert r.returncode != 0

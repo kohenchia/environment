@@ -124,6 +124,9 @@ def render(st: State) -> str:
     now = ledger.now()
     sections: list[tuple[str, list[str], int]] = []  # (title, lines, drop priority: higher drops first)
 
+    from stella import finish
+
+    finish.clear_pushed(st)
     att = st.attention(now)
     sections.append(("Needs you", [f"- {_clip(a.text, 130)}" for a in att], 1))
     sections.append(("Follow-ups", followup_lines(st, now), 1))

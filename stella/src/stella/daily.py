@@ -229,7 +229,8 @@ REFLECT = """{mark} nightly reflection for {date}.
 You are Stella's reflection pass. Read: the work digest {digest}; the priorities {priorities}; the canon
 {canon}; and `{stella} log --since-days 1`. Then:
 1. Write the morning digest to {morning} (under 40 lines): what {owner} worked on, how it compares with
-   the priorities (name any drift plainly, with the evidence), what finished, what is waiting on {owner}.
+   the priorities (name any drift plainly, with the evidence), what finished, what is waiting on {owner}
+   (include every open "deferred push:" item from `{stella} attention`, one line each).
 2. For each place where {owner}'s decisions or corrections today reveal a judgment the canon lacks or
    gets wrong, record a proposal: `{stella} propose --title "..." --evidence "..." --body "..."`.
    At most 5. Each must cite evidence from the digest. Never edit the canon yourself.

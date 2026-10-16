@@ -121,6 +121,10 @@ def check(sid: str, cwd: str, own: bool = False, may_block: bool = True) -> Resu
             _record_deferred(key)
             ledger.append("push_deferred", by="hook", repo=root.name, path=str(root), sha=head, branch=branch,
                           session=sid, text=f"not pushed, deferred: {what}")
+            key_alert = f"push-deferred:{root.name}@{head}"
+            ledger.append("alert", by="hook", key=key_alert, path=str(root), sha=head,
+                          text=f"deferred push: {root.name} {branch if branch != 'HEAD' else head[:7]} "
+                               f"({n} commit{'s' if n != 1 else ''})")
             res.deferred.append(f"not pushed, deferred: {what} ({n} commit{'s' if n != 1 else ''})")
             continue
         if key in reminded or not may_block:
@@ -138,6 +142,19 @@ def check(sid: str, cwd: str, own: bool = False, may_block: bool = True) -> Resu
             + "\nIf they answer no, it is deferred: say \"not pushed, deferred\" with the repo, branch and commit, and finish."
         )
     return res
+
+
+def clear_pushed(st) -> list[str]:
+    """A deferred push stays on the owner's list until its commit is on a remote; then the item clears itself."""
+    cleared = []
+    for ev in st.push_deferred:
+        key = f"push-deferred:{ev.get('repo')}@{ev.get('sha')}"
+        path, sha = ev.get("path"), ev.get("sha")
+        if key in st.alerts and path and sha and gate._git_out(Path(path), "branch", "-r", "--contains", sha):
+            ledger.append("clear_alert", by="hook", key=key)
+            st.alerts.pop(key, None)
+            cleared.append(key)
+    return cleared
 
 
 def for_done(cwd: str) -> Result | None:

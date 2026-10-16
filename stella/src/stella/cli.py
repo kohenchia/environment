@@ -77,7 +77,11 @@ def cmd_note(a):
 
 
 def cmd_attention(a):
-    items = state.fold().attention()
+    from stella import finish
+
+    st = state.fold()
+    finish.clear_pushed(st)
+    items = st.attention()
     if a.json:
         print(json.dumps([{"key": i.key, "seq": i.seq, "text": i.text} for i in items], indent=1))
         return

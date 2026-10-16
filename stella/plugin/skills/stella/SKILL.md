@@ -205,6 +205,11 @@ asks for itself. (Guarded repos, `~/.local/bin/stella gate status`, also run the
   repo it worked in, the Stop hook (or `done`) refuses once per head and says to push now: do that, and the prompt
   appears. Do not loop on it: after one reminder per head, or after a no, it lets go. A no is recorded as
   deferred; report it as "not pushed, deferred" with the repo, branch and commit.
+- **A deferred push is on the owner's list.** The Stop hook raises a `stella attention` item, "deferred push:
+  <repo> <branch> (N commits)", that stays in the brief and the morning digest until the commits are on the
+  remote (it then clears itself) or the owner drops it with `ack`. When you mention it, never tell the owner to
+  run anything: offer to raise the push prompt again, and on a yes tell the owning session to push (`stella tell`)
+  or run the push yourself so the prompt appears.
 - A declined push is the only reason work stays unpushed. Your own work in a repo with a remote follows the
   same rule: commit, then push (the prompt asks).
 
