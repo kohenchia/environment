@@ -102,3 +102,43 @@ def test_what_was_left_alone_is_one_calm_line():
     r = related.Result(left={"untracked": 3})
     assert related.left_line([("proj", r)]) == "left alone: 3 untracked files in proj, not from this session"
     assert related.left_line([("proj", related.Result())]) == ""
+
+
+def _session_lines(env, sid, *tools, ago_s=5):
+    ts = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=ago_s)).isoformat().replace("+00:00", "Z")
+    d = env.tmp / "transcripts" / "-p"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{sid}.jsonl").write_text("".join(json.dumps({"type": "assistant", "timestamp": ts, "message": {"content": [
+        {"type": "tool_use", "name": n, "input": i}]}}) + "\n" for n, i in tools))
+
+
+def test_an_old_untracked_directory_of_regular_files_does_not_block_a_session_that_worked_from_the_repo(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    for d in (".claude/agents", ".claude/skills/x"):
+        (r / d).mkdir(parents=True)
+        (r / d / "f.md").write_text("installed\n")
+        _old(r / d / "f.md")
+    _session_lines(env, SESS, ("Bash", {"command": f"cd {r} && git status"}), ("Bash", {"command": f"git -C {r} log -1"}))
+    assert _stop(env, DONE, r) == {}
+
+
+def test_a_file_the_session_wrote_blocks_even_beside_old_untracked_ones(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    (r / ".claude" / "agents").mkdir(parents=True)
+    (r / ".claude" / "agents" / "f.md").write_text("installed\n")
+    _old(r / ".claude" / "agents" / "f.md")
+    (r / "notes.md").write_text("mine\n")
+    _session_lines(env, SESS, ("Write", {"file_path": str(r / "notes.md"), "content": "mine"}))
+    reason = _stop(env, DONE, r)["reason"]
+    assert "uncommitted in proj: notes.md" in reason and ".claude" not in reason
+
+
+def test_a_file_written_with_a_redirect_blocks(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    (r / "out.txt").write_text("x\n")
+    _old(r / "out.txt", hours=0)
+    _session_lines(env, SESS, ("Bash", {"command": f"echo x > {r}/out.txt"}))
+    assert "out.txt" in _stop(env, DONE, r)["reason"]
