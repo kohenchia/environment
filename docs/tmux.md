@@ -454,7 +454,7 @@ hook adds it to new windows, `window-layout-changed` docks it back to the far le
 | Pane labels | Numbered from the first tool pane, not the sidebar |
 | Last tool pane closed | The sidebar sees it is alone and exits, closing the window |
 
-Windows narrower than 72 columns get no sidebar. Costs: 24 columns of every window, one extra process per window that looks at tmux once a second (and at once when a hook pokes it), and
+Windows narrower than 72 columns get no sidebar. Known limit: a few double-width symbols such as ✅ ⭐ ⚡ are counted as one column, so a window name stuffed with them can wrap its row; CJK and most emoji are measured correctly. `Cmd+Shift+←` and `Cmd+Opt+←` no longer wrap from the leftmost tool pane to the rightmost. Costs: 24 columns of every window, one extra process per window that looks at tmux once a second (and at once when a hook pokes it), and
 `#{window_panes}` is one higher than it used to be, so anything that counts panes sees the sidebar.
 Stella's `window_dead` already looks past it.
 

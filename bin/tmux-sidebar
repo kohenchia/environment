@@ -150,9 +150,6 @@ toggle() {
 
 # ── the renderer ──────────────────────────────────────────────────────────
 
-# "colour217" → 217; anything else falls back to grey.
-colour_n() { local n="${1#colour}"; [[ "$n" =~ ^[0-9]+$ ]] && echo "$n" || echo 245; }
-
 # Cut $1 to $2 screen columns (CJK and emoji take two) and pad with spaces to
 # exactly that. Sets $fitted. Counting characters instead would let a wide name
 # wrap onto a second row and push every later row, and so every click, off by one.
@@ -181,8 +178,8 @@ draw() {
     # Space delimited with the name last, which read takes whole: every other field
     # is a number or a colour name, and the name may hold any character at all.
     while read -r idx active bell hue_tab hue_pane name; do
-        hue_tab="$(colour_n "$hue_tab")"
-        hue_pane="$(colour_n "$hue_pane")"
+        hue_tab="${hue_tab#colour}"; [[ "$hue_tab" =~ ^[0-9]+$ ]] || hue_tab=245
+        hue_pane="${hue_pane#colour}"; [[ "$hue_pane" =~ ^[0-9]+$ ]] || hue_pane=245
         label=" ${idx} "
         [[ "$bell" == 1 ]] && label+="✳ "
         label+="$name"
@@ -209,7 +206,7 @@ run() {
     # A read that gives up after 0.2s (min 0 time 2), so the loop can notice a
     # poke without any process of its own per tick.
     stty -echo -icanon min 0 time 2 2>/dev/null
-    local last="" cur cols key me panes tick=5 seen="" now=""
+    local last="" cur key me info tick=5 seen="" now=""
     me="$TMUX_PANE"
     trap 'printf "\e[?1000l\e[?1006l\e[?25h"' EXIT
     while :; do
@@ -220,14 +217,19 @@ run() {
         if [[ "$now" != "$seen" ]] || ((tick >= 5)); then
             tick=0
             seen="$now"
+            # One call for everything the tick needs about this window.
+            info="$(tmux display -p -t "$me" '#{window_panes} #{window_active} #{pane_width}' 2>/dev/null)" || exit 0
+            set -- $info
             # Last pane left in the window? Then the sidebar has nothing to sit beside.
-            panes="$(tmux display -p -t "$me" '#{window_panes}' 2>/dev/null)" || exit 0
-            [[ "$panes" -le 1 ]] && exit 0
-            cols="$(tmux display -p -t "$me" '#{pane_width}' 2>/dev/null || echo "$width")"
-            cur="$(draw "$cols")"
-            if [[ "$cur" != "$last" ]]; then
-                printf '\e[H\e[J%s' "$cur"
-                last="$cur"
+            [[ "$1" -le 1 ]] && exit 0
+            # A window nobody is looking at draws when it is switched to (a poke
+            # or the next tick), which keeps idle cost flat as windows pile up.
+            if [[ "$2" == 1 ]]; then
+                cur="$(draw "$3")"
+                if [[ "$cur" != "$last" ]]; then
+                    printf '\e[H\e[J%s' "$cur"
+                    last="$cur"
+                fi
             fi
         fi
         tick=$((tick + 1))
