@@ -24,6 +24,7 @@ import os
 import sys
 import traceback
 
+from stella.config import store_dir
 from stella import address, bashwrites, direct, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, provenance, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
 
 HANDBACK = (
@@ -370,7 +371,8 @@ def _leak_hit(text: str, where: str, g: leak.Guard) -> str | None:
 
 def posttool(data: dict) -> None:
     """A push command ran, so the owner approved it (or the session was told to push): remember the head."""
-    if data.get("tool_name") == "AskUserQuestion":  # the owner answered a push question: Push approves it, Defer is a deferral
+    if data.get("tool_name") == "AskUserQuestion":
+        (store_dir() / "askq-last.json").write_text(json.dumps(data, indent=1, default=str))  # TEMP: learn the response shape  # the owner answered a push question: Push approves it, Defer is a deferral
         r = gate.answered(data.get("tool_input") or {}, data.get("tool_response"))
         if r.startswith("defer:"):
             finish.remember_asked(data.get("session_id") or "", (r[6:],))
