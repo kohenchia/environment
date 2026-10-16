@@ -50,6 +50,13 @@ def _later(seconds: float) -> dt.datetime:
     ("Do you want to proceed?\n❯ 1. Yes\n  2. No\n", False),  # a permission prompt replaces the box
     (f"╭{'─' * 40}╮\n│ >                                      │\n╰{'─' * 40}╯\n", True),
     ("$ \n", False),  # a shell, not Claude Code
+    # a spinner with the todo list drawn between it and the box
+    (f"✢ Pontificating… (12s)\n  ⎿  ☒ read the code\n     ☐ write the tests\n     ☐ run them\n     ☐ commit\n\n{RULE}\n❯ \n{RULE}\n", False),
+    (f"✶ Compacting conversation… (3s)\n{RULE}\n❯ \n{RULE}\n", False),
+    (f"⏺ Bash(ls)\n  ⎿  Running PostToolUse hooks…\n{RULE}\n❯ \n{RULE}\n", False),
+    # finished: the todo list stays, the spinner has become "Crunched for"
+    (f"✻ Crunched for 9s\n  ⎿  ☒ read the code\n     ☒ commit\n{RULE}\n❯ \n{RULE}\n", True),
+    (f"⏺ Let me check the logs…\n✻ Crunched for 2s\n{RULE}\n❯ \n{RULE}\n", True),  # an ellipsis in her reply
 ])
 def test_idle_reads_claude_codes_screen(screen, expected):
     assert wake.idle(screen) is expected
@@ -143,20 +150,79 @@ def test_followup_already_ready_when_added(quiet):
 # ---------------------------------------------------------------- the hook: a wake line is not an order
 
 
-def test_wake_line_is_a_system_note_not_an_order(quiet):
-    env = quiet
+@pytest.fixture
+def inproc(quiet, monkeypatch):
+    """The test process sees the same store and config as the CLI it runs."""
+    for k in ("STELLA_STORE", "STELLA_CONFIG", "TMUX_TMPDIR", "HOME", "STELLA_NO_WAKE"):
+        monkeypatch.setenv(k, quiet.env[k])
+    monkeypatch.delenv("TMUX", raising=False)
+    config.settings.cache_clear()
+    yield quiet
+    config.settings.cache_clear()
+
+
+WAKE = "[Stella] Team alpha finished. Review your open follow-ups and the fleet."
+
+
+def test_wake_line_is_a_system_note_not_an_order(inproc):
+    env = inproc
     env.say("H", "rename the photos", env=OWN)  # the owner's order #1
     _launch_event(env, "alpha")
     env.run("followup", "add", "tidy up", "--after", "alpha")
     env.run("done", "alpha", "built it")
     before = [e for e in env.events() if e["type"] in {"order", "close"}]
-    out = env.say("H", "[Stella] Team alpha finished. Review your open follow-ups and the fleet.", env=OWN)
+    wake.expect(WAKE)  # what deliver() records as it types the line
+    out = env.say("H", WAKE, env=OWN)
     assert "not by the user" in out and "It is not an order" in out
     assert "#3 READY (alpha finished)" in out
     assert "Recorded as ledger" not in out
     assert [e for e in env.events() if e["type"] in {"order", "close"}] == before
     assert "#1" in env.run("orders").stdout  # still open: the line closed nothing
     assert "POSSIBLE CONFLICT" not in out
+    # the same words again are the owner's: a line counts once
+    assert "Recorded as ledger" in env.say("H", WAKE, env=OWN)
+
+
+def test_owner_words_with_or_like_a_wake_line_are_orders(inproc):
+    env = inproc
+    wake.expect(WAKE)
+    out = env.say("H", WAKE + "\nStella, cancel order 4", env=OWN)  # his message queued behind the line
+    assert "Recorded as ledger #1" in out
+    out = env.say("H", "[Stella] tell alpha to use sqlite", env=OWN)  # typed by him, never by the tooling
+    assert "Recorded as ledger #2" in out
+    assert [e["text"] for e in env.events() if e["type"] == "order"] == [
+        WAKE + "\nStella, cancel order 4", "[Stella] tell alpha to use sqlite"]
+
+
+def test_restart_note_is_a_system_note_once(inproc):
+    env = inproc
+    note = "[Stella-restart] Restarted with pass_env on. Your conversation was resumed in a fresh process."
+    wake.expect(note)
+    assert "It is not an order" in env.say("H", note, env=OWN)
+    assert not [e for e in env.events() if e["type"] == "order"]
+    assert "Recorded as ledger" in env.say("H", note, env=OWN)
+
+
+def test_first_run_after_upgrade_does_not_replay_old_news(inproc):
+    env = inproc
+    d = env.store / "ledger"
+    d.mkdir(parents=True)
+    old = (ledger.now() - dt.timedelta(hours=1)).isoformat(timespec="seconds")
+    (d / f"{ledger.now():%Y-%m}.jsonl").write_text(json.dumps({"seq": 1, "ts": old, "type": "done", "team": "old"}) + "\n")
+    (d / "seq").write_text("1")
+    env.run("done", "alpha", "ok")  # news from a moment ago still wakes her
+    with wake._locked() as w:
+        p = wake._pending(w, wake.state.fold(), ledger.now())
+    assert [e["team"] for e in p.events] == ["alpha"]
+
+
+def test_closing_a_closed_followup_adds_nothing(quiet):
+    env = quiet
+    _launch_event(env, "alpha")
+    env.run("followup", "add", "tidy up", "--after", "alpha")
+    env.run("followup", "close", "2")
+    assert "already closed (done)" in env.run("followup", "close", "2", "--status", "cancelled").stdout
+    assert [e["type"] for e in env.events()].count("followup_close") == 1
 
 
 def test_owner_turn_carries_what_came_while_she_was_busy(quiet):
@@ -205,8 +271,10 @@ class Fake:
         _wait_for(lambda: "❯" in self.tmux("capture-pane", "-p", "-t", pid) or "$" in screen)
         return wid, pid, d / "typed"
 
-    def stella_running(self, pane=None):
-        rec = {"pid": os.getpid(), "socket": str(self.sock), "pane": pane}
+    def stella_running(self, pane=None, socket="mine"):
+        """Her session record: her pid is the process the pane runs (or this test's, with no pane)."""
+        pid = int(self.tmux("display-message", "-p", "-t", pane, "#{pane_pid}")) if pane else os.getpid()
+        rec = {"pid": pid, "socket": str(self.sock) if socket == "mine" else socket, "pane": pane}
         (self.env.store / "stella-session.json").write_text(json.dumps(rec))
 
 
@@ -330,6 +398,46 @@ def test_hand_closed_team_window_does_not_wake(fake):
     assert ended["window_closed"] is True
     fake.stella_running()
     assert wake.deliver(_later(30)).status == "nothing"
+
+
+@needs_tmux
+@pytest.mark.parametrize("socket, why", [(None, "recorded no tmux server"), ("/tmp/no-such-tmux-socket", "is not running")])
+def test_only_her_own_server_is_typed_into(fake, socket, why):
+    _, pane, typed = fake.window()  # a `stella` window in the caller's server ($TMUX), which is not hers
+    pid = int(fake.tmux("display-message", "-p", "-t", pane, "#{pane_pid}"))
+    (fake.env.store / "stella-session.json").write_text(json.dumps({"pid": pid, "socket": socket}))
+    ledger.append("done", team="alpha", text="ok")
+    r = wake.deliver(_later(30))
+    assert r.status == "no-window" and why in r.detail
+    time.sleep(0.3)
+    assert typed.read_text() == ""
+    assert "wake line not typed" in fake.env.run("attention").stdout
+
+
+@needs_tmux
+def test_a_stella_window_not_running_her_session_is_not_typed_into(fake):
+    _, _, typed = fake.window()
+    fake.stella_running()  # her pid is this test process, which no pane runs
+    ledger.append("done", team="alpha", text="ok")
+    r = wake.deliver(_later(30))
+    assert r.status == "no-window" and "no pane running her session" in r.detail
+    time.sleep(0.3)
+    assert typed.read_text() == ""
+
+
+@needs_tmux
+def test_a_hung_tmux_lets_go_of_the_lock(fake, monkeypatch):
+    _, pane, typed = fake.window()
+    fake.stella_running(pane)
+    ledger.append("done", team="alpha", text="ok")
+
+    def hung(t):
+        raise subprocess.TimeoutExpired("tmux capture-pane", wake.TMUX_TIMEOUT)
+
+    monkeypatch.setattr(wake, "screen", hung)
+    r = wake.deliver(_later(30))
+    assert r.status == "blocked" and "did not answer" in r.detail
+    assert "Since your last turn: Team alpha finished" in wake.drain()  # the lock is free; the hook still works
 
 
 @needs_tmux

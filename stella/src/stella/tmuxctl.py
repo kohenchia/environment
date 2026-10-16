@@ -20,8 +20,8 @@ class Server:
     socket: str
     via: str  # "caller" | "default"
 
-    def run(self, *a: str, check: bool = True) -> subprocess.CompletedProcess:
-        return subprocess.run([*self.args, *a], capture_output=True, text=True, check=check)
+    def run(self, *a: str, check: bool = True, timeout: float | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run([*self.args, *a], capture_output=True, text=True, check=check, timeout=timeout)
 
 
 SANDBOXED = (
@@ -105,10 +105,10 @@ def window_dead(srv: Server, window: str) -> bool:
     return r.returncode != 0 or r.stdout.strip().startswith("1")
 
 
-def send_text(srv: Server, window: str, text: str) -> None:
+def send_text(srv: Server, window: str, text: str, timeout: float | None = None) -> None:
     text = " ".join(text.split())
-    srv.run("send-keys", "-t", window, "-l", text)
-    srv.run("send-keys", "-t", window, "Enter")
+    srv.run("send-keys", "-t", window, "-l", text, timeout=timeout)
+    srv.run("send-keys", "-t", window, "Enter", timeout=timeout)
 
 
 def server_app(srv: Server) -> str:

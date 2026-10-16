@@ -4,8 +4,8 @@
   Stella's own session, always). If it is: record it verbatim in the ledger *before the model runs*,
   then inject the persona, what other sessions recorded since this session last
   looked, and possible conflicts. If it isn't: hand the turn back to the session.
-  In Stella's own session, a message starting `[Stella] ` is a wake line typed by
-  her tooling (wake.py): a system note, never an order.
+  In Stella's own session, a prompt that is exactly a wake line or restart note her
+  tooling typed (wake.take_system_note) is a system note, never an order.
 * SessionStart: in Stella's own session, inject the full context and brief (also
   after /compact). In a team window, record which session is the lead. Anywhere,
   if the scheduler is down and a run is overdue, start a catch-up pass.
@@ -77,7 +77,7 @@ def prompt(data: dict) -> None:
     addressed = own or address.is_addressed(text)
     sess = sessions.load(sid)
 
-    if own and wake.is_wake_line(text):
+    if own and wake.take_system_note(text):
         return _system_note(sid, sess)
 
     if not addressed:

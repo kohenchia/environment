@@ -249,6 +249,9 @@ def cmd_followup(a):
         f = st.followups.get(seq)
         if not f:
             raise SystemExit(f"no follow-up #{seq}")
+        if f.status != "open":
+            print(f"follow-up #{seq} is already closed ({f.status})")
+            continue
         ledger.append("followup_close", by="cli", followup=seq, status=a.status, note=a.note, session=_session())
         print(f"closed follow-up #{seq} as {a.status}")
 

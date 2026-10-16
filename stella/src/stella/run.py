@@ -207,7 +207,11 @@ def respawn_self_now(why: str) -> None:
         print(f"{ledger.now():%Y-%m-%d %H:%M} Stella not running in a pane; nothing restarted", flush=True)
         return
     creds = passenv.resolve()
-    argv = _argv(False, note=f"[Stella-restart] {why} Your conversation was resumed in a fresh process.")
+    note = f"[Stella-restart] {why} Your conversation was resumed in a fresh process."
+    argv = _argv(False, note=note)
+    from stella import wake  # here: wake imports this module
+
+    wake.expect(note)  # so her prompt hook knows the note as a system note, not an order
     err = tmuxctl.respawn(srv, where, os.path.expanduser("~"), _command(argv, creds),
                           env={k: v for k, v in creds.items() if v is not None})
     if err:
