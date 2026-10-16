@@ -209,9 +209,18 @@ def current_branch(repo: Path) -> str:
 
 
 def upstream_base(repo: Path, remote: str, branch: str) -> str | None:
-    r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", f"refs/remotes/{remote}/{branch}"],
-                       capture_output=True, text=True)
-    return r.stdout.strip() or None
+    """What the remote already has of `branch`. A branch new to the remote is measured against the
+    remote's default branch, so a review and the leak scan cover only the commits it adds."""
+    def rev(ref: str) -> str:
+        r = subprocess.run(["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", ref],
+                           capture_output=True, text=True)
+        return r.stdout.strip()
+
+    if sha := rev(f"refs/remotes/{remote}/{branch}"):
+        return sha
+    default = subprocess.run(["git", "-C", str(repo), "symbolic-ref", "--quiet", f"refs/remotes/{remote}/HEAD"],
+                             capture_output=True, text=True).stdout.strip()
+    return rev(default) if default else None
 
 
 def write_approval(repo: Path, sha: str, branch: str, source: str) -> Path:

@@ -150,3 +150,12 @@ def test_nightly_audit_flags_an_unapproved_remote_head(env, repo):
     from_cli = env.run("nightly").stdout
     assert "UNAPPROVED" in from_cli
     assert "no approved push produced" in env.run("attention").stdout
+
+
+def test_a_branch_new_to_the_remote_is_measured_against_its_default_branch(env, repo):
+    from stella import gate
+
+    env.git(repo, "remote", "set-head", "origin", "main")
+    env.git(repo, "checkout", "-q", "-b", "feature")
+    sha = _commit(env, repo)
+    assert gate.preflight(repo, "feature")[:2] == (sha, env.git(repo, "rev-parse", "origin/main").stdout.strip())
