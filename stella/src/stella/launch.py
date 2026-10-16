@@ -123,10 +123,18 @@ def launch(
 
     name = _unique_name(slug(name or f"{archetype}-{order_text}"))
     s = settings()
+    directory_arg = directory
     directory = os.path.expanduser(
         (directory or team.dir or os.getcwd()).format(repos_dir=s.repos_dir)
     )
-    mode = permission_mode or team.permission_mode or "default"
+    if directory_arg is None and not team.dir and os.path.realpath(directory) == os.path.realpath(os.path.expanduser("~")):
+        raise SystemExit(
+            "refusing to start a team in the home directory by default: pass --dir with the folder where the work belongs"
+            " (a repo, or its parent for work across repos), or --dir ~ if the task really is system-wide"
+        )
+    # Every session starts in the owner's configured mode (the `permission_mode` setting) unless the caller
+    # names one: a team's own entry no longer overrides it.
+    mode = permission_mode or s.permission_mode
 
     d = store_dir() / "launch"
     d.mkdir(parents=True, exist_ok=True)

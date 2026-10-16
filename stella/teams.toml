@@ -7,7 +7,6 @@ when = "The owner asks for something to be built or changed in code, and no more
 launch = "/stella:build {order}"
 skill_file = "plugin/skills/build/SKILL.md"
 correct = "Type to the lead in its window, or `stella tell <name> \"...\"`. Corrections about how builders should work go to the stella-curator."
-permission_mode = "default"
 read_only = false
 
 [team.investigator]
@@ -16,5 +15,4 @@ when = "The owner asks why something happens, how something works, or to debug o
 launch = "/stella:investigate {order}"
 skill_file = "plugin/skills/investigate/SKILL.md"
 correct = "Type to the lead in its window, or `stella tell <name> \"...\"`."
-permission_mode = "bypassPermissions"
 read_only = true

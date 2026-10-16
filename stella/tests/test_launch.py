@@ -159,3 +159,20 @@ def test_launch_script_waits_after_a_crash_but_not_after_a_clean_exit(env, tmux,
     opt = subprocess.run(["tmux", "-S", sock, "show-options", "-w", "-t", "work:bw", "remain-on-exit"],
                          capture_output=True, text=True).stdout
     assert "off" in opt
+
+
+def test_launch_uses_the_configured_permission_mode_for_every_team(env, tmux, fake_claude):
+    env.write_config(permission_mode="auto")
+    env.say("A", "S, build m")
+    env.run("launch", "builder", "--order", "1", "--name", "bm", env=tmux)
+    env.run("launch", "investigator", "--order", "1", "--name", "im", env=tmux)
+    for n in ("bm", "im"):
+        assert "--permission-mode auto" in (env.store / "launch" / f"{n}.sh").read_text()
+
+
+def test_launch_refuses_the_home_directory_unless_asked_for_it(env, tmux, fake_claude):
+    env.say("A", "S, build h")
+    r = env.run("launch", "builder", "--order", "1", "--name", "bh", env=tmux, cwd=env.home, check=False)
+    assert r.returncode != 0 and "--dir" in (r.stderr + r.stdout)
+    ok = env.run("launch", "builder", "--order", "1", "--name", "bh2", "--dir", "~", env=tmux, cwd=env.home)
+    assert "launched" in ok.stdout

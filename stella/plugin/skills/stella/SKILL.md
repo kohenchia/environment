@@ -63,6 +63,11 @@ In your own session you never do long work yourself and the owner never talks to
    so the launch cannot read it empty. Tell every team and every agent you start (Agent tool included) to work as if
    directly with the owner: when it needs him, its last message in the window states the request in full (the
    question, the options, its recommendation) and never just "I asked" or "I reported".
+   **Where it starts.** Always pass `--dir` deliberately. A team that starts in the wrong folder reads the wrong
+   `CLAUDE.md` and trips the trust prompt for an untrusted folder. Pick the folder the work belongs in (the
+   extension's playbook lists the owner's rules); use the home directory only for work that is truly system-wide.
+   Launch refuses a home-directory start unless `--dir ~` is explicit. Every session starts in the permission
+   mode from the `permission_mode` setting; teams no longer carry their own.
 3. No archetype fits: design a one-off team and launch it as `adhoc` (see below). If the same shape
    recurs, offer to register it as an archetype.
 4. Several independent pieces of work: several launches, one per lead. Don't make one lead juggle
