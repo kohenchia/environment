@@ -86,24 +86,44 @@ def test_every_identifiable_claude_window_is_restarted_and_stella_last(env, tmux
         {"pid": stella_pid, "cwd": str(env.tmp), "name": "stella", "sessionId": SIDS["stella"], "kind": "interactive"},
     ])
 
-    env.run("pass-env", "on")
-    r = env.run("pass-env", "--respawn", env=tmux)
-    assert "t-ren: restarted" in r.stdout
-    assert "pr-hand: restarted" in r.stdout
-    assert "mystery (mystery): skipped, no session id" in r.stdout
-    assert "just-a-shell" not in r.stdout
-    assert "Stella: restarting" in r.stdout and "in a moment" in r.stdout
-    assert r.stdout.index("pr-hand: restarted") < r.stdout.index("Stella: restarting")
+    # a Claude process outside the Stella tmux server is listed once and never touched
+    outside = subprocess.Popen(["sleep", "60"])
+    srv.agents(json.loads(srv.agents_json.read_text()) + [
+        {"pid": outside.pid, "cwd": "/somewhere/else", "name": "elsewhere", "sessionId": SIDS["ghost"], "kind": "interactive"}])
+    # a ledger team that has no window and no process is not listed, only counted
+    _launch(env, tmux, "t-dead")
+    _lines(out / "passed.txt", 2)
+    srv.tmux("kill-window", "-t", "work:t-dead")
+
+    r = env.run("pass-env", "on", "--respawn", env=tmux)
+    outside.kill()
+    text = r.stdout
+    assert "Switch: PROJECT token (tok on)" in text
+    assert "SWITCHING TO THE PROJECT TOKEN (was: personal)" in text
+    assert "something-else" in text and "personal -> PROJECT  restarted" in text
+    assert "pr-hand            personal -> PROJECT  restarted" in text
+    assert "mystery" in text and "skipped, no session id" in text
+    assert "just-a-shell" in text and "shell (not a Claude session, skipped)" in text
+    assert "t-dead" not in text and "1 finished session has no window (skipped)" in text
+    assert f"outside tmux (not restarted): pid {outside.pid}, /somewhere/else" in text
+    assert "stella: restarting last, resuming this conversation" in text
+    assert text.index("pr-hand") < text.index("stella: restarting last")
+    # the re-read table, and the check line: the skipped window and the pending one are accounted for
+    assert "Now, re-read from each process" in text
+    tail = text[text.index("Now, re-read"):]
+    assert "pr-hand            PROJECT" in tail and "restarting in a moment" in tail
+    assert "not: mystery (personal: no session id could be read" in tail
+    assert "\033" not in text  # not a tty: plain arrows, no colour
 
     # all three came back on the new token, each resuming its own conversation, Stella's last
-    args = _lines(out / "args.txt", 4)  # [0] is the team's first launch
-    resumed = [ln for ln in args[1:] if "--resume" in ln]
+    args = _lines(out / "args.txt", 5)  # [0] and [1] are the two teams' first launches
+    resumed = [ln for ln in args[2:] if "--resume" in ln]
     sids = [ln.split("--resume ")[1].split()[0] for ln in resumed]
     assert len(sids) == 3 and set(sids[:2]) == {SIDS["team"], SIDS["hand"]}
     assert sids[-1] == SIDS["stella"]
     assert "--agent stella:stella" in resumed[-1]
     assert "--name pr-hand" in next(ln for ln in resumed if SIDS["hand"] in ln)
-    assert _lines(out / "passed.txt", 4)[1:] == ["fromfile"] * 3
+    assert _lines(out / "passed.txt", 5)[2:] == ["fromfile"] * 3
 
 
 def test_a_named_team_alone_leaves_stella_and_hand_opened_windows(env, tmux, srv, env_claude):  # noqa: F811
@@ -116,19 +136,46 @@ def test_a_named_team_alone_leaves_stella_and_hand_opened_windows(env, tmux, srv
     srv.window("pr-hand", "--name", "pr-hand", "--resume", SIDS["hand"])
     env.run("pass-env", "on")
     r = env.run("pass-env", "--respawn", "--team", "t-one", "--team", "nope", env=tmux)
-    assert "t-one: restarted" in r.stdout and "nope: no such team" in r.stdout and "pr-hand" not in r.stdout
+    assert "t-one" in r.stdout and "restarted" in r.stdout and "nope" in r.stdout and "no such team" in r.stdout and "pr-hand" not in r.stdout
     time.sleep(3)  # nothing is left for a helper to do
     assert len((out / "args.txt").read_text().splitlines()) == 2
 
 
-def test_a_running_team_with_no_window_or_process_is_reported_gone(env, tmux, srv, env_claude):  # noqa: F811
+def test_a_running_team_with_no_window_or_process_is_counted_not_listed(env, tmux, srv, env_claude):  # noqa: F811
     out, _ = env_claude
     _launch(env, tmux, "t-gone")
     _lines(out / "passed.txt", 1)
     srv.tmux("kill-window", "-t", "work:t-gone")
     r = env.run("pass-env", "--respawn", env=tmux)
-    assert "t-gone: no window or process any more (gone)" in r.stdout
-    assert "Stella: no session of hers found" in r.stdout
+    assert "t-gone" not in r.stdout and "1 finished session has no window (skipped)" in r.stdout
+    assert "stella" in r.stdout and "no session of hers found" in r.stdout
+
+
+def test_status_lists_the_live_windows_with_the_state_of_each(env, tmux, srv, env_claude):  # noqa: F811
+    _, secrets = env_claude
+    (secrets / "DEMO_TOKEN").write_text("fromfile")
+    srv.window("pr-hand", "--name", "pr-hand")
+    srv.tmux("new-window", "-d", "-t", "work:", "-n", "just-a-shell", "sleep 60")
+    env.run("pass-env", "off")
+    r = env.run("pass-env", env=tmux).stdout
+    assert "Switch: PERSONAL token (tok off)" in r
+    assert "pr-hand" in r and "personal" in r and "just-a-shell" in r and "shell (not a Claude session" in r
+    assert "all 1 session now on the personal token" in r
+    env.run("pass-env", "on")
+    r = env.run("pass-env", env=tmux).stdout
+    assert "Switch: PROJECT token (tok on)" in r
+    assert "1 of 1" not in r and "not: pr-hand (personal" in r  # a window still on the other token is named
+
+
+def test_colour_only_on_a_terminal(monkeypatch):
+    from stella import tokreport
+
+    monkeypatch.setattr(tokreport, "_tty", lambda: False)
+    assert tokreport.tag("project", big=True) == "PROJECT" and tokreport.tag("personal") == "personal"
+    monkeypatch.setattr(tokreport, "_tty", lambda: True)
+    assert tokreport.tag("project", big=True) == "\033[1m\033[32mPROJECT\033[0m"
+    assert tokreport.tag("personal") == "\033[33mpersonal\033[0m"
+    assert tokreport.header("off", "on") == "SWITCHING TO YOUR PERSONAL TOKEN (was: project)"
 
 
 def test_respawn_self_command_restarts_only_her(env, tmux, srv, env_claude):  # noqa: F811

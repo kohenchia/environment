@@ -67,7 +67,7 @@ def test_on_reads_the_value_from_the_file_when_the_caller_lacks_it(env, tmux, en
 def test_on_without_any_value_refuses_to_launch(env, env_claude):
     r = env.run("pass-env", "on", check=False)
     assert r.returncode != 0 and "DEMO_TOKEN has no value" in (r.stdout + r.stderr)
-    assert "switch: off (never set" in env.run("pass-env").stdout  # the failed switch left nothing behind
+    assert "Switch: PERSONAL token (tok off)" in env.run("pass-env").stdout  # the failed switch left nothing behind
 
 
 def test_scheduler_waits_rather_than_run_on_the_wrong_credentials(env, env_claude):
@@ -113,7 +113,7 @@ def test_respawn_resumes_a_running_team_on_the_new_setting(env, tmux, env_claude
     (env.tmp / "transcripts" / "proj" / "sid-1.jsonl").write_text("{}\n")
 
     r = env.run("pass-env", "on", "--respawn", "--team", "t-re", env=tmux)
-    assert "t-re: restarted" in r.stdout
+    assert "t-re" in r.stdout and "personal -> PROJECT  restarted" in r.stdout
     assert _lines(out / "passed.txt", 2)[1] == "fromfile"
     args = _lines(out / "args.txt", 2)[1]
     assert "--resume sid-1" in args and "Restarted with pass_env on" in args
@@ -159,7 +159,7 @@ def test_switch_is_recorded_in_the_ledger(env, env_claude):
     evs = [e for e in env.events() if e["type"] == "pass_env"]
     assert [e["mode"] for e in evs] == ["on"]
     assert json.loads((env.store / "pass-env.json").read_text())["mode"] == "on"
-    assert "switch: on" in env.run("pass-env").stdout
+    assert "Switch: PROJECT token (tok on)" in env.run("pass-env").stdout
 
 
 def test_catch_up_waits_for_a_session_on_the_same_credentials(env, env_claude):
@@ -181,7 +181,8 @@ def test_plain_run_leaves_the_switch_alone(env, tmux, env_claude, switch, caller
     (secrets / "DEMO_TOKEN").write_text("v")
     env.run("pass-env", switch)
     env.run("run", env={**tmux, **({"DEMO_TOKEN": caller} if caller else {})}, check=False)
-    assert f"switch: {switch}" in env.run("pass-env").stdout
+    words = {"on": "PROJECT token (tok on)", "off": "PERSONAL token (tok off)"}
+    assert f"Switch: {words[switch]}" in env.run("pass-env").stdout
     env.run("scheduler", "--stop")
 
 
@@ -190,9 +191,9 @@ def test_run_with_a_flag_sets_the_switch(env, tmux, env_claude):  # noqa: F811
     _, secrets = env_claude
     (secrets / "DEMO_TOKEN").write_text("v")
     env.run("run", "--pass-env", "on", env=tmux, check=False)
-    assert "switch: on" in env.run("pass-env").stdout
+    assert "Switch: PROJECT token (tok on)" in env.run("pass-env").stdout
     env.run("run", "--pass-env", "off", "--fresh", env=tmux, check=False)
-    assert "switch: off" in env.run("pass-env").stdout
+    assert "Switch: PERSONAL token (tok off)" in env.run("pass-env").stdout
     env.run("scheduler", "--stop")
 
 
@@ -200,7 +201,7 @@ def test_run_with_a_flag_sets_the_switch(env, tmux, env_claude):  # noqa: F811
 def test_run_with_no_switch_recorded_defaults_to_off_and_says_so(env, tmux, env_claude):  # noqa: F811
     r = env.run("run", env={**tmux, "DEMO_TOKEN": "x"}, check=False)
     assert "never set" in r.stdout and "OFF" in r.stdout
-    assert "switch: off" in env.run("pass-env").stdout
+    assert "Switch: PERSONAL token (tok off)" in env.run("pass-env").stdout
     env.run("scheduler", "--stop")
 
 
@@ -209,7 +210,7 @@ def test_status_lists_each_session_without_a_value(env, env_claude):
     (secrets / "DEMO_TOKEN").write_text("topsecret")
     env.run("pass-env", "on")
     out = env.run("pass-env").stdout
-    assert "sessions (token read" in out and "topsecret" not in out
+    assert "topsecret" not in out
 
 
 def test_in_use_reads_names_from_a_process_environment(monkeypatch):

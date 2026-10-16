@@ -54,8 +54,8 @@ def test_gone_team_with_uncommitted_work_is_listed_with_the_reason_and_not_disca
     assert "Finished, not wrapped up" in brief and "model-routing-2 (gone" in brief
     row = next(line for line in _fleet(env, tmux).splitlines() if line.startswith("model-routing-2"))
     assert "needs-you, gone" in row and row.split()[-3:-1] != ["?"]
-    pe = next(line for line in env.run("pass-env", env=tmux).stdout.splitlines() if "model-routing-2" in line)
-    assert pe.split()[-1] == "gone"
+    pe = env.run("pass-env", env=tmux).stdout
+    assert "model-routing-2" not in pe and "finished session" in pe and "no window (skipped)" in pe
 
 
 def test_gone_team_with_unpushed_commits_is_kept(env, led, tmux):  # noqa: F811

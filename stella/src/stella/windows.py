@@ -53,6 +53,7 @@ class Target:
     agent_name: str | None = None
     session_id: str | None = None
     late: bool = False  # restarted by the detached helper, after everything else
+    pid: int | None = None  # the Claude process, whose environment says which token it runs on
 
     @property
     def label(self) -> str:
@@ -137,13 +138,45 @@ def discover(srv, with_agents: bool = True, procs=None) -> list[Target]:
         argv = procs[claudes[0]][1]
         agent = next((by_pid[pid] for pid in claudes if pid in by_pid), None)
         t = Target(p["window_id"], p["window_name"], p["pane_id"], p["pane_pid"], (agent or {}).get("cwd") or p["cwd"],
-                   argv=argv, agent_name=(agent or {}).get("name") or _flag(argv, "--name"))
+                   argv=argv, agent_name=(agent or {}).get("name") or _flag(argv, "--name"),
+                   pid=(agent or {}).get("pid") or claudes[0])
         sid = (agent or {}).get("sessionId") or _flag(argv, "--resume", "-r", "--session-id")
         t.session_id = sid if sid and _UUID.match(sid) else None
         _classify(t, st, me, srv)
         t.late = t.kind == "stella" or (bool(caller) and caller == t.pane_id)
         found.append(t)
     return found
+
+
+@dataclass
+class Inventory:
+    """What is alive right now, from the tmux windows: the Claude sessions, the windows that are only a
+    shell, Claude processes outside the Stella tmux server (pid, cwd), and how many ledger teams have
+    no window left (counted, never listed)."""
+
+    targets: list[Target]
+    shells: list[str]
+    outside: list[tuple[int, str]]
+    dead: int
+
+
+def inventory(srv, with_agents: bool = True) -> Inventory:
+    procs = _procs()
+    targets = discover(srv, with_agents=with_agents, procs=procs)
+    in_tmux = {t.pane_id for t in targets}
+    shells: list[str] = []
+    for p in _panes(srv):
+        if p["pane_id"] not in in_tmux and p["window_name"] not in shells and p["window_name"] not in {t.window_name for t in targets}:
+            shells.append(p["window_name"])
+    inside: set[int] = set()
+    for t in targets:
+        inside.update(_descendants(t.pane_pid, procs))
+    outside = [(a["pid"], a.get("cwd") or "") for a in (fleet.sessions()[0] if with_agents else [])
+               if a.get("pid") and a["pid"] not in inside and a["pid"] in procs]
+    st = state.fold()
+    alive = {t.team for t in targets if t.team} | {p["window_name"] for p in _panes(srv)}
+    dead = sum(1 for n, tm in st.teams.items() if not tm.acked and tm.window and n not in alive)
+    return Inventory(targets, shells, outside, dead)
 
 
 def _classify(t: Target, st, me: dict, srv) -> None:
@@ -266,47 +299,69 @@ def restart(srv, t: Target, why: str) -> str:
     return f"{t.label}: restarted in {where}, conversation resumed"
 
 
-def restart_all(why: str, only_teams: list[str] | None = None) -> list[str]:
-    """Restart every Claude session in the tmux server (or only the named teams). Returns the report lines."""
+@dataclass
+class Result:
+    """What happened to one window. `outcome`: restarted, later (Stella's pane, or the caller's own, after
+    this command has returned), skipped (with the reason in `text`), failed, or missing (a --team without a window)."""
+
+    name: str
+    outcome: str
+    text: str = ""
+    target: Target | None = None
+
+
+def _result(t: Target, line: str) -> Result:
+    if ": skipped, " in line:
+        return Result(t.window_name, "skipped", line.split(": skipped, ", 1)[1], t)
+    if ": restarted in " in line:
+        return Result(t.window_name, "restarted", "", t)
+    return Result(t.window_name, "failed", line.split(": ", 1)[-1], t)
+
+
+def restart_all(why: str, only_teams: list[str] | None = None, emit=lambda r: None) -> list[Result]:
+    """Restart every Claude session in the tmux server (or only the named teams); `emit` gets each result as
+    it happens. Stella's pane, and the one this runs in, come last, handed to a detached helper."""
     st = state.fold()
-    lines: list[str] = []
+    out: list[Result] = []
+
+    def add(r: Result) -> None:
+        out.append(r)
+        emit(r)
+
     if only_teams:
-        lines = [f"{n}: no such team" for n in only_teams if n not in st.teams]
+        for n in only_teams:
+            if n not in st.teams:
+                add(Result(n, "missing", "no such team"))
         only_teams = [n for n in only_teams if n in st.teams]
         if not only_teams:
-            return lines
+            return out
     srv = tmuxctl.find_server() or tmuxctl.server_for_socket(run._load().get("socket"))
     if not srv:
-        return lines + [tmuxctl.last_error or "No tmux server found: nothing restarted."]
+        add(Result("tmux", "missing", tmuxctl.last_error or "No tmux server found: nothing restarted."))
+        return out
     passenv.resolve()  # fail here, where it can be seen, not halfway
     targets = discover(srv)
     if only_teams:
         for name in only_teams:
             t = next((x for x in targets if x.team == name), None)
-            if not t:
-                lines.append(f"{name}: no open window; not restarted")
-            else:
-                lines.append(restart(srv, t, why))
-        return lines
+            add(Result(name, "missing", "no open window; not restarted") if not t else _result(t, restart(srv, t, why)))
+        return out
     for t in targets:
         if not t.late:
-            lines.append(restart(srv, t, why))
-    for name in sorted(n for n, tm in st.teams.items() if tm.status in {"running", "needs-you"} and tm.window):
-        if not any(x.team == name for x in targets):
-            lines.append(f"{name}: no window or process any more (gone); nothing to restart")
+            add(_result(t, restart(srv, t, why)))
     late = []
     for t in (x for x in targets if x.late):
         if skip_reason(t):
-            lines.append(restart(srv, t, why))  # says why, at once
+            add(_result(t, restart(srv, t, why)))  # says why, at once
         else:
             late.append(t)
     if late:
         _later(srv, late, why)
-        lines += [f"{t.label}: restarting in {t.window_name} {t.pane_id} in a moment, conversation resumed"
-                  + (" (last: it is where this command runs)" if t.kind != "stella" else "") for t in late]
+        for t in sorted(late, key=lambda t: t.kind == "stella"):
+            add(Result(t.window_name, "later", t.kind, t))
     elif not any(t.kind == "stella" for t in targets):
-        lines.append("Stella: no session of hers found in any pane; `stella run` will start her on the current setting")
-    return lines
+        add(Result("stella", "missing", "no session of hers found in any pane; `stella run` will start her on the current setting"))
+    return out
 
 
 def _later(srv, late: list[Target], why: str) -> None:
@@ -333,8 +388,3 @@ def run_plan(plan: Path) -> None:
         return
     for raw in d["targets"]:
         print(f"{ledger.now():%Y-%m-%d %H:%M} {restart(srv, Target(**raw), d['why'])}", flush=True)
-
-
-def background_teams() -> list[str]:
-    """Running teams started without tmux: they have no window, so they can't be restarted in place."""
-    return [t.name for t in state.fold().teams.values() if t.status in {"running", "needs-you"} and not t.window]

@@ -343,31 +343,49 @@ def cmd_stop(a):
 
 
 def cmd_pass_env(a):
-    from stella import config, passenv, windows
+    from stella import config, passenv, run, tmuxctl, tokreport, windows
 
+    prev = passenv.mode()
     if a.action in {"on", "off"}:
         passenv.set_mode(a.action, by="cli")
-    print(passenv.status())
-    if config.settings().pass_env:
-        from stella import fleet
-
-        rows, err = fleet.rows()
-        print("sessions (token read from each process's environment, names only):")
-        for r in rows:
-            print(f"  {r['name'][:30]:<30} {r.get('credentials') or '?'}")
-        if err:
-            print(f"  (session list unavailable: {err})")
-    if not a.respawn:
-        if a.action in {"on", "off"}:
-            print("Sessions started from now on follow it. Running teams keep their credentials until"
-                  " restarted: `~/.local/bin/stella pass-env --respawn` (or name teams with --team).")
+    if not config.settings().pass_env:
+        print(passenv.status())
         return
-    why = f"Restarted with pass_env {passenv.effective()}."
-    for line in windows.restart_all(why, only_teams=a.team or None):
-        print(line, flush=True)
-    if not a.team:
-        for name in windows.background_teams():
-            print(f"{name}: runs without a tmux window, so it can't be restarted in place; stop it and relaunch it")
+    mode = passenv.effective()
+    srv = tmuxctl.find_server() or tmuxctl.server_for_socket(run._load().get("socket"))
+    inv = windows.inventory(srv) if srv else None
+    print(tokreport.switch_line(mode))
+    print("\n".join(passenv.status().splitlines()[2:]))  # one line per variable: its file
+    if inv is None and not a.respawn:
+        print(tmuxctl.last_error or "No tmux server found: no windows to list.")
+        return
+    before = {t.pane_id: tokreport.token_of(t) for t in inv.targets} if inv else {}
+    print()
+    if not a.respawn:
+        print("\n".join(tokreport.table(inv, mode, "Live windows, token read from each process's environment (names only):")))
+        if a.action in {"on", "off"}:
+            print("Sessions started from now on follow the switch. Running ones keep their token until restarted:"
+                  " `tok on` / `tok off` (= `stella pass-env on|off --respawn`).")
+        return
+    if inv is None:  # no tmux: restart_all says why, and names any --team that does not exist
+        for r in windows.restart_all("", only_teams=a.team or None):
+            print(tokreport.result_line(r, {}, mode, 14))
+        return
+    w = tokreport.width(inv)
+    print(tokreport.header(mode, (prev or "off") if a.action in {"on", "off"} else None))
+    print(f"  (restarting {len(inv.targets)} live window{'s' if len(inv.targets) != 1 else ''}, each resumes its conversation)")
+    why = f"Restarted with pass_env {mode}."
+    results = windows.restart_all(why, only_teams=a.team or None,
+                                  emit=lambda r: print(tokreport.result_line(r, before, mode, w), flush=True))
+    if a.team:
+        return
+    print("\n".join(tokreport.extras(inv, w)))
+    pending = {r.target.pane_id for r in results if r.outcome == "later" and r.target}
+    reasons = {r.name: r.text for r in results if r.outcome in {"skipped", "failed"}}
+    tokreport.settle()
+    after = windows.inventory(srv, with_agents=False)
+    print()
+    print("\n".join(tokreport.table(after, mode, "Now, re-read from each process after the restarts:", pending, reasons, with_extras=False)))
 
 
 def cmd_respawn_self(a):
