@@ -442,13 +442,15 @@ Clicking a row jumps to that window.
 How it works: tmux has no vertical window list, so each window carries one narrow pane (flagged
 `@sidebar`) running `bin/tmux-sidebar run`, which redraws `tmux list-windows`. An `after-new-window`
 hook adds it to new windows, `window-layout-changed` docks it back to the far left at `@sidebar_width`
-(24), and reloading the config adds it to windows that already exist. It never takes focus.
+(24 until you resize it), and reloading the config adds it to windows that already exist. It never takes focus.
 
 | Thing | Behaviour |
 |---|---|
 | `C-b b` | Toggle sidebars everywhere. Off puts the tabs back in the top bar. |
 | `Cmd+Shift+←↑↓→` | Never rests on the sidebar: a hook hands focus to its neighbour, even after a click or a closed pane |
 | `Cmd+Opt+←↑↓→` | Will not swap a pane with the sidebar |
+| Drag the sidebar's right border | Resizes it, in every window, and the width sticks (min 12) |
+| `C-b <` / `C-b >` | Narrower / wider by 2 (hold to repeat); `tmux-sidebar width 30` sets it, `tmux-sidebar width` shows it |
 | `Cmd+Shift+Space` | Cycles layouts of the tool panes; the sidebar stays put |
 | `Cmd+Shift+Enter` | Zooming a pane hides the sidebar until you unzoom |
 | Pane labels | Numbered from the first tool pane, not the sidebar |
