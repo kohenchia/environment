@@ -4,9 +4,13 @@ import json
 
 import pytest
 
-from test_gate import _commit
+from test_gate import _alive, _commit as _gc
 
 S = "sess-1"
+
+
+def _commit(env, repo, by=S, **kw):
+    return _gc(env, repo, by=by, **kw)
 
 
 def _stop(env, cwd, sid=S, active=False, extra_env=None):
@@ -75,30 +79,38 @@ def test_a_yes_is_not_a_deferral(env, repo):
     assert not [e for e in env.events() if e["type"] == "push_deferred"]
 
 
-def test_a_repo_committed_in_this_session_counts_though_the_cwd_is_elsewhere(env, repo, tmp_path):
+def test_the_session_that_made_the_commit_is_asked_wherever_its_cwd_is(env, repo, tmp_path):
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     _commit(env, repo)
-    assert _stop(env, elsewhere) == {}  # not worked in
-    _post(env, f"git -C {repo} commit -m x", elsewhere)
     assert _stop(env, elsewhere)["decision"] == "block"
 
 
-def test_stellas_own_session_is_only_held_to_repos_she_committed_in(env, repo):
+def test_a_bystander_in_the_same_repo_is_never_asked_about_commits_it_did_not_make(env, repo):
+    _commit(env, repo, by="the-other-effort")
+    assert _stop(env, repo) == {}  # S works in this repo, but the commit is not its
+
+
+def test_a_commit_with_no_record_is_nobodys_to_push(env, repo):
+    _commit(env, repo, by=None)
+    assert _stop(env, repo) == {}
+
+
+def test_stellas_own_session_is_only_asked_about_commits_she_made(env, repo):
     from stella.run import ENV
 
     own = {ENV: "1"}
-    _commit(env, repo)
-    assert _stop(env, repo, extra_env=own) == {}  # her cwd is not a repo she worked in
-    _post(env, "git commit -am x", repo)
+    _commit(env, repo, by="some-team")
+    assert _stop(env, repo, extra_env=own) == {}  # a team's commit in a repo she is in
+    _commit(env, repo, by=S, text="y\n", msg="hers")
     out = _stop(env, repo, extra_env=own)
-    assert out["decision"] == "block"
+    assert out["decision"] == "block" and "1 unpushed commit you made" in out["reason"]
     assert _stop(env, repo, extra_env=own) == {}  # and she is reminded once, not every turn
 
 
 def test_a_detached_head_is_told_to_get_a_branch(env, repo):
-    _commit(env, repo)
     env.git(repo, "checkout", "-q", "--detach")
+    _commit(env, repo)
     assert "on no branch" in _stop(env, repo)["reason"]
 
 
@@ -153,6 +165,7 @@ def test_nothing_in_the_core_tells_anyone_to_run_a_push_command():
 
 
 def _deferred(env, repo):
+    _alive(env, S)
     _commit(env, repo)
     _pre(env, "git push", repo)
     _stop(env, repo)

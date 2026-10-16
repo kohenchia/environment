@@ -59,10 +59,10 @@ def test_gone_team_with_uncommitted_work_is_listed_with_the_reason_and_not_disca
 
 
 def test_gone_team_with_unpushed_commits_is_kept(env, led, tmux):  # noqa: F811
+    from test_gate import _commit
+
     r = _repo(env)
-    (r / "b.txt").write_text("b\n")
-    env.git(r, "add", ".")
-    env.git(r, "commit", "-q", "-m", "local only")
+    _commit(env, r, by="sess-unpushed")
     _gone_team(led, "unpushed", r)
     assert "1 unpushed commit" in env.run("sweep", env=tmux).stdout
 

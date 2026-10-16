@@ -65,6 +65,7 @@ class Env:
             "STELLA_TRANSCRIPTS": str(tmp / "transcripts"),
             "STELLA_NO_CATCHUP": "1",
             "STELLA_NO_NOTIFY": "1",
+            "STELLA_UNOWNED_TTL": "0",
             # tmux's default socket lives here, so nothing a test runs can reach the owner's own server
             "TMUX_TMPDIR": str(tmp / "tmux"),
             "STELLA_TEST_ROOTS": os.environ["STELLA_TEST_ROOTS"],

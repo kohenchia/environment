@@ -11,7 +11,8 @@ Guarded repos: the repo the core lives in, plus any listed in settings.
   is plain git. A session launched with `--auto-push` (STELLA_AUTO_PUSH=1) was
   told up front to push for the owner, so it is not asked.
 * The leak guard's git hooks. `install` puts `pre-commit` and `commit-msg`
-  hooks in each guarded repo; `git_hook` runs them against the denylist.
+  hooks in each guarded repo; `git_hook` runs them against the denylist. A `post-commit` hook records who made each commit
+  (`provenance`); the PostToolUse hook does the same in every repo, guarded or not.
 
 `install` also removes what the old push gate left behind: its `pre-push` hook
 and the unusable push URL it set on every remote.
@@ -35,7 +36,7 @@ from stella.config import BIN, settings, store_dir
 
 # The push URL the old push gate set on every remote. Kept only to recognise and remove it.
 BLOCKED_URL = "file:///STELLA-PUSH-GATE/push-with-stella-push"
-COMMIT_HOOKS = ("pre-commit", "commit-msg")
+COMMIT_HOOKS = ("pre-commit", "commit-msg", "post-commit")
 _MARK = "Installed by stella."
 
 
@@ -595,6 +596,14 @@ def git_hook(name: str, argv: list[str], stdin: str) -> int:
     if name == "pre-push":  # a leftover hook from the old push gate: pushes are not gated any more
         return 0
     repo = Path(_git(Path.cwd(), "rev-parse", "--show-toplevel"))
+    if name == "post-commit":  # who made the commit: the session whose environment runs git (never fails the commit)
+        try:
+            from stella import provenance
+
+            provenance.record_head(repo)
+        except Exception:  # noqa: BLE001
+            pass
+        return 0
     g = leak.guard()
     if not (g.configured and leak.protected_root(repo, g)):
         return 0

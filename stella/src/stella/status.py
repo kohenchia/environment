@@ -35,7 +35,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from stella import finish, gate, related, state, wrapup
+from stella import finish, provenance, related, state, wrapup
 
 RULE_CH = "\u2501"
 RULE_LINE = RULE_CH * 40
@@ -92,65 +92,44 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'s' if n != 1 else ''}"
 
 
-def _worked_roots(sess: dict, cwd: str, own: bool, t: state.Team | None) -> dict[Path, Path]:
-    """Every git checkout the session worked in -> a path inside it: its directory, the repos it committed in and,
-    for a team, the repos its reports name. Repos without a remote are included (they can be dirty)."""
-    out = dict(finish._worked(sess, cwd, own))
-    if not own and cwd:
-        top = wrapup.toplevel(Path(os.path.expanduser(cwd)))
-        if top:
-            out.setdefault(top, top)
-    if t:
-        for top in wrapup.repos_of(t):
-            out.setdefault(top, top)
-    return out
-
-
 def blockers(st: state.State, sid: str, cwd: str, own: bool = False, t: state.Team | None = None) -> list[Blocker]:
-    """What is still open for the owner on this session. Empty means nothing is left: `gg` may close it."""
+    """What is still open for the owner on this session. Empty means nothing is left: `gg` may close it.
+
+    Only what the session CAUSED counts (see `provenance`): the commits it made, the files it wrote last, the pushes deferred for
+    commits it made, the question its team raised. What another session or effort left in the same repo is not its business and
+    never blocks it; what nobody alive owns is Stella's list (`provenance.unowned`). Stella's own session is held to that list."""
     if own:
         finish.clear_pushed(st)
-        return [Blocker("attention", i.text, i.text) for i in st.attention()]
-    sess = _session(sid)
+        return [Blocker("attention", i.text, i.text) for i in provenance.attention(st)]
     out: list[Blocker] = []
     if t and (t.asking or t.status == "needs-you"):
         q = " ".join((t.last_report or "").split())[:100]
         out.append(Blocker("asking", f"an open question: {q}" if q else "an open question",
                            f"answer the open question: {q}" if q else "answer the open question"))
-    mine = (t.sessions if t else set()) | ({sid} if sid else set()) | ({t.session_id} if t and t.session_id else set())
-    for ev in st.push_deferred:
-        if not (ev.get("team") == (t.name if t else None) and t) and ev.get("session") not in mine:
-            continue
-        key = f"push-deferred:{ev.get('repo')}@{ev.get('sha')}"
-        path, sha = ev.get("path"), ev.get("sha")
-        if key in st.acked or not (path and sha) or wrapup._git(Path(path), "branch", "-r", "--contains", sha):
-            continue  # dropped by the owner, or the commit reached a remote
-        what = f"{ev.get('repo')} {ev.get('branch') or str(sha)[:7]} {str(sha)[:7]}"
-        out.append(Blocker("deferred", f"push of {what} was deferred",
-                           f"push of {what} is deferred: push it or drop it (`stella ack {key}`)"))
-    deferred_heads = {f"{e.get('path')}@{e.get('sha')}" for e in st.push_deferred}
-    ctx = related.context(st, sid, t)
-    for root, where in _worked_roots(sess, cwd, own, t).items():
-        res = related.check(root, None, ctx)
-        if res.blocking:
-            out.append(Blocker("dirty", res.message(root.name), f"commit or discard the changes in {root.name}"))
-        n = finish._ahead(where) if wrapup._git(root, "remote") else 0
-        head = gate._head(where)
-        if not n or not head or gate.is_approved(root, where) or f"{root}@{head}" in deferred_heads \
-                or finish.is_deferred(f"{root}@{head}"):
-            continue  # deferred ones are listed above (or dropped by the owner)
-        branch = gate._git_out(where, "rev-parse", "--abbrev-ref", "HEAD")
-        out.append(Blocker("push", f"{_plural(n, 'unpushed commit')} in {root.name} ({branch})",
-                           f"approve the push of {root.name} {branch} ({_plural(n, 'commit')})",
-                           f"~/.local/bin/stella push --plan -C {root}"))
+    b = provenance.business(st, sid, t)
+    for d in b.deferred:
+        out.append(Blocker("deferred", f"push of {d.what} was deferred",
+                           f"push of {d.what} is deferred: push it or drop it (`stella ack {d.key}`)"))
+    for root, files in b.dirty:
+        out.append(Blocker("dirty", related.Result(blocking=files).message(root.name), f"commit or discard the changes in {root.name}"))
+    for p in b.pushes:
+        name = (p.branch.where or p.branch.repo).name
+        out.append(Blocker("push", f"{_plural(p.n, 'unpushed commit')} in {name} ({p.branch.name})",
+                           f"approve the push of {name} {p.branch.name} ({_plural(p.n, 'commit')})", p.command))
     return out
 
 
 def left_alone(st: state.State, sid: str, cwd: str, t: state.Team | None = None) -> str:
-    """The calm info line for what `blockers` ignored as not this session's: 'left alone: 3 untracked files in proj, not from
+    """The calm info line for what `blockers` ignored as not this session's: 'left alone: 3 uncommitted files in proj, not from
     this session'. Empty when nothing was."""
     ctx = related.context(st, sid, t)
-    return related.left_line([(root.name, related.check(root, None, ctx)) for root in _worked_roots(_session(sid), cwd, False, t)])
+    return related.left_line([(root.name, related.check(root, None, ctx))
+                              for root in sorted(related.footprint(ctx) | _cwd_repo(cwd))])
+
+
+def _cwd_repo(cwd: str) -> set[Path]:
+    top = wrapup.toplevel(Path(os.path.expanduser(cwd))) if cwd else None
+    return {top.resolve()} if top else set()
 
 
 def _session(sid: str) -> dict:

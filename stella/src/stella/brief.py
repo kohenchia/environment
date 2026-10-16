@@ -129,7 +129,9 @@ def render(st: State) -> str:
     from stella import finish
 
     finish.clear_pushed(st)
-    att = st.attention(now)
+    from stella import provenance
+
+    att = provenance.attention(st, now)
     sections.append(("Needs you", [f"- {_clip(a.text, 130)}" for a in att], 1))
     sections.append((f"Last list shown (#{st.last_list_seq}; a bare number from the owner means one of these)",
                      [f"{n}. {_clip(x, 110)}" for n, x in enumerate(st.last_list, 1)], 1))

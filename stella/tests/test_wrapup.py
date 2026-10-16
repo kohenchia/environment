@@ -129,10 +129,10 @@ def test_keep_open_archetype_is_respected(env, led):
 
 
 def test_unpushed_commits_block_and_pushing_unblocks(env, led):
+    from test_gate import _commit
+
     r = _repo(env)
-    (r / "b.txt").write_text("b\n")
-    env.git(r, "add", ".")
-    env.git(r, "commit", "-q", "-m", "more")
+    _commit(env, r, by="sess-alpha")
     led.team(dir=str(r))
     assert "1 unpushed commit in proj" in _sweep(env)
     env.git(r, "push", "-q")
@@ -146,17 +146,23 @@ def test_repo_without_a_remote_needs_no_push(env, led):
 
 
 def test_uncommitted_changes_block(env, led):
+    from test_gate import _writes
+
     r = _repo(env)
     (r / "a.txt").write_text("changed\n")
+    _writes(env, "sess-alpha", r / "a.txt")
     led.team(dir=str(r))
     assert "uncommitted in proj: a.txt" in _sweep(env)
 
 
-def test_repo_named_in_a_report_is_checked(env, led):
+def test_a_repo_the_team_wrote_in_is_checked_though_it_is_not_its_directory(env, led):
+    from test_gate import _writes
+
     r = _repo(env)
     other = _repo(env, "named")
     (other / "wip.txt").write_text("x\n")
-    led.team(dir=str(r), reports=[f"edited {other}/wip.txt"])
+    _writes(env, "sess-alpha", other / "wip.txt")
+    led.team(dir=str(r))
     assert "uncommitted in named: wip.txt" in _sweep(env)
 
 
@@ -168,11 +174,10 @@ def test_open_followup_blocks(env, led):
 
 
 def test_deferred_push_blocks(env, led):
+    from test_gate import _commit
+
     r = _repo(env)
-    (r / "b.txt").write_text("b\n")
-    env.git(r, "add", ".")
-    env.git(r, "commit", "-q", "-m", "more")
-    sha = env.git(r, "rev-parse", "HEAD").stdout.strip()
+    sha = _commit(env, r, by="sess-alpha")
     led.team(dir=str(r))
     led.add("push_deferred", ago=8, repo="proj", path=str(r), sha=sha, branch="main", session="sess-alpha")
     out = _sweep(env)
@@ -202,8 +207,11 @@ def test_wake_line_names_the_sweep(env):
 
 
 def test_attention_still_lists_a_team_that_cannot_be_wrapped(env, led):
+    from test_gate import _writes
+
     r = _repo(env)
     (r / "a.txt").write_text("changed\n")
+    _writes(env, "sess-alpha", r / "a.txt")
     led.team(dir=str(r))
     _sweep(env)
     assert "alpha finished" in env.run("attention").stdout

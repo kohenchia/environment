@@ -6,7 +6,7 @@ import subprocess
 import time
 
 import pytest
-from test_gate import _commit
+from test_gate import _commit, _writes
 from test_wrapup import _repo, _types, led  # noqa: F401 - fixtures
 from test_wrapup import window as _bw  # noqa: F401
 
@@ -115,6 +115,7 @@ def test_all_done_with_uncommitted_changes_is_blocked(env, led):
     r = _repo(env)
     led.team(dir=str(r))
     (r / "wip.txt").write_text("x\n")
+    _writes(env, SESS, r / "wip.txt")
     out = _stop(env, "Done.\n\n" + DONE, r)
     assert "uncommitted in proj: wip.txt" in out["reason"] and nxt("commit or discard the changes in proj") in out["reason"]
     assert _stop(env, "Done.\n\n" + nxt("commit wip.txt"), r) == {}
@@ -130,7 +131,7 @@ def test_all_done_with_an_open_question_is_blocked(env, led):
 
 def test_unpushed_commits_get_the_push_block_with_the_rule_then_next_for_you(env, led, repo):
     led.team(dir=str(repo))
-    _commit(env, repo)
+    _commit(env, repo, by=SESS)
     first = _stop(env, "Committed.", repo)
     assert "stella push --plan -C" in first["reason"] and "LAST block" in first["reason"]  # one block carries both
     assert _stop(env, "Committed.", repo, active=True) == {}
@@ -153,7 +154,7 @@ def test_every_blocker_is_one_numbered_item(env, led, repo):
 
 def test_a_deferred_push_is_next_for_you_until_it_is_dropped(env, led, repo):
     led.team(dir=str(repo))
-    _commit(env, repo)
+    _commit(env, repo, by=SESS)
     pre = {"tool_name": "Bash", "tool_input": {"command": "git push -u origin main"}, "cwd": str(repo), "session_id": SESS}
     _stop(env, "x", repo)
     env.hook("pretool", pre, env=TEAM)  # the prompt appeared; the owner said no
@@ -291,6 +292,7 @@ def test_gg_closes_a_keep_open_team(env, led, window):
 def test_gg_does_not_close_with_uncommitted_changes(env, led, window):
     r, wid, sock, tm, pane = _setup(env, led, window)
     (r / "wip.txt").write_text("x\n")
+    _writes(env, SESS, r / "wip.txt")
     out = _gg(env, _gg_env(env, sock, pane, **TEAM), cwd=r)
     assert out["decision"] == "block" and out["reason"].startswith("gg: not closing, uncommitted in proj: wip.txt")
     assert "\n" not in out["reason"]
@@ -308,7 +310,7 @@ def test_gg_does_not_close_while_the_team_asks_the_owner(env, led, window):
 
 def test_gg_with_an_unpushed_commit_raises_the_push_prompt_instead_of_a_command(env, led, window):
     r, wid, sock, tm, pane = _setup(env, led, window)
-    _commit(env, r)
+    _commit(env, r, by=SESS)
     out = _gg(env, _gg_env(env, sock, pane, **TEAM), cwd=r)
     ctx = out["hookSpecificOutput"]["additionalContext"]  # the model runs the push, so Claude Code asks
     assert "typed `gg`" in ctx and "1 unpushed commit in proj" in ctx and "stella push --plan -C" in ctx and "tell" in ctx
@@ -322,7 +324,7 @@ def test_gg_with_an_unpushed_commit_raises_the_push_prompt_instead_of_a_command(
 
 def test_gg_with_a_deferred_push_does_not_ask_again(env, led, window):
     r, wid, sock, tm, pane = _setup(env, led, window)
-    _commit(env, r)
+    _commit(env, r, by=SESS)
     led.add("push_deferred", ago=1, team="alpha", repo="proj", path=str(r), sha=env.git(r, "rev-parse", "HEAD").stdout.strip(),
             branch="main", session=SESS)
     led.add("alert", ago=1, key=f"push-deferred:proj@{env.git(r, 'rev-parse', 'HEAD').stdout.strip()}", text="deferred push: proj")
@@ -344,6 +346,7 @@ def test_gg_in_a_hand_opened_session_closes_just_that_window(env, window):
 def test_gg_in_a_hand_opened_session_checks_too(env, window):
     r = _repo(env)
     (r / "wip.txt").write_text("x\n")
+    _writes(env, "hand", r / "wip.txt")
     wid, sock, tm = window("#!/bin/sh\nsleep 600\n")
     (env.store / "stella-session.json").write_text(json.dumps({"socket": sock}))
     pane = tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0]
@@ -368,6 +371,7 @@ def test_gg_outside_a_stella_tmux_server_closes_nothing(env):
 def test_wrapup_by_team_name_is_the_same_checks_and_closing(env, led, window):
     r, wid, sock, tm, pane = _setup(env, led, window)
     (r / "wip.txt").write_text("x\n")
+    _writes(env, SESS, r / "wip.txt")
     e = {"TMUX": f"{sock},0,0"}
     assert "not closing, uncommitted in proj" in env.run("wrapup", "alpha", env=e).stdout
     assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
@@ -611,7 +615,8 @@ def _fleet(env, led, window):
         pane = tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0]
         w[name] = (r, wid, pane)
     (w["blocked"][0] / "wip.txt").write_text("x\n")
-    _commit(env, w["pushy"][0])
+    _writes(env, "sess-blocked", w["blocked"][0] / "wip.txt")
+    _commit(env, w["pushy"][0], by="sess-pushy")
     (env.store / "stella-session.json").write_text(json.dumps({"socket": sock}))
     return sock, tm, w
 
@@ -647,6 +652,7 @@ def test_tyfp_leaves_the_typed_in_session_when_it_is_blocked_and_never_closes_st
     sock, tm, w = _fleet(env, led, window)
     r, wid, pane = w["typer"]
     (r / "wip.txt").write_text("x\n")
+    _writes(env, "sess-typer", r / "wip.txt")
     out = _gg(env, _gg_env(env, sock, pane, STELLA_TEAM="typer"), "tyfp", cwd=r, sid="sess-typer")
     assert "left open: typer: uncommitted in typer" in out["hookSpecificOutput"]["additionalContext"]
     time.sleep(1.5)

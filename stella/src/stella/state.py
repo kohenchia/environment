@@ -66,6 +66,7 @@ class Team:
     result: str | None = None
     session_id: str | None = None
     acked: bool = False
+    closed_at: dt.datetime | None = None  # when it was wrapped up or reaped
     end_reason: str | None = None
     asking: bool = False  # its latest report asked the owner something
     touched: dt.datetime | None = None  # the owner (or Stella) last typed to it
@@ -216,6 +217,7 @@ def fold(since_events=None) -> State:
             team = st.teams.get(ev.get("team", ""))
             if team:
                 team.acked = True
+                team.closed_at = ts
         elif t in {"direct", "tell"}:
             team = st.teams.get(ev.get("team", ""))
             if team:

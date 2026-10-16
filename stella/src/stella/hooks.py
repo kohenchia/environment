@@ -12,9 +12,9 @@
 * SessionEnd: a team lead that exits without `stella done` raises an attention item,
   and unless the owner closed it by hand, wakes Stella.
 * PreToolUse: the push prompt (a push from a repo with a remote asks the owner first; `stella push` is the one short command sessions use) and the leak guard.
-* PostToolUse: remembers an approved push's head so it is not asked twice, and the repos a session committed in.
-* Stop: a session that ends its turn with unpushed commits in repos it worked in is told once to push now, so the
-  push prompt appears (`finish`); a push the owner declined is recorded as deferred and not asked again.
+* PostToolUse: remembers an approved push's head so it is not asked twice, and records the commits the command made as this session's (provenance).
+* Stop: a session that ends its turn with unpushed commits IT MADE is told once to push now, so the push prompt appears
+  (`finish`; never commits another session made); a push the owner declined is recorded as deferred and not asked again.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import os
 import sys
 import traceback
 
-from stella import address, bashwrites, direct, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
+from stella import address, bashwrites, direct, windows, tmuxctl, brief, context, finish, gate, leak, ledger, notify, provenance, run, scheduler, sessions, state, status, targets, tyfp, wake, wrapup
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -320,6 +320,10 @@ def pretool(data: dict) -> None:
     cwd = data.get("cwd") or os.getcwd()
     if tool == "Bash":
         cmd = ti.get("command", "")
+        try:
+            provenance.pre(data.get("tool_use_id") or "", cmd, cwd)
+        except Exception:  # noqa: BLE001
+            traceback.print_exc(file=sys.stderr)
         g = leak.guard()
         if g.configured:  # only what the command writes into a protected repo is scanned; a read never is
             for w in bashwrites.writes(cmd, cwd):
@@ -374,7 +378,10 @@ def posttool(data: dict) -> None:
     if data.get("tool_name") == "Bash":
         cmd, cwd = (data.get("tool_input") or {}).get("command", ""), data.get("cwd") or os.getcwd()
         gate.record_approval(cmd, cwd)
-        finish.remember_commits(data.get("session_id") or "", cmd, cwd)
+        try:  # the commits this command made belong to this session (a subagent's tool calls are its lead's)
+            provenance.post(data.get("session_id") or "", os.environ.get("STELLA_TEAM", ""), data.get("tool_use_id") or "", cmd, cwd)
+        except Exception:  # noqa: BLE001 - never trouble the tool call
+            traceback.print_exc(file=sys.stderr)
 
 
 def stop(data: dict) -> None:

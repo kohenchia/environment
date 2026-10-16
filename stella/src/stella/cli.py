@@ -86,7 +86,9 @@ def cmd_attention(a):
 
     st = state.fold()
     finish.clear_pushed(st)
-    items = st.attention()
+    from stella import provenance
+
+    items = provenance.attention(st, max_age=60)
     if a.json:
         print(json.dumps([{"n": n, "key": i.key, "seq": i.seq, "text": i.text} for n, i in enumerate(items, 1)], indent=1))
         return
@@ -99,7 +101,9 @@ def cmd_attention(a):
 def cmd_ack(a):
     keys = a.key
     if keys == ["all"]:
-        keys = [i.key for i in state.fold().attention()]
+        from stella import provenance
+
+        keys = [i.key for i in provenance.attention(state.fold())]
     for k in keys:
         ledger.append("ack", by="cli", key=k)
     print(f"acknowledged {len(keys)}")
@@ -245,6 +249,38 @@ def cmd_sweep(a):
         return
     wrapped, kept = wrapup.sweep(dry_run=a.dry_run)
     print(wrapup.report(wrapped, kept, a.dry_run))
+
+
+def cmd_provenance(a):
+    from stella import provenance, related, wrapup
+
+    st = state.fold()
+    if a.action == "backfill":
+        made = provenance.backfill(a.days)
+        print(f"recorded the owner of {len(made)} commit{'s' if len(made) != 1 else ''} from the transcripts")
+        return
+    if a.action == "unowned":
+        for i in provenance.unowned(st):
+            print(f"- [{i.key}] {i.text}")
+        now = ledger.now()
+        for repo in provenance._universe(st):
+            for br in provenance.unpushed_branches(repo):
+                loose = [s for s in br.shas if not provenance.owner_of(st, provenance.recs().get(s)).live]
+                if loose and not provenance.recs().get(br.tip):
+                    print(f"  old: {br.label} {len(loose)} unpushed, tip {br.tip[:7]} {wrapup._git(repo, 'log', '-1', '--format=%cr', br.tip)}")
+        return
+    if a.action == "business":
+        for name in a.names:
+            t = st.teams.get(name)
+            if not t:
+                print(f"no team {name}")
+                continue
+            b = provenance.business(st, "", t)
+            print(f"{name}: " + ("; ".join(
+                [f"{p.n} unpushed in {p.branch.label}" for p in b.pushes] + [f"deferred {d.what}" for d in b.deferred]
+                + [related.Result(blocking=f).message(r.name) for r, f in b.dirty]) or "owns nothing open"))
+        return
+    raise SystemExit(f"unknown provenance action {a.action}")
 
 
 def cmd_report(a):
@@ -727,6 +763,10 @@ def build() -> argparse.ArgumentParser:
     sp = c("sweep", cmd_sweep, "The AUTOMATIC sweep over EVERY finished team (not `gg`, which wraps up one session): records gone teams, and closes the clean finished ones only if wrapup_auto is on")
     sp.add_argument("--dry-run", action="store_true", help="list what would be wrapped up and why the rest stays open; change nothing")
     sp.add_argument("--now", action="store_true", help="the owner's explicit sweep, what `tyfp` types: every clean, idle session at once, no grace period, keep_open and adopted ones included; busy, running and blocked ones stay (with the reason)")
+    sp = c("provenance", cmd_provenance, "Who made each unpushed commit and uncommitted file: `backfill` records old commits from the transcripts, `unowned` lists business no live session owns, `business <team>` what a team owns")
+    sp.add_argument("action", choices=["backfill", "unowned", "business"])
+    sp.add_argument("names", nargs="*")
+    sp.add_argument("--days", type=int, default=45)
     sp = c("report", cmd_report, "(team leads) report progress, or that the owner is needed")
     sp.add_argument("team")
     sp.add_argument("message")

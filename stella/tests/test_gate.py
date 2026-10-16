@@ -9,11 +9,39 @@ import pytest
 from stella.gate import BLOCKED_URL, HOOK_SCRIPT
 
 
-def _commit(env, repo, name="f.txt", text="x\n", msg="change"):
+def _commit(env, repo, name="f.txt", text="x\n", msg="change", by=None, team=None):
+    """Commit in `repo`; with `by` (a session id) the commit is recorded as that session's, as the PostToolUse hook does."""
     (repo / name).write_text(text)
     env.git(repo, "add", ".")
     env.git(repo, "commit", "-q", "-m", msg)
+    if by or team:
+        _own(env, repo, by, team)
     return env.git(repo, "rev-parse", "HEAD").stdout.strip()
+
+
+def _own(env, repo, by=None, team=None):
+    """The PostToolUse hook of a `git commit` that session `by` (of team `team`) just ran in `repo`."""
+    env.hook("posttool", {"tool_name": "Bash", "tool_input": {"command": f"git -C {repo} commit -q -m x"}, "cwd": str(repo),
+                          "session_id": by or ""}, env={"STELLA_TEAM": team} if team else None)
+
+
+def _alive(env, sid):
+    """`sid` is a session that is working right now: its transcript moved a moment ago."""
+    d = env.tmp / "transcripts" / "-p"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / f"{sid}.jsonl").write_text(json.dumps({"type": "user", "message": {"content": "go"}}) + "\n")
+
+
+def _writes(env, sid, path, ago_s=5):
+    """A transcript in which session `sid` wrote `path` (so `sid` is the file's last writer)."""
+    import datetime as dt
+    ts = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=ago_s)).isoformat().replace("+00:00", "Z")
+    d = env.tmp / "transcripts" / "-p"
+    d.mkdir(parents=True, exist_ok=True)
+    line = {"type": "assistant", "timestamp": ts, "message": {"content": [
+        {"type": "tool_use", "name": "Write", "input": {"file_path": str(path), "content": "x"}}]}}
+    with (d / f"{sid}.jsonl").open("a") as fh:
+        fh.write(json.dumps(line) + "\n")
 
 
 def _pretool_out(env, command, cwd):

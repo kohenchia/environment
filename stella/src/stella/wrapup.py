@@ -16,9 +16,9 @@ launched is ready when ALL of these hold:
 * it has stayed done for the grace period (`wrapup_grace_minutes`), counted from the later of its `done`
   and the last time the owner typed to it
 * its session is idle at its prompt, not working
-* every repo it worked in (its directory, and repos named in its reports) has nothing unpushed (when the
-  repo has a remote) and no uncommitted changes
-* no open follow-up waits on it, and no push the owner deferred is still outstanding
+* it owns no unresolved business (`provenance`): no unpushed commit it made, no uncommitted file it wrote last, no push
+  deferred for commits it made. What another session or effort left in the same repo is not its business and never blocks it
+* no open follow-up waits on it
 
 Then the sweep does what `stella reap` does (kills the window, verifies it is gone), closes the orders the
 team carried, records `wrapped_up` naming what it checked, and raises one quiet notification line.
@@ -104,45 +104,6 @@ def mentioned_paths(texts: list[str]) -> list[Path]:
     return out
 
 
-def repos_of(t: state.Team) -> dict[Path, set[str] | None]:
-    """The repos a team worked in: its directory (whole repo), and each repo a report names (the named
-    path only, unless it is the repo's root, where the whole repo counts)."""
-    repos: dict[Path, set[str] | None] = {}
-    if t.directory:
-        top = toplevel(Path(os.path.expanduser(t.directory)))
-        if top:
-            repos[top] = None
-    for p in mentioned_paths(t.texts):
-        if not p.exists():
-            continue
-        top = toplevel(p)
-        if not top:
-            continue
-        if top == p.resolve() or top == p:
-            repos[top] = None
-        elif repos.get(top, set()) is not None:
-            repos.setdefault(top, set()).add(str(p))  # type: ignore[union-attr]
-    return repos
-
-
-def repo_problem(top: Path, only: set[str] | None, ctx=None) -> str | None:
-    """What keeps a team's repo from being closed over: changes this team could have made (see `related`), or unpushed commits."""
-    from stella import related
-
-    name = top.name
-    res = related.check(top, only, ctx or related.Ctx())
-    if res.blocking:
-        return res.message(name)
-    if _git(top, "remote"):
-        up = _git(top, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
-        ahead = _git(top, "rev-list", "--count", f"{up}..HEAD") if up else _git(top, "rev-list", "--count", "HEAD", "--not", "--remotes")
-        if ahead is None:
-            return f"cannot read the git state of {name}"
-        if ahead != "0":
-            branch = _git(top, "rev-parse", "--abbrev-ref", "HEAD") or "HEAD"
-            return f"{ahead} unpushed commit{'s' if ahead != '1' else ''} in {name} ({branch})"
-    return None
-
 
 # ---------------------------------------------------------------- tmux
 
@@ -178,14 +139,12 @@ def session_idle(srv: tmuxctl.Server, window: str) -> bool:
 
 
 def _deferred_push(st: state.State, t: state.Team) -> str | None:
-    """A push the owner declined (recorded by the Stop hook) is outstanding until its commit is on a remote."""
-    mine = t.sessions | ({t.session_id} if t.session_id else set())
-    for q in st.push_deferred:
-        if q.get("team") == t.name or (q.get("session") in mine and q.get("session")):
-            path, sha = q.get("path"), q.get("sha")
-            if path and sha and not _git(Path(path), "branch", "-r", "--contains", sha):
-                return f"push of {q.get('repo')} {q.get('branch', '')} {str(sha)[:7]} was deferred".replace("  ", " ")
-    return None
+    """A push the owner declined is the business of the session that made its commits, not of whoever was running when the prompt
+    was declined. It stays outstanding until its commit is on a remote (or is gone)."""
+    from stella import provenance
+
+    d = provenance.deferred_for(st, provenance.who(st, "", t))
+    return f"push of {d[0].what} was deferred" if d else None
 
 
 def _ago(d: dt.timedelta) -> str:
@@ -268,20 +227,13 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
                 return no(f"its window {window} does not look like its own (id reused?); left alone")
             if window and (t.status == "done" or explicit) and not typed_in and not session_idle(srv, window):
                 return no("its session is busy or not at its prompt")
-    if explicit:
-        from stella import status
+    from stella import provenance, related, status
 
-        v.blockers = status.blockers(st, "", t.directory or "", own=False, t=t)
-        if v.blockers:
-            return no("; ".join(b.text for b in v.blockers))
-    repos = repos_of(t)
-    from stella import related
-
-    ctx = related.context(st, "", t)
-    for top, only in repos.items():
-        problem = repo_problem(top, only, ctx)
-        if problem:
-            return no(problem)
+    v.blockers = status.blockers(st, "", t.directory or "", own=False, t=t)
+    if v.blockers:
+        return no("; ".join(b.text for b in v.blockers))
+    w = provenance.who(st, "", t)
+    repos = sorted(related.footprint(related.context(st, "", t)) | provenance.my_repos(w))
     v.repos = [str(p) for p in repos]
     v.ok = True
     v.checked = [

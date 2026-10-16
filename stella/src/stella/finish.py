@@ -51,20 +51,6 @@ def _record_deferred(key: str) -> None:
     f.write_text(json.dumps(keep))
 
 
-def remember_commits(sid: str, command: str, cwd: str) -> None:
-    """PostToolUse: a `git commit` ran, so its repo is one this session worked in."""
-    dirs = gate.commit_dirs(command, cwd)
-    if not (sid and dirs):
-        return
-    sess = sessions.load(sid)
-    seen = sess.setdefault("committed", [])
-    for d in dirs:
-        root = gate.guarded_root(d) or gate._remote_root(d)
-        if root and str(root) not in seen:
-            seen.append(str(root))
-    sessions.save(sid, sess)
-
-
 def remember_asked(sid: str, keys: tuple[str, ...]) -> None:
     """PreToolUse: the owner was shown the prompt for these heads. If no approval follows, he said no."""
     if not (sid and keys):
@@ -75,68 +61,58 @@ def remember_asked(sid: str, keys: tuple[str, ...]) -> None:
     sessions.save(sid, sess)
 
 
-def _worked(sess: dict, cwd: str, own: bool) -> dict[Path, Path]:
-    out: dict[Path, Path] = {}
-    places = [Path(p) for p in sess.get("committed", [])]
-    if cwd and not own:
-        places.append(Path(cwd))
-    for p in places:
-        if p.exists():
-            root = gate.guarded_root(p) or gate._remote_root(p)
-            if root:
-                out.setdefault(root, p)
-    return out
+def _team_of(st, sid: str):
+    from stella import state
 
-
-def _ahead(where: Path) -> int:
-    n = gate._git_out(where, "rev-list", "--count", "HEAD", "--not", "--remotes")
-    return int(n) if n.isdigit() else 0
-
-
-def _push_command(root: Path, where: Path) -> str:
-    branch = gate._git_out(where, "rev-parse", "--abbrev-ref", "HEAD")
-    if branch in {"", "HEAD"}:
-        return (f"HEAD in {root} is on no branch: put the commits on one (`git -C {root} switch -c <name>`), "
-                f"then run `{CALL} push --plan -C {root}`")
-    return f"run `{CALL} push --plan -C {root}` and follow it"
+    return st.teams.get(os.environ.get("STELLA_TEAM") or "") or state.team_for_session(st, sid)
 
 
 def check(sid: str, cwd: str, own: bool = False, may_block: bool = True) -> Result:
+    """Ask a session to push only the commits THAT SESSION made (see `provenance`): never another session's or effort's,
+    never one a remote branch has, never one the owner approved or deferred. A bystander in the same repo is never asked."""
+    from stella import provenance, state
+
     res = Result()
     owner = settings().owner
+    st = state.fold()
+    w = provenance.who(st, sid, _team_of(st, sid))
     sess = sessions.load(sid)
     reminded = sess.setdefault("reminded", [])
     lines: list[str] = []
-    for root, where in _worked(sess, cwd, own).items():
-        n = _ahead(where)
-        head = gate._head(where)
-        key = f"{root}@{head}"
-        if not n or not head or gate.is_approved(root, where):
+    for p in provenance.owned_pushes(st, w, skip_known=False):
+        br = p.branch
+        if br.tip in provenance._approved_shas() or br.tip in {k.rsplit("@", 1)[-1] for k in _deferred()}:
             continue
-        branch = gate._git_out(where, "rev-parse", "--abbrev-ref", "HEAD")
-        what = f"{root.name} {branch if branch != 'HEAD' else head[:7]} {head[:7]}"
-        if is_deferred(key):
-            continue
+        root = (br.where or br.repo).resolve()
+        key = f"{root}@{br.tip}"
+        what = f"{root.name} {br.name} {br.tip[:7]}"
+        n = p.n
         if key in sess.get("asked", []):  # the prompt appeared and the push did not happen: the owner said no
             _record_deferred(key)
-            ledger.append("push_deferred", by="hook", repo=root.name, path=str(root), sha=head, branch=branch,
-                          session=sid, text=f"not pushed, deferred: {what}")
-            key_alert = f"push-deferred:{root.name}@{head}"
-            ledger.append("alert", by="hook", key=key_alert, path=str(root), sha=head,
-                          text=f"deferred push: {root.name} {branch if branch != 'HEAD' else head[:7]} "
-                               f"({n} commit{'s' if n != 1 else ''})")
+            tip = provenance.recs().get(br.tip)
+            ledger.append("push_deferred", by="hook", repo=root.name, path=str(root), sha=br.tip, branch=br.name,
+                          session=sid, made_by=(tip.session if tip else None), made_by_team=(tip.team if tip else None),
+                          text=f"not pushed, deferred: {what}")
+            ledger.append("alert", by="hook", key=f"push-deferred:{root.name}@{br.tip}", path=str(root), sha=br.tip,
+                          text=f"deferred push: {root.name} {br.name} ({n} commit{'s' if n != 1 else ''})")
             res.deferred.append(f"not pushed, deferred: {what} ({n} commit{'s' if n != 1 else ''})")
             continue
         if key in reminded or not may_block:
             res.outstanding.append(what)
             continue
         reminded.append(key)
-        lines.append(f"- {root.name}: {n} unpushed commit{'s' if n != 1 else ''} at {head[:7]}; "
-                     + _push_command(root, where))
+        if br.name == "HEAD":
+            lines.append(f"- {root.name}: {n} unpushed commit{'s' if n != 1 else ''} you made on no branch: put them on one "
+                         f"(`git -C {root} switch -c <name>`), then run `{CALL} push --plan -C {root}` and follow it")
+        elif br.where:
+            lines.append(f"- {root.name}: {n} unpushed commit{'s' if n != 1 else ''} you made, at {br.tip[:7]}; run `{CALL} push --plan -C {root}` and follow it")
+        else:
+            lines.append(f"- {root.name}: {n} unpushed commit{'s' if n != 1 else ''} you made on {br.name}, which is checked out nowhere: "
+                         f"check it out in a worktree (`wta`), then run `{CALL} push --plan -C <that directory>`")
     sessions.save(sid, sess)
     if lines:
         res.block = (
-            "You have unpushed commits in repos you worked in. Push now, as the last step of your work. Each line below gives "
+            "You have unpushed commits that you made. Push now, as the last step of your work. Each line below gives "
             f"`{CALL} push --plan -C <repo>`: it prints {owner}'s question (Claude Code's own dropdown: Push, with what is sent in "
             "its preview pane, or Defer). Ask it with AskUserQuestion exactly as it says; if they pick Push, run "
             f"`{CALL} push -C <repo>` as that one command and nothing else in it (no second prompt appears). Do not ask in chat "
@@ -152,7 +128,8 @@ def clear_pushed(st) -> list[str]:
     for ev in st.push_deferred:
         key = f"push-deferred:{ev.get('repo')}@{ev.get('sha')}"
         path, sha = ev.get("path"), ev.get("sha")
-        if key in st.alerts and path and sha and gate._git_out(Path(path), "branch", "-r", "--contains", sha):
+        gone = bool(path and sha and not gate._git_out(Path(path), "cat-file", "-t", sha))  # amended or squashed away
+        if key in st.alerts and path and sha and (gone or gate._git_out(Path(path), "branch", "-r", "--contains", sha)):
             ledger.append("clear_alert", by="hook", key=key)
             st.alerts.pop(key, None)
             cleared.append(key)

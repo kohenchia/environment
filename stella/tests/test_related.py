@@ -1,84 +1,140 @@
-"""Only changes a session could have made keep it open (`related.check`, used by gg, the Stop hook, tyfp, the sweep and
-`wrapup <team>` through status.blockers / wrapup.repo_problem). Temp repos only; no tmux."""
+"""An uncommitted file is a session's business only if that session wrote it last (`related.check`, used by gg, the Stop hook,
+tyfp, the sweep and `wrapup <team>` through status.blockers). Temp repos only; no tmux."""
 
 import datetime as dt
 import json
-import os
-import time
 
-from test_gate import _commit
+from test_gate import _writes
 from test_status_gg import SESS, _stop
 from test_wrapup import _repo, _sweep, led  # noqa: F401 - fixtures
 
 DONE = "Done.\n\n" + "━" * 40 + "\n🟩 **ALL DONE** — ready to wrap up. Type `gg`."
 
 
-def _old(path, hours=5):
-    t = time.time() - hours * 3600
-    os.utime(path, (t, t), follow_symlinks=False)
-
-
-def _writes(env, sid, path, ago_s=5):
-    """A transcript in which session `sid` wrote `path`."""
+def _session_lines(env, sid, *tools, ago_s=5, sub=None):
     ts = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=ago_s)).isoformat().replace("+00:00", "Z")
     d = env.tmp / "transcripts" / "-p"
+    if sub:  # a subagent's transcript sits in the lead's directory
+        d = d / sub / "subagents"
     d.mkdir(parents=True, exist_ok=True)
-    line = {"type": "assistant", "timestamp": ts, "message": {"content": [
-        {"type": "tool_use", "name": "Write", "input": {"file_path": str(path), "content": "x"}}]}}
-    (d / f"{sid}.jsonl").write_text(json.dumps(line) + "\n")
+    name = "agent-1" if sub else sid
+    (d / f"{name}.jsonl").write_text("".join(json.dumps({"type": "assistant", "timestamp": ts, "cwd": str(env.tmp), "message": {
+        "content": [{"type": "tool_use", "name": n, "input": i}]}}) + "\n" for n, i in tools))
 
 
-def test_old_untracked_symlinks_do_not_block(env, led):
+def test_untracked_symlinks_and_installed_claude_files_are_nobodys_work(env, led):
     r = _repo(env)
     led.team(dir=str(r))
-    (r / ".claude").mkdir()
-    for n in ("agents", "mlc", "skills"):
-        (r / ".claude" / n).symlink_to(env.tmp)
-        _old(r / ".claude" / n)
-    (r / "old.txt").write_text("stray\n")
-    _old(r / "old.txt")
-    assert _stop(env, DONE, r) == {}
-
-
-def test_a_fresh_untracked_symlink_does_not_block_either(env, led):
-    r = _repo(env)
-    led.team(dir=str(r))
+    (r / ".claude" / "skills").mkdir(parents=True)
+    (r / ".claude" / "skills" / "f.md").write_text("installed\n")
     (r / "link").symlink_to(env.tmp)
     assert _stop(env, DONE, r) == {}
 
 
-def test_a_tracked_file_the_session_edited_blocks_and_is_named(env, led):
+def test_a_file_the_session_wrote_blocks_and_is_named(env, led):
     r = _repo(env)
     led.team(dir=str(r))
     (r / "a.txt").write_text("edited\n")
     (r / "b.txt").write_text("new\n")
+    _writes(env, SESS, r / "a.txt")
+    _writes(env, SESS, r / "b.txt")
     reason = _stop(env, DONE, r)["reason"]
     assert "uncommitted in proj: " in reason and "a.txt" in reason and "b.txt" in reason
 
 
-def test_a_tracked_change_older_than_the_session_does_not_block(env, led):
+def test_a_changed_file_nobody_is_known_to_have_written_blocks_no_one(env, led):
     r = _repo(env)
-    (r / "a.txt").write_text("edited long ago\n")
-    _old(r / "a.txt")
     led.team(dir=str(r))
-    assert _stop(env, DONE, r) == {}
+    (r / "a.txt").write_text("changed by hand\n")
+    assert _stop(env, DONE, r) == {}  # not its business; Stella lists it as unowned
+    assert "unowned: proj 1 uncommitted file (no known writer)" in env.run("attention").stdout
 
 
-def test_a_file_another_teams_window_edited_does_not_block(env, led):
+def test_a_file_another_live_team_wrote_does_not_block_a_bystander(env, led):
     r = _repo(env)
     led.team(dir=str(r))
     led.team(name="beta", dir=str(r), done_ago=None)  # running
     (r / "a.txt").write_text("edited by beta\n")
-    _writes(env, "sess-beta", (r / "a.txt").resolve())
+    _writes(env, "sess-beta", r / "a.txt")
     assert _stop(env, DONE, r) == {}
+    assert "unowned" not in env.run("attention").stdout  # a live team has it
     (r / "mine.txt").write_text("edited by alpha\n")
-    assert "mine.txt" in _stop(env, DONE, r)["reason"]
+    _writes(env, SESS, r / "mine.txt")
+    reason = _stop(env, DONE, r)["reason"]
+    assert "mine.txt" in reason and "a.txt" not in reason
+
+
+def test_the_last_writer_owns_the_file(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    led.team(name="beta", dir=str(r), done_ago=None)
+    (r / "a.txt").write_text("x\n")
+    _writes(env, SESS, r / "a.txt", ago_s=60)  # alpha wrote it first
+    _writes(env, "sess-beta", r / "a.txt", ago_s=5)  # beta last
+    assert _stop(env, DONE, r) == {}
+    _writes(env, SESS, r / "a.txt", ago_s=1)  # and alpha once more
+    assert "a.txt" in _stop(env, DONE, r)["reason"]
+
+
+def test_a_files_closed_writer_does_not_block_the_bystander_and_becomes_an_unowned_item(env, led):
+    r = _repo(env)
+    led.team(name="docs", dir=str(r))
+    led.add("reaped", ago=120, team="docs")  # wrapped up two hours ago
+    led.team(name="tracker", dir=str(r))
+    (r / "a.txt").write_text("docs effort left this\n")
+    _writes(env, "sess-docs", r / "a.txt")
+    out = env.run("wrapup", "tracker", "--dry-run").stdout
+    assert "would wrap up tracker" in out
+    att = env.run("attention").stdout
+    assert "unowned: proj 1 uncommitted file (from the docs effort, closed 2h ago): a.txt" in att
+
+
+def test_a_subagents_writes_are_its_leads(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    (r / "a.txt").write_text("by a subagent\n")
+    _session_lines(env, "ignored", ("Write", {"file_path": str(r / "a.txt"), "content": "x"}), sub=SESS)
+    assert "a.txt" in _stop(env, DONE, r)["reason"]
+
+
+def test_a_redirect_a_sed_in_place_and_an_rm_count_as_writes(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    (r / "gone.txt").write_text("y\n")
+    env.git(r, "add", ".")
+    env.git(r, "commit", "-q", "-m", "more")
+    env.git(r, "push", "-q")
+    (r / "gone.txt").unlink()
+    (r / "out.txt").write_text("x\n")
+    (r / "a.txt").write_text("sed\n")
+    _session_lines(env, SESS, ("Bash", {"command": f"echo x > {r}/out.txt"}), ("Bash", {"command": f"sed -i 's/a/b/' {r}/a.txt"}),
+                   ("Bash", {"command": f"rm {r}/gone.txt"}))
+    reason = _stop(env, DONE, r)["reason"]
+    assert "out.txt" in reason and "a.txt" in reason and "gone.txt" in reason
+
+
+def test_a_resumed_session_keeps_the_teams_earlier_writes(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    led.add("started", ago=1, team="alpha", session="sess-alpha-2")  # resumed under a new id
+    (r / "a.txt").write_text("written before the resume\n")
+    _writes(env, "sess-alpha", r / "a.txt")
+    assert "a.txt" in _stop(env, DONE, r, sid="sess-alpha-2")["reason"]
+
+
+def test_a_session_that_only_read_the_repo_is_never_blocked(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    (r / "a.txt").write_text("someone else\n")
+    _session_lines(env, SESS, ("Bash", {"command": f"cd {r} && git status"}), ("Read", {"file_path": str(r / "a.txt")}))
+    assert _stop(env, DONE, r) == {}
 
 
 def test_the_sweep_uses_the_same_rule(env, led):
     r = _repo(env)
     led.team(dir=str(r))
     (r / "a.txt").write_text("edited\n")
+    _writes(env, SESS, r / "a.txt")
     assert "uncommitted in proj: a.txt" in _sweep(env)
 
 
@@ -89,56 +145,10 @@ def test_the_sweep_wraps_up_past_an_untracked_symlink(env, led):
     assert "wrapped up alpha" in _sweep(env)
 
 
-def test_an_unpushed_commit_still_blocks(env, led):
-    r = _repo(env)
-    led.team(dir=str(r))
-    _commit(env, r)
-    assert "unpushed commits" in _stop(env, DONE, r)["reason"]
-
-
 def test_what_was_left_alone_is_one_calm_line():
     from stella import related
 
-    r = related.Result(left={"untracked": 3})
-    assert related.left_line([("proj", r)]) == "left alone: 3 untracked files in proj, not from this session"
+    r = related.Result(left={"foreign": 2, "unowned": 1, "untracked": 3})
+    assert related.left_line([("proj", r)]) == "left alone: 3 uncommitted files in proj, not from this session"
+    assert related.left_line([("proj", related.Result(left={"untracked": 3}))]) == ""
     assert related.left_line([("proj", related.Result())]) == ""
-
-
-def _session_lines(env, sid, *tools, ago_s=5):
-    ts = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=ago_s)).isoformat().replace("+00:00", "Z")
-    d = env.tmp / "transcripts" / "-p"
-    d.mkdir(parents=True, exist_ok=True)
-    (d / f"{sid}.jsonl").write_text("".join(json.dumps({"type": "assistant", "timestamp": ts, "message": {"content": [
-        {"type": "tool_use", "name": n, "input": i}]}}) + "\n" for n, i in tools))
-
-
-def test_an_old_untracked_directory_of_regular_files_does_not_block_a_session_that_worked_from_the_repo(env, led):
-    r = _repo(env)
-    led.team(dir=str(r))
-    for d in (".claude/agents", ".claude/skills/x"):
-        (r / d).mkdir(parents=True)
-        (r / d / "f.md").write_text("installed\n")
-        _old(r / d / "f.md")
-    _session_lines(env, SESS, ("Bash", {"command": f"cd {r} && git status"}), ("Bash", {"command": f"git -C {r} log -1"}))
-    assert _stop(env, DONE, r) == {}
-
-
-def test_a_file_the_session_wrote_blocks_even_beside_old_untracked_ones(env, led):
-    r = _repo(env)
-    led.team(dir=str(r))
-    (r / ".claude" / "agents").mkdir(parents=True)
-    (r / ".claude" / "agents" / "f.md").write_text("installed\n")
-    _old(r / ".claude" / "agents" / "f.md")
-    (r / "notes.md").write_text("mine\n")
-    _session_lines(env, SESS, ("Write", {"file_path": str(r / "notes.md"), "content": "mine"}))
-    reason = _stop(env, DONE, r)["reason"]
-    assert "uncommitted in proj: notes.md" in reason and ".claude" not in reason
-
-
-def test_a_file_written_with_a_redirect_blocks(env, led):
-    r = _repo(env)
-    led.team(dir=str(r))
-    (r / "out.txt").write_text("x\n")
-    _old(r / "out.txt", hours=0)
-    _session_lines(env, SESS, ("Bash", {"command": f"echo x > {r}/out.txt"}))
-    assert "out.txt" in _stop(env, DONE, r)["reason"]

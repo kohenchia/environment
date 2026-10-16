@@ -226,8 +226,13 @@ def _close_queued() -> None:
 
 def sweep_wrapup() -> None:
     """Wrap up the finished teams that are clean (see wrapup.py). Plain Python; no model runs. A failure
-    is logged and raised once as an alert, never every minute."""
-    from stella import state, wrapup
+    is logged and raised once as an alert, never every minute. The same pass keeps the list of unowned business fresh."""
+    from stella import provenance, state, wrapup
+
+    try:
+        provenance.refresh()
+    except Exception as e:  # noqa: BLE001
+        print(f"provenance error: {type(e).__name__}: {e}", flush=True)
 
     try:  # with wrapup_auto off only the gone teams (no window, no process) are recorded: nothing is closed
         wrapped, _ = wrapup.sweep(gone_only=not settings().wrapup_auto)
