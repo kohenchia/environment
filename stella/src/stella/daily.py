@@ -20,6 +20,7 @@ import json
 import os
 import re
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -237,6 +238,38 @@ You are Stella's reflection pass. Read: the work digest {digest}; the priorities
 Do not ask questions; this run is unattended."""
 
 
+def run_extension_jobs(timeout_default: int = 300) -> list[tuple[str, str]]:
+    """The nightly jobs extensions declare (`nightly = "nightly.toml"`, one `[[job]]` with `name`, `cmd`, optional
+    `timeout`). A job's last output line is its result; it goes to the ledger and the morning digest. A job that
+    fails or times out raises an alert instead of stopping the nightly."""
+    out: list[tuple[str, str]] = []
+    for ext in extensions.load():
+        f = ext.file("nightly")
+        if not f or not f.exists():
+            continue
+        try:
+            jobs = tomllib.loads(f.read_text()).get("job", [])
+        except tomllib.TOMLDecodeError as e:
+            ledger.append("alert", by="scheduler", key=f"nightly-job:{ext.name}", text=f"{ext.name}: bad nightly.toml: {e}")
+            continue
+        for job in jobs:
+            name = f"{ext.name}: {job['name']}"
+            try:
+                r = subprocess.run(os.path.expandvars(job["cmd"]), shell=True, capture_output=True, text=True,
+                                   timeout=job.get("timeout", timeout_default), cwd=str(Path.home()))
+                lines = [ln for ln in r.stdout.splitlines() if ln.strip()]
+                line = lines[-1].strip() if lines else (r.stderr.strip().splitlines() or [""])[-1]
+                if r.returncode != 0:
+                    line = f"FAILED (exit {r.returncode}): {line}"
+            except subprocess.TimeoutExpired:
+                r, line = None, "FAILED (timeout)"
+            ledger.append("note", by="scheduler", text=f"nightly job {name}: {line}")
+            if line.startswith("FAILED"):
+                ledger.append("alert", by="scheduler", key=f"nightly-job:{name}", text=f"nightly job {name}: {line}")
+            out.append((name, line))
+    return out
+
+
 def run_nightly(win: Window, claude: str | None = None) -> list[str]:
     date = win.label
     report: list[str] = []
@@ -263,6 +296,8 @@ def run_nightly(win: Window, claude: str | None = None) -> list[str]:
         except leak.DenylistMissing as e:
             ledger.append("alert", by="scheduler", key="leak:denylist", text=f"denylist missing: {e}")
             report.append(f"denylist missing: {e}")
+    jobs = run_extension_jobs()
+    report += [f"{name}: {line[:80]}" for name, line in jobs]
     p = digest(win)
     morning = store_dir() / "digests" / f"{date + dt.timedelta(days=1):%Y-%m-%d}-morning.md"
     prompt = REFLECT.format(mark=MARK, date=date, digest=p, priorities=store_dir() / "priorities.md",
@@ -271,6 +306,10 @@ def run_nightly(win: Window, claude: str | None = None) -> list[str]:
     report.append(f"reflection: exit {rc}")
     if rc == 0 and morning.exists():
         ledger.append("alert", by="scheduler", key=f"morning:{morning.stem}", text=f"morning digest ready: {morning}")
+    if jobs:  # after the reflection, which writes the digest: the jobs' lines are appended, never left to the model
+        morning.parent.mkdir(parents=True, exist_ok=True)
+        with morning.open("a") as f:
+            f.write("\n## Nightly jobs\n" + "".join(f"- {name}: {line}\n" for name, line in jobs))
     ledger.append("note", by="scheduler", text=f"nightly for {date}: " + "; ".join(report) + f"; window {win.describe()}")
     return report
 

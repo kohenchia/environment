@@ -15,6 +15,7 @@ Each extension directory holds `stella-extension.toml`:
     playbook = "playbook.md"        # optional
     daily = "daily.md"              # optional: prompt template for the daily log
     checks = "checks.toml"          # optional: extra `stella doctor` checks
+    nightly = "nightly.toml"        # optional: [[job]] name, cmd, timeout; run at the nightly, last line to ledger + digest
     [settings]                      # optional: merged into the machine settings
     [leak_guard]                    # optional
     protect = ["~/some/repo"]
