@@ -177,12 +177,24 @@ def cmd_reap(a):
         if t.status not in {"done", "ended"} and not a.force:
             print(f"{name} is {t.status}; not closing (use --force)")
             continue
-        srv = tmuxctl.server_for_socket(st_socket(name))
-        if srv and t.window and tmuxctl.window_exists(srv, t.window):
-            srv.run("kill-window", "-t", t.window, check=False)
+        # The socket recorded at launch can be stale (the launching shell's tmux was a different server):
+        # fall back to whichever server is reachable now, and look the window up by name as well as by id.
+        srv = tmuxctl.server_for_socket(st_socket(name)) or tmuxctl.find_server()
+        window = t.window if (srv and t.window and tmuxctl.window_exists(srv, t.window)) else (
+            tmuxctl.find_window(srv, name) if srv else None
+        )
+        if window:
+            srv.run("kill-window", "-t", window, check=False)
+        still_open = bool(srv and window and tmuxctl.window_exists(srv, window))
         ledger.append("ack", by="cli", key=f"team:{name}:{t.status}")
         ledger.append("reaped", by="cli", team=name)
-        print(f"closed {name}")
+        if srv is None and t.window:
+            print(f"recorded {name} as closed, but tmux is not reachable from here, so its window {t.window} is still open"
+                  " (the command sandbox blocks tmux; run `stella reap` where tmux is reachable)")
+        elif still_open:
+            print(f"recorded {name} as closed, but its window {window} is still open")
+        else:
+            print(f"closed {name}")
 
 
 def cmd_report(a):

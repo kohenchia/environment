@@ -176,3 +176,16 @@ def test_launch_refuses_the_home_directory_unless_asked_for_it(env, tmux, fake_c
     assert r.returncode != 0 and "--dir" in (r.stderr + r.stdout)
     ok = env.run("launch", "builder", "--order", "1", "--name", "bh2", "--dir", "~", env=tmux, cwd=env.home)
     assert "launched" in ok.stdout
+
+
+def test_reap_closes_the_window_of_a_finished_team(env, tmux, fake_claude):
+    sock = tmux["TMUX"].split(",")[0]
+    env.say("A", "S, build t")
+    env.run("launch", "builder", "--order", "1", "--name", "bt", env=tmux)
+    _wait(fake_claude / "args.txt")
+    env.run("done", "bt", "finished")
+    r = env.run("reap", "bt", env=tmux)
+    assert "closed bt" in r.stdout
+    windows = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", "work", "-F", "#{window_name}"],
+                             capture_output=True, text=True).stdout.split()
+    assert "bt" not in windows
