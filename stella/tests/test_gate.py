@@ -432,6 +432,7 @@ def _question(env, repo):
 
 @pytest.mark.parametrize("response", [
     {"answers": {"Q": "Push"}},
+    {"questions": [{"question": "Q"}], "answers": {"Q": "Push"}, "annotations": {"Q": {"preview": "· x"}}},  # the shape Claude Code sends
     'User has answered your questions: "Q"="Push" selected preview: x. You can now continue.',
     {"questions": [{"question": "Q", "options": [{"label": "Push"}, {"label": "Defer"}]}], "answers": {"Q": "Push"}},
 ])
