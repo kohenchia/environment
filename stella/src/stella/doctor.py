@@ -77,7 +77,8 @@ def checks() -> list[tuple[str, str, str]]:
     for root in gate.guarded_repos():
         st_lines = gate.status(root)
         bad = [l for l in st_lines if l.startswith("FAIL")]
-        add(FAIL if bad else OK, f"push gate {root.name}", "; ".join(l[5:] for l in bad) or "hooks and push URL in place")
+        add(FAIL if bad else OK, f"guarded repo {root.name}", "; ".join(l[5:] for l in bad)
+            or "commit hooks in place; a push from a Claude session asks the owner first")
 
     g = leak.guard()
     if g.configured:
@@ -88,7 +89,7 @@ def checks() -> list[tuple[str, str, str]]:
             add(FAIL, "leak guard denylist", str(e))
         for root in g.protect:
             st_lines = gate.status(root) if root.exists() else ["FAIL missing"]
-            bad = [l for l in st_lines if "hook" in l and l.startswith("FAIL")]
+            bad = [l for l in st_lines if l.startswith("FAIL") and any(w in l for w in ("commit", "hooksPath", "missing"))]
             add(FAIL if bad else OK, f"leak guard hooks {root.name}", "; ".join(bad))
 
     for e in exts:

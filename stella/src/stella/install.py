@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from stella import canon, daily, gate
+from stella import canon, gate
 from stella.config import BIN, CORE_ROOT, settings
 
 MARKETPLACE = "stella-local"
@@ -52,7 +52,6 @@ def install(plugin: bool = True, gate_: bool = True) -> list[str]:
     if gate_:
         for repo in gate.guarded_repos():
             out += [f"gate {repo.name}: {l}" for l in gate.install(repo)]
-        daily.record_baseline()
     if plugin:
         out += install_plugin()
     return out

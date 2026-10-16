@@ -46,8 +46,6 @@ class Settings:
     stale_days: int = 7
     brief_lines: int = 60
     delta_lines: int = 15
-    push_approval_minutes: int = 60
-    push_intent_minutes: int = 15
     guarded_repos: list[Path] = field(default_factory=list)
     # Environment variables forwarded from the launcher into every team session it opens.
     pass_env: list[str] = field(default_factory=list)
@@ -97,8 +95,6 @@ def settings() -> Settings:
         "stale_days",
         "brief_lines",
         "delta_lines",
-        "push_approval_minutes",
-        "push_intent_minutes",
     ):
         if key in data:
             setattr(s, key, data[key])
@@ -117,7 +113,7 @@ def settings() -> Settings:
 
 @cache
 def own_repo() -> Path | None:
-    """The git checkout the core lives in. The push gate always guards it."""
+    """The git checkout the core lives in. It is always a guarded repo."""
     try:
         out = subprocess.run(
             ["git", "-C", str(CORE_ROOT), "rev-parse", "--show-toplevel"],

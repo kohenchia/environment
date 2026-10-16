@@ -5,7 +5,7 @@
 * `run_daily(date)`: a headless session turns the digest into the daily log. An
   extension supplies the prompt (where the log lives and which skill writes it);
   without one, it writes a journal entry into the store.
-* `run_nightly(date)`: denylist rebuild, leak sweep, push audit, and a reflection
+* `run_nightly(date)`: denylist rebuild, leak sweep, and a reflection
   that writes the morning digest and learning proposals.
 """
 
@@ -18,7 +18,7 @@ import re
 import subprocess
 from pathlib import Path
 
-from stella import extensions, gate, leak, ledger, notify, passenv
+from stella import extensions, leak, ledger, notify, passenv
 from stella.config import CALL, settings, store_dir
 
 MARK = "[stella-job]"
@@ -214,7 +214,6 @@ def run_nightly(date: dt.date, claude: str | None = None) -> list[str]:
         except leak.DenylistMissing as e:
             ledger.append("alert", by="scheduler", key="leak:denylist", text=f"denylist missing: {e}")
             report.append(f"denylist missing: {e}")
-    report += gate_audit()
     p = digest(date)
     morning = store_dir() / "digests" / f"{date + dt.timedelta(days=1):%Y-%m-%d}-morning.md"
     prompt = REFLECT.format(mark=MARK, date=date, digest=p, priorities=store_dir() / "priorities.md",
@@ -226,39 +225,3 @@ def run_nightly(date: dt.date, claude: str | None = None) -> list[str]:
     ledger.append("note", by="scheduler", text=f"nightly for {date}: " + "; ".join(report))
     return report
 
-
-def gate_audit() -> list[str]:
-    """Any remote branch head of a guarded repo that no approved push produced is an alert."""
-    out = []
-    pushed = {e.get("sha") for e in ledger.events() if e["type"] == "push"}
-    base_file = store_dir() / "gate-baseline.json"
-    baseline = json.loads(base_file.read_text()) if base_file.exists() else {}
-    for root in gate.guarded_repos():
-        subprocess.run(["git", "-C", str(root), "fetch", "--quiet", "--all"], capture_output=True, timeout=120)
-        refs = subprocess.run(["git", "-C", str(root), "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes"],
-                              capture_output=True, text=True).stdout.splitlines()
-        for line in refs:
-            ref, sha = line.split()
-            if ref.endswith("/HEAD"):
-                continue
-            ok = sha in pushed or baseline.get(str(root), {}).get(ref) == sha
-            if not ok and baseline.get(str(root), {}).get(ref):
-                ok = subprocess.run(["git", "-C", str(root), "merge-base", "--is-ancestor", sha,
-                                     baseline[str(root)][ref]]).returncode == 0
-            if not ok:
-                ledger.append("alert", by="scheduler", key=f"gate:{root.name}:{ref}",
-                              text=f"{root.name} {ref} is at {sha[:7]}, which no approved push produced")
-                out.append(f"gate audit {root.name} {ref}: UNAPPROVED {sha[:7]}")
-        out.append(f"gate audit {root.name}: {len(refs)} refs checked")
-    return out
-
-
-def record_baseline() -> None:
-    data = {}
-    for root in gate.guarded_repos():
-        refs = subprocess.run(["git", "-C", str(root), "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes"],
-                              capture_output=True, text=True).stdout.splitlines()
-        data[str(root)] = dict(line.split() for line in refs)
-    p = store_dir() / "gate-baseline.json"
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=1))

@@ -8,7 +8,7 @@
   after /compact). In a team window, record which session is the lead. Anywhere,
   if the scheduler is down and a run is overdue, start a catch-up pass.
 * SessionEnd: a team lead that exits without `stella done` raises an attention item.
-* PreToolUse: the push gate and the leak guard.
+* PreToolUse: the push prompt (a push from a guarded repo asks the owner first) and the leak guard.
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ import sys
 import traceback
 
 from stella import address, brief, context, gate, leak, ledger, notify, run, scheduler, sessions, state, targets
-from stella.config import settings
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -33,9 +32,18 @@ def _emit(event: str, text: str) -> None:
     print(json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}))
 
 
-def _deny(reason: str) -> None:
+def _decide(decision: str, reason: str) -> None:
     print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}))
+        "hookEventName": "PreToolUse", "permissionDecision": decision, "permissionDecisionReason": reason}}))
+
+
+def _deny(reason: str) -> None:
+    _decide("deny", reason)
+
+
+def _ask(reason: str) -> None:
+    """Claude Code shows the owner its own yes/no prompt for this tool call."""
+    _decide("ask", reason)
 
 
 def _label(data: dict) -> str:
@@ -46,35 +54,6 @@ def _label(data: dict) -> str:
         return f"team {team}"
     cwd = data.get("cwd") or ""
     return f"{os.path.basename(cwd) or '?'}:{(data.get('session_id') or '')[:6]}"
-
-
-_NEG = re.compile(r"\b(don'?t|do not|never|not|no|stop|cancel|hold|wait)\b", re.I)
-
-
-def _push_intent(text: str, data: dict) -> dict | None:
-    body = address.strip_address(text)
-    if _NEG.search(body):
-        return None
-    for root in gate.guarded_repos():
-        name = re.escape(gate.alias(root))
-        if re.match(rf"^(?:(?:please|ok|okay|now|go ahead and)[,\s]+)*push\b[^.?!\n]{{0,40}}\b{name}\b", body, re.I):
-            branch = gate.current_branch(root)
-            return {"repo": gate.alias(root), "sha": gate.head(root, branch), "branch": branch}
-    return None
-
-
-def _affirmed_question(text: str, session: str, st: state.State) -> dict | None:
-    if not address.is_affirmative(text) or not st.push_questions:
-        return None
-    q = st.push_questions[-1]
-    if q.get("session") not in {session, None} and not run.is_self():
-        return None
-    if (ledger.now() - ledger.parse_ts(q)).total_seconds() > settings().push_intent_minutes * 60:
-        return None
-    root = gate.resolve_alias(q["repo"])
-    if gate.head(root, q["branch"]) != q["sha"]:
-        return None
-    return {"repo": q["repo"], "sha": q["sha"], "branch": q["branch"], "question": q["seq"]}
 
 
 def prompt(data: dict) -> None:
@@ -103,16 +82,12 @@ def prompt(data: dict) -> None:
         return
 
     try:
-        st_before = state.fold()
-        team_names = set(st_before.teams)
+        team_names = set(state.fold().teams)
         kind = address.kind(text)
         order = ledger.append(
             "order", by="hook", text=text, kind=kind, session=sid, session_label=_label(data),
             cwd=data.get("cwd"), targets=targets.extract(text, team_names),
         )
-        intent = _push_intent(text, data) or _affirmed_question(text, sid, st_before)
-        if intent:
-            ledger.append("push_intent", by="hook", order=order["seq"], session=sid, **intent)
         st = state.fold()
         delta = brief.delta(sid, sess.get("cursor", 0))
         conflicts = brief.conflict_lines(st, order["seq"]) if kind == "instruction" else []
@@ -127,8 +102,6 @@ def prompt(data: dict) -> None:
     elif not own:
         parts.append("This turn is addressed to you, Stella (follow the `stella` skill). After it, the owner is talking to the session again.")
     parts.append(f"Recorded as ledger #{order['seq']} ({kind}).")
-    if intent:
-        parts.append(f"Recorded as an explicit push approval for {intent['repo']} at {intent['sha'][:7]}: run `~/.local/bin/stella push {intent['repo']}`.")
     if delta:
         parts.append("Since this session last looked, other sessions recorded:\n" + "\n".join(f"- {d}" for d in delta))
     if conflicts:
@@ -208,9 +181,6 @@ def pretool(data: dict) -> None:
     cwd = data.get("cwd") or os.getcwd()
     if tool == "Bash":
         cmd = ti.get("command", "")
-        for v in (gate.check_bash(cmd, cwd), gate.check_review_window(cmd)):
-            if v.deny:
-                return _deny(v.reason)
         g = leak.guard()
         if g.configured and _WRITEY.search(cmd):
             root = leak.protected_root(cwd, g) or next((r for r in g.protect if str(r) in cmd or str(r).replace(os.path.expanduser("~"), "~") in cmd), None)
@@ -218,12 +188,12 @@ def pretool(data: dict) -> None:
                 hit = _leak_hit(cmd, "command", g)
                 if hit:
                     return _deny(hit)
+        v = gate.check_bash(cmd, cwd)
+        if v.decision == "ask":
+            return _ask(v.reason)
         return
     if tool in {"Write", "Edit", "MultiEdit", "NotebookEdit"}:
         path = ti.get("file_path") or ti.get("notebook_path") or ""
-        v = gate.check_path_write(path)
-        if v.deny:
-            return _deny(v.reason)
         g = leak.guard()
         if g.configured and leak.protected_root(path, g):
             content = "\n".join(

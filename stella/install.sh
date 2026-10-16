@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install Stella on this machine: venv, `stella` on PATH, the store, the push gate on this repo, and
+# Install Stella on this machine: venv, `stella` on PATH, the store, the leak-guard commit hooks on this repo, and
 # the Claude Code plugin. Safe to re-run. Extensions install themselves afterwards (they call
 # `stella ext register <dir>`).
 set -eu

@@ -105,7 +105,7 @@ def env(tmp_path):
 
 @pytest.fixture
 def repo(env):
-    """A guarded repo with a bare remote, one pushed commit, and the gate installed."""
+    """A guarded repo with a bare remote, one pushed commit, and `stella gate install` run on it."""
     remote = env.tmp / "remote.git"
     subprocess.run(["git", "init", "-q", "--bare", str(remote)], check=True, env=env.env)
     r = env.tmp / "repos" / "dotfiles"

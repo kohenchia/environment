@@ -60,15 +60,14 @@ def test_commit_guard_blocks_when_denylist_missing(env, repo):
     assert r.returncode != 0 and "denylist missing" in r.stderr
 
 
-def test_push_refuses_a_leak_even_with_approval(env, repo):
+def test_commit_guard_survives_reinstalling_the_gate(env, repo):
     _protected(env, repo)
-    # get a leak into history by skipping the commit hook, as a careless human might
+    env.run("gate", "install", "dotfiles")  # the migration off the old push gate keeps the commit hooks
     (repo / "c.md").write_text("Zorblax\n")
     env.git(repo, "add", ".")
-    env.git(repo, "commit", "-q", "--no-verify", "-m", "c")
-    env.say("A", "S, push dotfiles")
-    r = env.run("push", "dotfiles", check=False)
-    assert r.returncode != 0 and "leak" in r.stderr
+    r = env.git(repo, "commit", "-m", "c", check=False)
+    assert r.returncode != 0 and "LEAK GUARD" in r.stderr
+    assert env.git(repo, "log", "-1", "--format=%s").stdout.strip() == "init"
 
 
 def test_nightly_sweep_flags_canary(env, repo):

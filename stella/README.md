@@ -3,7 +3,7 @@
 Stella is a chief of staff for [Claude Code](https://docs.claude.com/en/docs/claude-code): a persona any
 session adopts when you address her, her own session (`stella run`) where everything you say is to her, and a
 small CLI that gives every session the same memory, opens a tmux window for each team she launches, and
-guards what gets pushed.
+asks you before any session pushes.
 
 ```
 you ──"S, build a tool that renames my photos"──▶ any session
@@ -24,8 +24,9 @@ you ──"S, build a tool that renames my photos"──▶ any session
 ```
 
 Needs `uv`, `tmux`, `git` and `claude`. It creates the venv, links `~/.local/bin/stella`, initialises
-the store (`~/.local/share/stella`, a local-only git repo), installs the push gate on this repository,
-and installs the `stella` plugin into Claude Code. Then, inside tmux:
+the store (`~/.local/share/stella`, a local-only git repo), installs the leak guard's commit hooks on
+this repository (and removes the old push gate's hooks and push URL), and installs the `stella` plugin
+into Claude Code. Then, inside tmux:
 
 ```
 stella run       # run Stella here (and the scheduler in the background)
@@ -51,9 +52,9 @@ stella doctor    # check everything
 | **Registry** | `teams.toml` here and in each extension. Entries point at the team's own skill and CLI (`stella team <name>` reads them live), so Stella drives teams through their interface |
 | **Credentials** (`pass_env`) | Variables named in `pass_env` (say, a token for a shared quota) are either on or off for every session Stella starts: team windows, her own session, the scheduler's runs. `stella run` sets the switch from the environment it starts in; off removes them even if tmux has them; on takes each value from the caller's environment, else `<pass_env_dir>/<NAME>`. `stella pass-env on\|off --respawn` switches mid-day and restarts running teams (and Stella) in place, resuming their conversations |
 | **Attention** | Finished or blocked teams, stale orders, nightly alerts and proposals. A finished team also raises a desktop notification |
-| **Scheduler** | A background process started by `stella run` from your terminal (so it has your terminal's file access); no window. Runs the daily log at `daily_time`, then the nightly jobs (leak sweep, push audit, reflection → morning digest and learning proposals). If it isn't running when a run is due, the next Claude session that starts runs one catch-up pass |
+| **Scheduler** | A background process started by `stella run` from your terminal (so it has your terminal's file access); no window. Runs the daily log at `daily_time`, then the nightly jobs (leak sweep, reflection → morning digest and learning proposals). If it isn't running when a run is due, the next Claude session that starts runs one catch-up pass |
 | **Canon** (`store/canon.md`, `cases.toml`) | Your judgment, as numbered principles with evidence, replayed by `stella eval`. Only you accept changes; the `stella-curator` agent writes them |
-| **Push gate** | Nothing is pushed from this repo (or any guarded repo) without you: `stella review-push <repo>` at a terminal, or telling Stella explicitly "S, push <repo>". Enforced by a tool hook, a `pre-push` hook and a blocked push URL; `stella push` is the only way through |
+| **Push prompt** | When a Claude session runs a command that pushes from this repo (or any guarded repo: `git push`, `gh pr create`, …), the tool hook asks Claude Code to show you its yes/no prompt first, naming the repo, the branch and how far it is ahead. Yes runs the push; no stops it. A `git push` you type in a terminal is plain git |
 | **Extensions** | Directories listed in `~/.config/stella/extensions.toml` that add teams, knowledge maps, persona and playbook addenda, doctor checks, the daily-log prompt, and leak-guard rules. The core never names one |
 
 ## Developing

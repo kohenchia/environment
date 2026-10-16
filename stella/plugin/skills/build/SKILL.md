@@ -43,6 +43,6 @@ and reports what fails. Fix and re-verify until clean.
 ## 5 · Finish
 
 - Commit locally with a message that says what and why. **Do not push**; pushing is the owner's call
-  (some repos are gated and will refuse).
+  (a push from a guarded repo prompts the owner to approve it).
 - `~/.local/bin/stella done <name> "<what changed, where (repo, branch, commit), how it was verified, what is
   left>"`.

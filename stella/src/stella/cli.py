@@ -140,8 +140,6 @@ def cmd_launch(a):
 def cmd_tell(a):
     from stella import tmuxctl
 
-    if a.team.startswith("stella-review"):
-        raise SystemExit("refusing: only the owner types into a push review")
     st = state.fold()
     t = st.teams.get(a.team)
     if t and t.window:
@@ -345,38 +343,13 @@ def cmd_eval(a):
     return 1 if r["regressions"] else 0
 
 
-def cmd_push(a):
-    from stella import gate
-
-    repo = gate.resolve_alias(a.repo)
-    ev = gate.push(repo, a.branch or gate.current_branch(repo))
-    print(f"pushed {ev['sha'][:7]} to {ev['ref']} (approval: {ev['approval']}); ledger #{ev['seq']}")
-
-
-def cmd_review_push(a):
-    from stella import gate
-
-    repo = gate.resolve_alias(a.repo)
-    return gate.review_push(repo, a.branch or gate.current_branch(repo))
-
-
-def cmd_push_question(a):
-    from stella import gate
-
-    repo = gate.resolve_alias(a.repo)
-    print(gate.push_question(repo, a.branch or gate.current_branch(repo), _session()))
-    print("Ask the owner exactly this. A plain yes from them (addressed to you) approves this head only.")
-
-
 def cmd_gate(a):
-    from stella import daily, gate
+    from stella import gate
 
     repos = [gate.resolve_alias(a.repo)] if a.repo else gate.guarded_repos()
     for r in repos:
         lines = gate.install(r) if a.action == "install" else gate.status(r)
-        print(f"{r}:\n  " + "\n  ".join(lines))
-    if a.action == "install":
-        daily.record_baseline()
+        print(f"{r}:\n  " + ("\n  ".join(lines) or "nothing to do"))
 
 
 def cmd_git_hook(a):
@@ -542,16 +515,8 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--why", required=True)
     sp = c("eval", cmd_eval, "Replay past decisions against the canon")
     sp.add_argument("case", nargs="*")
-    sp = c("push", cmd_push, "Push a guarded repo (needs an approval for the exact head)")
-    sp.add_argument("repo")
-    sp.add_argument("--branch")
-    sp = c("review-push", cmd_review_push, "(owner, at a terminal) review a guarded repo's diff, approve and push")
-    sp.add_argument("repo")
-    sp.add_argument("--branch")
-    sp = c("push-question", cmd_push_question, "Record the push question Stella must ask the owner")
-    sp.add_argument("repo")
-    sp.add_argument("--branch")
-    sp = c("gate", cmd_gate, "Install or check the push gate")
+    sp = c("gate", cmd_gate, "Guarded repos: install the leak-guard commit hooks and remove the old push gate"
+           " (install), or check them (status). A push from a Claude session asks the owner first")
     sp.add_argument("action", choices=["install", "status"])
     sp.add_argument("repo", nargs="?")
     sp = c("git-hook", cmd_git_hook, "(git) hook entry point")
@@ -567,7 +532,7 @@ def build() -> argparse.ArgumentParser:
     sp = c("ext", cmd_ext, "Register, unregister or list extensions")
     sp.add_argument("action", choices=["register", "unregister", "list"])
     sp.add_argument("path", nargs="?", default="")
-    sp = c("install", cmd_install, "Set up the store, the plugin and the push gate on this machine")
+    sp = c("install", cmd_install, "Set up the store, the plugin and the guarded repos' commit hooks on this machine")
     sp.add_argument("--no-plugin", action="store_true")
     sp.add_argument("--no-gate", action="store_true")
     return p
