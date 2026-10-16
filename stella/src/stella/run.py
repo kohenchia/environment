@@ -219,7 +219,7 @@ def respawn_self_now(why: str) -> None:
         return
     time.sleep(0.5)
     pid = srv.run("display-message", "-p", "-t", where, "#{pane_pid}", check=False).stdout.strip()
-    _update(pid=int(pid) if pid.isdigit() else None)
+    _update(pid=int(pid) if pid.isdigit() else None, socket=srv.socket)  # a respawn must keep the wake line's target
     ledger.append("respawned", by="cli", team=WINDOW, window=where, pass_env=passenv.mode())
 
 
