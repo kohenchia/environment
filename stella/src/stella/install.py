@@ -37,6 +37,10 @@ def install_plugin() -> list[str]:
     out.append(f"marketplace {MARKETPLACE}: {'added' if rc == 0 else txt.splitlines()[-1] if txt else rc}")
     rc, txt = _run(claude, "plugin", "install", f"stella@{MARKETPLACE}")
     out.append(f"plugin stella: {'installed' if rc == 0 else txt.splitlines()[-1] if txt else rc}")
+    if rc == 0:  # an installed plugin keeps its cached copy (and its hooks) until it is updated
+        _run(claude, "plugin", "marketplace", "update", MARKETPLACE)
+        rc, txt = _run(claude, "plugin", "update", f"stella@{MARKETPLACE}")
+        out.append(f"plugin stella: {txt.splitlines()[-1] if txt else rc}")
     return out
 
 
