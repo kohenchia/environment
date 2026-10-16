@@ -103,3 +103,21 @@ def test_survives_a_server_restart(env, fake_claude):
         r = env.run("launch", "builder", "--text", f"round {i}", "--name", f"r{i}", env={"TMUX": f"{sock},0,0"})
         assert "tmux window" in r.stdout
         subprocess.run(["tmux", "-S", str(sock), "kill-server"], env=env.env)
+
+
+ENV_CLAUDE = """#!/bin/sh
+echo "${{DEMO_TOKEN:-unset}} ${{DEMO_OTHER:-unset}}" > "{out}/passed.txt"
+"""
+
+
+def test_launch_forwards_only_pass_env_variables(env, tmux, fake_claude):
+    p = env.tmp / "claude-env"
+    p.write_text(ENV_CLAUDE.format(out=fake_claude))
+    p.chmod(0o755)
+    env.write_config(claude_bin=str(p), pass_env=["DEMO_TOKEN"])
+    env.say("A", "S, build z")
+    env.run("launch", "builder", "--order", "1", "--name", "bz",
+            env={**tmux, "DEMO_TOKEN": "t0ken", "DEMO_OTHER": "nope"})
+    assert _wait(fake_claude / "passed.txt").split() == ["t0ken", "unset"]
+    script = (env.store / "launch" / "bz.sh").read_text()
+    assert "t0ken" not in script

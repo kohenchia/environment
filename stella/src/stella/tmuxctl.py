@@ -69,11 +69,16 @@ def ensure_session(srv: Server, name: str | None = None) -> str:
     return name
 
 
-def new_window(srv: Server, name: str, directory: str, command: str) -> str:
-    """Open a background window; returns its window id (e.g. '@12')."""
+def new_window(srv: Server, name: str, directory: str, command: str, env: dict[str, str] | None = None) -> str:
+    """Open a background window; returns its window id (e.g. '@12').
+
+    `env` is set in the window's environment only (tmux -e), never written to disk.
+    """
     session = ensure_session(srv)
+    env_args = [a for k, v in (env or {}).items() for a in ("-e", f"{k}={v}")]
     out = srv.run(
-        "new-window", "-d", "-P", "-F", "#{window_id}", "-t", f"={session}:", "-n", name, "-c", directory, command
+        "new-window", "-d", "-P", "-F", "#{window_id}", "-t", f"={session}:", "-n", name, "-c", directory,
+        *env_args, command,
     ).stdout.strip()
     srv.run("set-option", "-w", "-t", out, "remain-on-exit", "on", check=False)
     return out

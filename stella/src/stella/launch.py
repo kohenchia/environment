@@ -124,7 +124,8 @@ def launch(
         raise SystemExit(tmuxctl.last_error)
     window = sock = None
     if srv:
-        window = tmuxctl.new_window(srv, name, directory, str(script))
+        passed = {k: os.environ[k] for k in s.pass_env if k in os.environ}
+        window = tmuxctl.new_window(srv, name, directory, str(script), env=passed)
         sock, via = srv.socket, f"tmux ({srv.via} server)"
     else:
         env = {**os.environ, "STELLA_TEAM": name, **({"STELLA_ORDER": str(order_seq)} if order_seq else {})}

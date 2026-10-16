@@ -49,6 +49,8 @@ class Settings:
     push_approval_minutes: int = 60
     push_intent_minutes: int = 15
     guarded_repos: list[Path] = field(default_factory=list)
+    # Environment variables forwarded from the launcher into every team session it opens.
+    pass_env: list[str] = field(default_factory=list)
 
     @property
     def query_bin(self) -> str:
@@ -98,6 +100,8 @@ def settings() -> Settings:
     ):
         if key in data:
             setattr(s, key, data[key])
+    if "pass_env" in data:
+        s.pass_env = [str(v) for v in data["pass_env"]]
     if "repos_dir" in data:
         s.repos_dir = _expand(data["repos_dir"])
     s.claude_bin = os.path.expanduser(s.claude_bin)
