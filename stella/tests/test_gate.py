@@ -252,3 +252,11 @@ def test_a_command_that_only_mentions_a_path_does_not_pull_in_that_repo(env, rep
     plain = env.tmp / "plain"
     plain.mkdir()
     assert _pretool(env, f"cat {repo}/f.txt; git push", plain) is None
+
+
+def test_a_push_from_a_shell_variable_path_asks_without_naming_the_wrong_repo(env, repo):
+    _commit(env, repo)
+    out = _pretool_out(env, 'D=/tmp/x && cd $D/w && git push origin main', repo)
+    assert out.get("permissionDecision") == "ask"
+    assert "cannot resolve" in out.get("permissionDecisionReason", "") and "0 commits" not in out["permissionDecisionReason"]
+    assert _pretool(env, f"cd {repo} && git push", repo) == "ask"  # a literal path still resolves
