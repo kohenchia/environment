@@ -84,8 +84,8 @@ def test_lead_reports_and_done_reach_attention(env, tmux, fake_claude):
 def test_session_end_without_done_is_flagged(env, tmux, fake_claude):
     env.say("A", "S, build z")
     env.run("launch", "builder", "--order", "1", "--name", "bz", env=tmux)
-    env.hook("session-end", {"session_id": "L", "reason": "exit"}, env={"STELLA_TEAM": "bz"})
-    assert "without reporting done" in env.run("attention").stdout
+    env.hook("session-end", {"session_id": "L", "reason": "other"}, env={"STELLA_TEAM": "bz"})
+    assert "exited unexpectedly" in env.run("attention").stdout
 
 
 def test_no_tmux_falls_back_to_background(env, fake_claude):

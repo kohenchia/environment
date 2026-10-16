@@ -15,6 +15,26 @@ from stella.config import settings
 CLOSED = {"done", "superseded", "cancelled", "expired"}
 
 
+# SessionEnd reasons Claude Code documents: clear, resume, logout, prompt_input_exit,
+# bypass_permissions_disabled, other. Only a typed /exit is a deliberate close.
+DELIBERATE_END = "prompt_input_exit"
+END_PHRASES = {
+    DELIBERATE_END: "was closed by hand",
+    "other": "exited unexpectedly",
+    "clear": "was cleared by hand",
+    "resume": "switched to another session",
+    "logout": "was logged out",
+    "bypass_permissions_disabled": "stopped because bypassing permissions was disabled",
+}
+
+
+def end_phrase(reason: str | None) -> str:
+    """Plain words for why a team's session ended; an unrecognised reason is shown raw."""
+    if not reason:
+        return END_PHRASES["other"]
+    return END_PHRASES.get(reason) or f"ended (reason: {reason})"
+
+
 @dataclass
 class Order:
     seq: int
@@ -46,6 +66,13 @@ class Team:
     result: str | None = None
     session_id: str | None = None
     acked: bool = False
+    end_reason: str | None = None
+
+    def ended_text(self) -> str:
+        text = f"team {self.name} {end_phrase(self.end_reason)}"
+        if self.last_report:
+            text += f". Last report: {' '.join(self.last_report.split())[:120]}"
+        return text
 
 
 @dataclass
@@ -82,7 +109,13 @@ class State:
             elif t.status == "needs-you":
                 items.append(Attention(key, t.seq, t.ts, f"team {t.name} needs you: {t.last_report or ''}"))
             elif t.status == "ended":
-                items.append(Attention(key, t.seq, t.ts, f"team {t.name} exited without reporting done"))
+                if t.end_reason == DELIBERATE_END:
+                    o = self.orders.get(t.order or -1)
+                    if not o or o.status != "open":
+                        continue
+                    items.append(Attention(key, t.seq, t.ts, t.ended_text() + " with its order still open"))
+                else:
+                    items.append(Attention(key, t.seq, t.ts, t.ended_text()))
         for o in self.open_orders():
             key = f"stale:{o.seq}"
             if o.stale(now) and key not in self.acked:
@@ -156,6 +189,7 @@ def fold(since_events=None) -> State:
                     o.status = "done"
             elif t == "ended" and team.status not in {"done"}:
                 team.status = "ended"
+                team.end_reason = ev.get("reason")
                 team.seq, team.ts = ev["seq"], ts
         elif t == "alert":
             st.alerts[ev.get("key", f"alert:{ev['seq']}")] = Attention(
