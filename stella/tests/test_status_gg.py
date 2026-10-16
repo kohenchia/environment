@@ -67,7 +67,7 @@ def test_all_done_with_uncommitted_changes_is_blocked(env, led):
     led.team(dir=str(r))
     (r / "wip.txt").write_text("x\n")
     out = _stop(env, "Done.\nALL DONE: ready to wrap up. Type gg.", r)
-    assert "uncommitted changes in proj" in out["reason"] and "NEXT FOR YOU: commit or discard the changes in proj" in out["reason"]
+    assert "uncommitted in proj: wip.txt" in out["reason"] and "NEXT FOR YOU: commit or discard the changes in proj" in out["reason"]
     assert _stop(env, "Done.\nNEXT FOR YOU: commit wip.txt", r) == {}
 
 
@@ -220,7 +220,7 @@ def test_gg_does_not_close_with_uncommitted_changes(env, led, window):
     r, wid, sock, tm, pane = _setup(env, led, window)
     (r / "wip.txt").write_text("x\n")
     out = _gg(env, _gg_env(env, sock, pane, **TEAM), cwd=r)
-    assert out["decision"] == "block" and out["reason"].startswith("gg: not closing, uncommitted changes in proj")
+    assert out["decision"] == "block" and out["reason"].startswith("gg: not closing, uncommitted in proj: wip.txt")
     assert "\n" not in out["reason"]
     time.sleep(0.7)
     assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout and "wrapped_up" not in _types(env)
@@ -297,7 +297,7 @@ def test_wrapup_by_team_name_is_the_same_checks_and_closing(env, led, window):
     r, wid, sock, tm, pane = _setup(env, led, window)
     (r / "wip.txt").write_text("x\n")
     e = {"TMUX": f"{sock},0,0"}
-    assert "not closing, uncommitted changes in proj" in env.run("wrapup", "alpha", env=e).stdout
+    assert "not closing, uncommitted in proj" in env.run("wrapup", "alpha", env=e).stdout
     assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
     (r / "wip.txt").unlink()
     assert "wrapped up alpha" in env.run("wrapup", "alpha", env=e).stdout
@@ -552,7 +552,7 @@ def test_tyfp_closes_exactly_the_clean_idle_ones_and_reports_once(env, led, wind
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "wrapped up: " in ctx and "ok1" in ctx and "ok2" in ctx and "keep" in ctx and "typer" in ctx
     assert "left open: busy: its session is busy" in ctx
-    assert "left open: blocked: uncommitted changes in blocked" in ctx
+    assert "left open: blocked: uncommitted in blocked: wip.txt" in ctx
     assert "left open: pushy: 1 unpushed commit in pushy" in ctx
     assert f"git -C {w['pushy'][0]} push -u origin main" in ctx and f"git -C {w['blocked'][0]} push" not in ctx
     time.sleep(2.5)
@@ -576,7 +576,7 @@ def test_tyfp_leaves_the_typed_in_session_when_it_is_blocked_and_never_closes_st
     r, wid, pane = w["typer"]
     (r / "wip.txt").write_text("x\n")
     out = _gg(env, _gg_env(env, sock, pane, STELLA_TEAM="typer"), "tyfp", cwd=r, sid="sess-typer")
-    assert "left open: typer: uncommitted changes in typer" in out["hookSpecificOutput"]["additionalContext"]
+    assert "left open: typer: uncommitted in typer" in out["hookSpecificOutput"]["additionalContext"]
     time.sleep(1.5)
     assert "typer" in _names(tm)
     own = _gg(env, _gg_env(env, sock, w["ok1"][2], STELLA_SELF="1"), "tyfp", cwd=r, sid="stella-s")

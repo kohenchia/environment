@@ -125,15 +125,14 @@ def repos_of(t: state.Team) -> dict[Path, set[str] | None]:
     return repos
 
 
-def repo_problem(top: Path, only: set[str] | None) -> str | None:
+def repo_problem(top: Path, only: set[str] | None, ctx=None) -> str | None:
+    """What keeps a team's repo from being closed over: changes this team could have made (see `related`), or unpushed commits."""
+    from stella import related
+
     name = top.name
-    if only is None:
-        dirty = _git(top, "status", "--porcelain")
-    else:
-        dirty = _git(top, "status", "--porcelain", "--", *sorted(only))
-    if dirty:
-        n = len(dirty.splitlines())
-        return f"uncommitted changes in {name} ({n} file{'s' if n != 1 else ''})"
+    res = related.check(top, only, ctx or related.Ctx())
+    if res.blocking:
+        return res.message(name)
     if _git(top, "remote"):
         up = _git(top, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
         ahead = _git(top, "rev-list", "--count", f"{up}..HEAD") if up else _git(top, "rev-list", "--count", "HEAD", "--not", "--remotes")
@@ -276,8 +275,11 @@ def evaluate_team(st: state.State, t: state.Team, keep_open: set[str], now: dt.d
         if v.blockers:
             return no("; ".join(b.text for b in v.blockers))
     repos = repos_of(t)
+    from stella import related
+
+    ctx = related.context(st, "", t)
     for top, only in repos.items():
-        problem = repo_problem(top, only)
+        problem = repo_problem(top, only, ctx)
         if problem:
             return no(problem)
     v.repos = [str(p) for p in repos]
@@ -489,13 +491,14 @@ def wrap_session(sid: str, cwd: str, delay: float = 0, dry_run: bool = False) ->
         return Wrap(False, f"gg: nothing closed: {tgt}. Type /exit to end this session.")
     if dry_run:
         return Wrap(False, f"would close the window of process {tgt.pane.pid}" + (f" and record team {t.name} as wrapped up" if t else ""))
+    left = status.left_alone(st, sid, cwd, t)
     if t:
         finish_wrap(st, t, "owner", ["the owner typed gg", "nothing unpushed, uncommitted, deferred or open for the owner"])
     if delay > 0:
         direct.close_later(tgt, delay)
     elif not direct.close_now(tgt):
         return Wrap(False, "gg: everything is recorded, but the window did not close; type /exit to end this session.")
-    return Wrap(True, "Wrapped up.")
+    return Wrap(True, "Wrapped up." + (f"\n{left}" if left else ""))
 
 
 def wrap_team(name: str, dry_run: bool = False) -> Wrap:

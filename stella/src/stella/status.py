@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from stella import finish, gate, state, wrapup
+from stella import finish, gate, related, state, wrapup
 
 MARKERS = ("NEXT FOR YOU:", "ALL DONE:", "WORKING:")
 ALL_DONE = "ALL DONE: ready to wrap up. Type gg."
@@ -110,12 +110,11 @@ def blockers(st: state.State, sid: str, cwd: str, own: bool = False, t: state.Te
         out.append(Blocker("deferred", f"push of {what} was deferred",
                            f"push of {what} is deferred: push it or drop it (`stella ack {key}`)"))
     deferred_heads = {f"{e.get('path')}@{e.get('sha')}" for e in st.push_deferred}
+    ctx = related.context(st, sid, t)
     for root, where in _worked_roots(sess, cwd, own, t).items():
-        problem = wrapup._git(root, "status", "--porcelain")
-        if problem:
-            n = len(problem.splitlines())
-            out.append(Blocker("dirty", f"uncommitted changes in {root.name} ({_plural(n, 'file')})",
-                               f"commit or discard the changes in {root.name}"))
+        res = related.check(root, None, ctx)
+        if res.blocking:
+            out.append(Blocker("dirty", res.message(root.name), f"commit or discard the changes in {root.name}"))
         n = finish._ahead(where) if wrapup._git(root, "remote") else 0
         head = gate._head(where)
         if not n or not head or gate.is_approved(root, where) or f"{root}@{head}" in deferred_heads \
@@ -126,6 +125,13 @@ def blockers(st: state.State, sid: str, cwd: str, own: bool = False, t: state.Te
                            f"approve the push of {root.name} {branch} ({_plural(n, 'commit')})",
                            f"git -C {root} push -u origin {branch}"))
     return out
+
+
+def left_alone(st: state.State, sid: str, cwd: str, t: state.Team | None = None) -> str:
+    """The calm info line for what `blockers` ignored as not this session's: 'left alone: 3 untracked files in proj, not from
+    this session'. Empty when nothing was."""
+    ctx = related.context(st, sid, t)
+    return related.left_line([(root.name, related.check(root, None, ctx)) for root in _worked_roots(_session(sid), cwd, False, t)])
 
 
 def _session(sid: str) -> dict:

@@ -149,7 +149,7 @@ def test_uncommitted_changes_block(env, led):
     r = _repo(env)
     (r / "a.txt").write_text("changed\n")
     led.team(dir=str(r))
-    assert "uncommitted changes in proj" in _sweep(env)
+    assert "uncommitted in proj: a.txt" in _sweep(env)
 
 
 def test_repo_named_in_a_report_is_checked(env, led):
@@ -157,7 +157,7 @@ def test_repo_named_in_a_report_is_checked(env, led):
     other = _repo(env, "named")
     (other / "wip.txt").write_text("x\n")
     led.team(dir=str(r), reports=[f"edited {other}/wip.txt"])
-    assert "uncommitted changes in named" in _sweep(env)
+    assert "uncommitted in named: wip.txt" in _sweep(env)
 
 
 def test_open_followup_blocks(env, led):
