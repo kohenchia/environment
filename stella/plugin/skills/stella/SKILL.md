@@ -134,22 +134,30 @@ the owner has seen an item.
 
 ### Wrapping up finished teams
 
-"Wrap up" (or "wrap up the ones that are done") means: for each finished team with nothing left for the
-owner, record it, close its session, close its tmux window, and then verify the window is gone. Closing the
-record alone is not wrapping up. (Correction #472: `stella reap` printed "closed" for two teams while their
-windows stayed open, because the command sandbox blocks tmux.)
+You no longer have to remember this. The scheduler's wrap-up sweep (about once a minute; `stella wrapup`)
+closes a finished team's record, session and tmux window, verifies the window is gone, closes its orders
+and acknowledges its finished notice, when all hold: the team is done; nothing is asked of the owner; it
+has stayed done for the grace period (`wrapup_grace_minutes`, default 5, restarted when the owner types to
+it); its session is idle; its repos have nothing unpushed and no uncommitted changes; no follow-up waits on
+it; no push it raised is unanswered. It raises one quiet "wrapped up: ..." notification. A team whose
+archetype sets `keep_open = true` in teams.toml is never wrapped up (the owner keeps talking to it).
 
-1. Take the finished teams from `~/.local/bin/stella attention`. Skip any with something still waiting on the
-   owner (an unposted result, an open question, a pending push) and say so.
-2. Run `~/.local/bin/stella reap <team>...`. Read its output: "closed" is only trustworthy if it does not say
-   tmux is unreachable or that the window is still open.
-3. Verify. Run `tmux list-windows -a -F '#{window_name}'` and confirm none of the reaped names appear. If the
-   sandbox blocks tmux, use the helper path that reaches it instead, for example
-   `cd ~/github/environment/stella && uv run python -c 'from stella import tmuxctl; s = tmuxctl.find_server(); print([tmuxctl.find_window(s, n) for n in ("team-a", "team-b")])'`
-   (every entry should be `None`).
-4. If a window is still there and you cannot reach tmux, do not claim it is closed: tell the owner which windows
-   remain and that they need to run `stella reap` from a shell where tmux is reachable.
-5. Reply with what is closed (verified), and what is still open and why.
+Your part is only the exceptions. The brief and your per-turn context list them under "Finished, not
+wrapped up", each with its one reason. Act on the reason, and the next sweep closes the team:
+
+| Reason | What you do |
+| --- | --- |
+| grace period | Nothing; it clears by itself |
+| unpushed commits | Push them (the push prompt asks the owner); a declined push stays open and is reported as such |
+| uncommitted changes | Ask the team (`stella tell`) to commit or discard, or tell the owner |
+| needs-you / follow-up waits | Relay the question; do the follow-up and close it |
+| busy / tmux not reachable | Wait; if tmux is blocked by the sandbox, ask the owner to run `stella wrapup` in a terminal |
+| keep_open | Nothing; the owner closes it |
+
+"Wrap up" typed by the owner for a team the sweep keeps open: check with `stella wrapup --dry-run`, tell
+the owner the reason, and close it by hand only if they confirm (`stella reap <team>`, then verify with
+`tmux list-windows -a -F '#{window_name}'`; "closed" is only trustworthy if reap does not say tmux is
+unreachable or the window is still open, correction #472).
 
 ## Priorities and focus
 

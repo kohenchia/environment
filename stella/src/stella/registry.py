@@ -35,6 +35,7 @@ class Team:
     dir: str = ""
     permission_mode: str = "default"
     read_only: bool = False
+    keep_open: bool = False  # the owner keeps talking to the session after `done`: never wrapped up automatically
     raw: dict = field(default_factory=dict)
 
     @property

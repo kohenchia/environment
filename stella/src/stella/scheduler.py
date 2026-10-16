@@ -140,7 +140,25 @@ def run_forever(interval: int = 60) -> int:
         except Exception as e:  # noqa: BLE001 - keep the loop alive, but say so
             ledger.append("alert", by="scheduler", key="scheduler:error", text=f"scheduler error: {type(e).__name__}: {e}")
             print(f"error: {e}", flush=True)
+        sweep_wrapup()
         time.sleep(interval)
+
+
+def sweep_wrapup() -> None:
+    """Wrap up the finished teams that are clean (see wrapup.py). Plain Python; no model runs. A failure
+    is logged and raised once as an alert, never every minute."""
+    if not settings().wrapup_auto:
+        return
+    from stella import state, wrapup
+
+    try:
+        wrapped, _ = wrapup.sweep()
+        if wrapped:
+            print(f"{ledger.now():%Y-%m-%d %H:%M} wrapped up: {', '.join(v.team for v in wrapped)}", flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"wrapup error: {type(e).__name__}: {e}", flush=True)
+        if "scheduler:wrapup" not in state.fold().alerts:
+            ledger.append("alert", by="scheduler", key="scheduler:wrapup", text=f"wrap-up sweep error: {type(e).__name__}: {e}")
 
 
 def wake_backstop(now: dt.datetime | None = None) -> str | None:

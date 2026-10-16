@@ -71,12 +71,14 @@ def describe(ev: dict) -> str:
         return f"#{ev['seq']} follow-up after {', '.join(ev.get('after', []))}: {_clip(ev.get('text', ''))}"
     if t == "followup_close":
         return f"#{ev['seq']} closed follow-up #{ev.get('followup')} as {ev.get('status')}"
+    if t == "wrapped_up":
+        return f"#{ev['seq']} wrapped up {ev.get('team')}"
     if t == "wake":
         return f"#{ev['seq']} woke Stella: {_clip(ev.get('text', ''))}"
     return f"#{ev['seq']} {t}"
 
 
-QUIET = {"ack", "started", "push_question", "push_intent", "clear_alert", "reaped", "wake"}
+QUIET = {"ack", "started", "push_question", "push_intent", "clear_alert", "reaped", "wake", "wrapped_up"}
 
 
 def delta(session_id: str, since: int, st: State | None = None) -> list[str]:
@@ -123,6 +125,9 @@ def render(st: State) -> str:
     att = st.attention(now)
     sections.append(("Needs you", [f"- {_clip(a.text, 130)}" for a in att], 1))
     sections.append(("Follow-ups", followup_lines(st, now), 1))
+    from stella import wrapup
+
+    sections.append(("Finished, not wrapped up", wrapup.pending_lines(st, now), 1))
 
     oo = sorted(st.open_orders(), key=lambda o: o.seq, reverse=True)
     order_lines = []

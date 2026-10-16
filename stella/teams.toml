@@ -1,5 +1,6 @@
 # Generic team archetypes that ship with the core. Extensions add their own.
 # Each entry points at the team's interface; see `stella team <name>`.
+# `keep_open = true` exempts a team from the automatic wrap-up sweep (the owner keeps talking to its session).
 
 [team.builder]
 summary = "Builds or changes a tool, script, service or piece of personal infrastructure, end to end: plan, implement, test, commit locally."

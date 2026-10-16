@@ -59,6 +59,10 @@ class Settings:
     wake_merge_seconds: int = 20
     wake_gap_seconds: int = 60
     wake_check_minutes: int = 20
+    # The wrap-up sweep (see wrapup.py): the scheduler closes clean finished teams once they have stayed
+    # done this long, so a human who just read the final message can still type.
+    wrapup_auto: bool = True
+    wrapup_grace_minutes: int = 5
     guarded_repos: list[Path] = field(default_factory=list)
     # Environment variables forwarded from the launcher into every team session it opens.
     pass_env: list[str] = field(default_factory=list)
@@ -111,6 +115,8 @@ def settings() -> Settings:
         "wake_merge_seconds",
         "wake_gap_seconds",
         "wake_check_minutes",
+        "wrapup_auto",
+        "wrapup_grace_minutes",
     ):
         if key in data:
             setattr(s, key, data[key])

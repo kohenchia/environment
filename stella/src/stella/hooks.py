@@ -23,7 +23,7 @@ import re
 import sys
 import traceback
 
-from stella import address, brief, context, gate, leak, ledger, notify, run, scheduler, sessions, state, targets, wake
+from stella import address, brief, context, gate, leak, ledger, notify, run, scheduler, sessions, state, targets, wake, wrapup
 
 HANDBACK = (
     "This message is not addressed to Stella. Answer as this session, continuing its own task;"
@@ -35,7 +35,8 @@ SYSTEM_NOTE = (
     " {owner}. It is not an order: nothing was recorded for it, and it neither opens nor closes any order."
     " If it is a wake line: review your open follow-ups and the fleet, act on what is unblocked (READY follow-ups;"
     " close each with `~/.local/bin/stella followup close N` once done), then tell {owner} in a line or two what"
-    " happened and what you did. If nothing is unblocked, say so in one line."
+    " happened and what you did. If nothing is unblocked, say so in one line. Finished teams that are clean are wrapped up by the"
+    " scheduler's sweep, not by you; handle only those listed under \"Finished, not wrapped up\"."
 )
 
 
@@ -107,6 +108,7 @@ def prompt(data: dict) -> None:
         conflicts = brief.conflict_lines(st, order["seq"]) if kind == "instruction" else []
         woke = wake.drain() if own else None  # news that came while she was busy, not yet typed to her
         followups = brief.followup_lines(st) if own else []
+        unwrapped = wrapup.pending_lines(st) if own or sess.get("context_loaded") else []
     except Exception as e:  # noqa: BLE001 - the model must hear about any failure
         _emit("UserPromptSubmit", UNAVAILABLE.format(err=f"{type(e).__name__}: {e}"))
         return
@@ -130,6 +132,8 @@ def prompt(data: dict) -> None:
         parts.append(woke)
     if followups:
         parts.append(FOLLOWUPS + "\n".join(followups))
+    if unwrapped:
+        parts.append(wrapup.HEADER + "\n".join(unwrapped))
     sess["cursor"] = st.last_seq
     sess["last_addressed"] = True
     sessions.save(sid, sess)
@@ -148,6 +152,7 @@ def _system_note(sid: str, sess: dict) -> None:
         st = state.fold()
         delta = brief.delta(sid, sess.get("cursor", 0))
         followups = brief.followup_lines(st)
+        unwrapped = wrapup.pending_lines(st)
     except Exception as e:  # noqa: BLE001
         _emit("UserPromptSubmit", UNAVAILABLE.format(err=f"{type(e).__name__}: {e}"))
         return
@@ -156,6 +161,8 @@ def _system_note(sid: str, sess: dict) -> None:
         parts.append(newer)
     if followups:
         parts.append(FOLLOWUPS + "\n".join(followups))
+    if unwrapped:
+        parts.append(wrapup.HEADER + "\n".join(unwrapped))
     if delta:
         parts.append("Since this session last looked, other sessions recorded:\n" + "\n".join(f"- {d}" for d in delta))
     sess["cursor"] = st.last_seq

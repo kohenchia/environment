@@ -67,6 +67,10 @@ class Team:
     session_id: str | None = None
     acked: bool = False
     end_reason: str | None = None
+    asking: bool = False  # its latest report asked the owner something
+    touched: dt.datetime | None = None  # the owner (or Stella) last typed to it
+    sessions: set[str] = field(default_factory=set)
+    texts: list[str] = field(default_factory=list)  # what it reported, for repos named in them
 
     def ended_text(self) -> str:
         text = f"team {self.name} {end_phrase(self.end_reason)}"
@@ -202,20 +206,30 @@ def fold(since_events=None) -> State:
             team = st.teams.get(ev.get("team", ""))
             if team:
                 team.acked = True
+        elif t in {"direct", "tell"}:
+            team = st.teams.get(ev.get("team", ""))
+            if team:
+                team.touched = ts
         elif t in {"report", "done", "ended", "started", "respawned"}:
             team = st.teams.get(ev.get("team", ""))
             if not team:
                 continue
             if t == "started":
                 team.session_id = ev.get("session")
+                if ev.get("session"):
+                    team.sessions.add(ev["session"])
                 if team.status == "ended":  # a resumed session is alive again
                     team.status = "running"
             elif t == "report":
                 team.last_report = ev.get("text")
+                team.asking = bool(ev.get("needs_you"))
+                team.texts = (team.texts + [ev.get("text") or ""])[-50:]
                 team.status = "needs-you" if ev.get("needs_you") else "running"
                 team.seq, team.ts = ev["seq"], ts
             elif t == "done":
                 team.status, team.result = "done", ev.get("text")
+                team.asking = False
+                team.texts = (team.texts + [ev.get("text") or ""])[-50:]
                 team.seq, team.ts = ev["seq"], ts
                 o = st.orders.get(team.order or -1)
                 if o and o.status == "open":

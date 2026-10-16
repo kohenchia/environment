@@ -166,7 +166,7 @@ def st_socket(team: str) -> str | None:
 
 
 def cmd_reap(a):
-    from stella import tmuxctl
+    from stella import wrapup
 
     st = state.fold()
     names = a.name or [t.name for t in st.teams.values() if t.status in {"done", "ended"}]
@@ -178,24 +178,14 @@ def cmd_reap(a):
         if t.status not in {"done", "ended"} and not a.force:
             print(f"{name} is {t.status}; not closing (use --force)")
             continue
-        # The socket recorded at launch can be stale (the launching shell's tmux was a different server):
-        # fall back to whichever server is reachable now, and look the window up by name as well as by id.
-        srv = tmuxctl.server_for_socket(st_socket(name)) or tmuxctl.find_server()
-        window = t.window if (srv and t.window and tmuxctl.window_exists(srv, t.window)) else (
-            tmuxctl.find_window(srv, name) if srv else None
-        )
-        if window:
-            srv.run("kill-window", "-t", window, check=False)
-        still_open = bool(srv and window and tmuxctl.window_exists(srv, window))
-        ledger.append("ack", by="cli", key=f"team:{name}:{t.status}")
-        ledger.append("reaped", by="cli", team=name)
-        if srv is None and t.window:
-            print(f"recorded {name} as closed, but tmux is not reachable from here, so its window {t.window} is still open"
-                  " (the command sandbox blocks tmux; run `stella reap` where tmux is reachable)")
-        elif still_open:
-            print(f"recorded {name} as closed, but its window {window} is still open")
-        else:
-            print(f"closed {name}")
+        print(wrapup.close_team(st, t)[1])
+
+
+def cmd_wrapup(a):
+    from stella import wrapup
+
+    wrapped, kept = wrapup.sweep(dry_run=a.dry_run)
+    print(wrapup.report(wrapped, kept, a.dry_run))
 
 
 def cmd_report(a):
@@ -540,6 +530,8 @@ def build() -> argparse.ArgumentParser:
     sp = c("reap", cmd_reap, "Close the windows of finished teams (all finished ones, or those named)")
     sp.add_argument("name", nargs="*")
     sp.add_argument("--force", action="store_true", help="also close a team that has not reported done")
+    sp = c("wrapup", cmd_wrapup, "Wrap up finished teams that are clean (the scheduler does this every minute)")
+    sp.add_argument("--dry-run", action="store_true", help="list what would be wrapped up and why the rest stays open; change nothing")
     sp = c("report", cmd_report, "(team leads) report progress, or that the owner is needed")
     sp.add_argument("team")
     sp.add_argument("message")
