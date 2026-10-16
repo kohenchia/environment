@@ -14,6 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 BIN = ROOT / "bin" / "stella"
 
 
+os.environ.setdefault("STELLA_NO_NOTIFY", "1")  # in-process calls too
+
+
 class Env:
     def __init__(self, tmp: Path):
         self.tmp = tmp
@@ -29,6 +32,7 @@ class Env:
             "STELLA_CONFIG": str(self.config),
             "STELLA_TRANSCRIPTS": str(tmp / "transcripts"),
             "STELLA_NO_CATCHUP": "1",
+            "STELLA_NO_NOTIFY": "1",
             "GIT_CONFIG_GLOBAL": str(tmp / "gitconfig"),
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",

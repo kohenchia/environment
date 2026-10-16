@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,8 @@ def _osa_escape(s: str) -> str:
 
 
 def notify(title: str, message: str) -> bool:
+    if os.environ.get("STELLA_NO_NOTIFY") == "1":  # tests and dry runs must never reach the owner's desktop
+        return False
     message = " ".join(message.split())[:220]
     try:
         if sys.platform == "darwin" and shutil.which("osascript"):

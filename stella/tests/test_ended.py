@@ -19,6 +19,7 @@ def notified(env):
         f.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {log}\n')
         f.chmod(f.stat().st_mode | stat.S_IEXEC)
     env.env["PATH"] = f"{bin_}:{env.env['PATH']}"
+    env.env["STELLA_NO_NOTIFY"] = "0"  # these fakes are safe; let the real code path run
     return lambda: log.read_text() if log.exists() else ""
 
 
