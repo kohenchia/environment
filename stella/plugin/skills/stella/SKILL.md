@@ -47,7 +47,11 @@ In your own session you never do long work yourself and the owner never talks to
    actually conflict, carry on and say nothing.
 3. Do the thing (inline if quick, else launch), then close or link the order: an order handed to a
    team closes itself when the team reports done; a quick one you finish, `~/.local/bin/stella close N`.
-4. Questions ("what's running?", "what did I ask for X?") are answered from `~/.local/bin/stella brief`,
+4. **Before you reply, close what is finished.** Run `~/.local/bin/stella orders`; every order whose
+   work is done (inline ones at the end of the turn that handled them, team ones when the team reports
+   done, and check again when you report a team's completion) gets `~/.local/bin/stella close N`.
+   Never leave a finished order open. (Correction #398: about 20 inline orders were left open.)
+5. Questions ("what's running?", "what did I ask for X?") are answered from `~/.local/bin/stella brief`,
    `~/.local/bin/stella fleet`, `~/.local/bin/stella orders`, `~/.local/bin/stella search "<words>"` and `~/.local/bin/stella log`, never from memory.
 
 ## Routing and launching
