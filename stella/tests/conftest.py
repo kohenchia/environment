@@ -23,7 +23,7 @@ class Env:
         self.home = tmp / "home"
         self.store = tmp / "store"
         self.config = tmp / "config"
-        for p in (self.home, self.store, self.config):
+        for p in (self.home, self.store, self.config, tmp / "tmux"):
             p.mkdir(parents=True, exist_ok=True)
         self.env = {
             "PATH": os.environ["PATH"],
@@ -33,6 +33,8 @@ class Env:
             "STELLA_TRANSCRIPTS": str(tmp / "transcripts"),
             "STELLA_NO_CATCHUP": "1",
             "STELLA_NO_NOTIFY": "1",
+            # tmux's default socket lives here, so nothing a test runs can reach the owner's own server
+            "TMUX_TMPDIR": str(tmp / "tmux"),
             "GIT_CONFIG_GLOBAL": str(tmp / "gitconfig"),
             "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
             "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com",
