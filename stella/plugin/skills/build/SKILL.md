@@ -43,10 +43,10 @@ and reports what fails. Fix and re-verify until clean.
 ## 5 · Finish
 
 - Commit with a message that says what and why, then **push the branch** if the repo has a remote
-  (`git remote`): `~/.local/bin/stella push` (or `stella push -C <dir>`), as that one short command and
-  nothing else in it, so the dialog stays calm. The tool hook makes Claude Code show the owner a yes/no
-  prompt (and opens the diff beside the window), so he never has to remember an outstanding push. If the
-  refusal says "d" or "diff", he wants to see the changes: run `stella diff --show`, then push again. A team launched with `--auto-push` (the owner
+  (`git remote`): run `~/.local/bin/stella push --plan -C <dir>`, which prints the owner's question; ask it with
+  AskUserQuestion exactly as it says (a dropdown: Push, with the diff in its preview pane, or Defer). If he picks
+  Push, run `~/.local/bin/stella push -C <dir>` as that one command and nothing else in it; Defer means do not push.
+  Either way he never has to remember an outstanding push. A team launched with `--auto-push` (the owner
   said so up front) pushes with no prompt. If he answers no, the push is deferred, not forgotten: your
   final message says "not pushed, you declined" with the repo, branch and commit. "Committed locally"
   alone is never an acceptable ending for a repo that has a remote. A PR is a separate ask. `stella done` and the

@@ -11,7 +11,7 @@
   if the scheduler is down and a run is overdue, start a catch-up pass.
 * SessionEnd: a team lead that exits without `stella done` raises an attention item,
   and unless the owner closed it by hand, wakes Stella.
-* PreToolUse: the push prompt (a push from a repo with a remote asks the owner first; `stella push` is the one short command sessions use) and the leak guard. Any hook event of a session closes its diff pane.
+* PreToolUse: the push prompt (a push from a repo with a remote asks the owner first; `stella push` is the one short command sessions use) and the leak guard.
 * PostToolUse: remembers an approved push's head so it is not asked twice, and the repos a session committed in.
 * Stop: a session that ends its turn with unpushed commits in repos it worked in is told once to push now, so the
   push prompt appears (`finish`); a push the owner declined is recorded as deferred and not asked again.
@@ -74,7 +74,6 @@ def prompt(data: dict) -> None:
         return
     text = data.get("prompt") or ""
     sid = data.get("session_id") or "unknown"
-    gate.clear_diff(sid)
     own = run.is_self()
     team = os.environ.get("STELLA_TEAM")
     if status.is_gg(text):
@@ -219,7 +218,7 @@ def _gg(data: dict) -> None:
         return _block_prompt(w.message)
     # An unpushed commit blocks the close: the model runs the push, so Claude Code's own prompt appears.
     res = finish.check(sid, cwd, own=False, may_block=True)
-    how = res.block or "Run the push for the unpushed commits again (`stella push` in the repo), so the push prompt appears."
+    how = res.block or "Run the push for the unpushed commits again (`stella push --plan -C <repo>`, then ask as it says), so the owner is asked."
     _emit("UserPromptSubmit",
           f"The owner typed `gg` to wrap this session up, and it did not close: {w.message}. Do not ask in chat and tell"
           f" them nothing to run. {how}\nThen say in one line what still blocks the close, if anything, and end with the"
@@ -316,7 +315,6 @@ def session_end(data: dict) -> None:
 
 
 def pretool(data: dict) -> None:
-    gate.clear_diff(data.get("session_id") or "")  # any new tool call means the last push prompt was answered
     tool = data.get("tool_name", "")
     ti = data.get("tool_input") or {}
     cwd = data.get("cwd") or os.getcwd()
@@ -330,7 +328,7 @@ def pretool(data: dict) -> None:
                         hit = _leak_hit(w.text + ("\n" + str(target) if w.paths else ""), str(target), g)
                         if hit:
                             return _deny(hit)
-        v = gate.check_bash(cmd, cwd, data.get("session_id") or "")
+        v = gate.check_bash(cmd, cwd)
         if v.decision == "ask":
             finish.remember_asked(data.get("session_id") or "", v.asked)
             return _ask(v.reason)
@@ -368,7 +366,11 @@ def _leak_hit(text: str, where: str, g: leak.Guard) -> str | None:
 
 def posttool(data: dict) -> None:
     """A push command ran, so the owner approved it (or the session was told to push): remember the head."""
-    gate.clear_diff(data.get("session_id") or "")
+    if data.get("tool_name") == "AskUserQuestion":  # the owner answered a push question: Push approves it, Defer is a deferral
+        r = gate.answered(data.get("tool_input") or {}, data.get("tool_response"))
+        if r.startswith("defer:"):
+            finish.remember_asked(data.get("session_id") or "", (r[6:],))
+        return
     if data.get("tool_name") == "Bash":
         cmd, cwd = (data.get("tool_input") or {}).get("command", ""), data.get("cwd") or os.getcwd()
         gate.record_approval(cmd, cwd)
@@ -379,7 +381,6 @@ def stop(data: dict) -> None:
     """The session ends its turn: with unpushed commits in repos it worked in, make it push so the prompt appears."""
     if os.environ.get("STELLA_HEADLESS") == "1" or not data.get("session_id"):
         return
-    gate.clear_diff(data["session_id"])
     own = run.is_self()
     team = os.environ.get("STELLA_TEAM")
     res = finish.check(data["session_id"], data.get("cwd") or os.getcwd(), own=own,

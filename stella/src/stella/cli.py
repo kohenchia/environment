@@ -523,18 +523,7 @@ def cmd_diff(a):
     from stella import gate
 
     repo = gate.resolve_alias(a.repo) if a.repo else Path.cwd()
-    if not a.show:
-        subprocess.run(["sh", "-c", gate._diff_command(repo)])
-        return
-    # a session showing the owner the diff after he asked for it at the push prompt (No + Tab, "d")
-    root = gate.guarded_root(repo) or gate._remote_root(repo) or repo
-    if gate.open_diff({root: repo}, _session() or "show"):
-        print("The diff is open in a pane beside this window (it closes when the push is answered).")
-        return
-    r = subprocess.run(["sh", "-c", gate._diff_command(repo, color=False)], capture_output=True, text=True)
-    lines = r.stdout.splitlines()
-    print("\n".join(lines[:300]) + (f"\n… {len(lines) - 300} more lines: `stella diff` prints them all" if len(lines) > 300 else ""))
-    print("\nNo tmux pane could be opened: show the diffstat above in your reply, then push again with `stella push`.")
+    subprocess.run(["sh", "-c", gate._diff_command(repo)])
 
 
 def cmd_push(a):
@@ -543,6 +532,19 @@ def cmd_push(a):
     from stella import gate, leak
 
     where = Path(a.dir or ".").resolve()
+    if a.plan:
+        pl = gate.plan(where)
+        if pl.get("approved"):
+            print(f"Already approved: run `stella push -C {where}` now.")
+        elif not pl:
+            print(f"{where} is not in a git repository with a remote: nothing to ask.")
+        elif pl.get("nothing"):
+            print("Nothing to push.")
+        else:
+            print(f"Ask the owner with AskUserQuestion, exactly:\n  header: Push\n  question: {pl['question']}\n"
+                  f"  options: \"{gate.PUSH_LABEL}\" (description: send it; preview: the text below, verbatim) and \"{gate.DEFER_LABEL}\" (description: not now)\n"
+                  f"Then, if he picked Push, run `stella push -C {where}`; if Defer, do not push (say \"not pushed, deferred\").\n--- preview ---\n{pl['preview']}")
+        return 0
     top = gate._git_out(where, "rev-parse", "--show-toplevel")
     branch = gate._git_out(where, "rev-parse", "--abbrev-ref", "HEAD")
     if not top:
@@ -796,9 +798,9 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("repo", nargs="?")
     sp = c("diff", cmd_diff, "Show the full diff of what a push of this repo (default: the current one) would send")
     sp.add_argument("repo", nargs="?")
-    sp.add_argument("--show", action="store_true", help="(sessions) open it in a pane beside this window, or print the diffstat")
     sp = c("push", cmd_push, "Push the current branch of this repo (-C <dir>) to origin; the push prompt asks the owner first")
     sp.add_argument("-C", dest="dir", help="the repo's directory (default: the current one)")
+    sp.add_argument("--plan", action="store_true", help="(sessions) print the owner's question for this push, to ask with AskUserQuestion")
     sp = c("git-hook", cmd_git_hook, "(git) hook entry point")
     sp.add_argument("name")
     sp.add_argument("args", nargs="*")

@@ -14,8 +14,8 @@ prompt, through the same code as below.
    is one) as wrapped up, closes its orders, and closes this session's tmux window itself (no tmux, no scheduler) a few seconds later
    (`keep_open` teams too: he asked). A session that is not a team just loses its window. Stella's own session
    is never wrapped up.
-2. Read its output. If it names an unpushed commit, push it now (`~/.local/bin/stella push -C <repo>`: Claude Code
-   shows the owner the yes/no prompt; never tell him to run anything), then run `stella wrap` again. For
+2. Read its output. If it names an unpushed commit, push it now (`~/.local/bin/stella push --plan -C <repo>`, ask the owner as it says with AskUserQuestion, then
+   `stella push -C <repo>` if he picks Push; never tell him to run anything), then run `stella wrap` again. For
    anything else it names, say it in one line and end with the NEXT FOR YOU block listing that. If it says it is not in
    a tmux window or could not find its window, tell the owner to type `/exit` and close the window themselves.
 3. When it closed, reply with one short line saying the window is closing. Do not start other work: the window

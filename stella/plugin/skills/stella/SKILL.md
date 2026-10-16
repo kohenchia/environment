@@ -203,14 +203,11 @@ asks for itself. (Guarded repos, `~/.local/bin/stella gate status`, also run the
   When the owner tells you at the start to push (or merge) the work, launch with `stella launch --auto-push`:
   that team pushes with no prompt.
 
-- When a push is needed, run `~/.local/bin/stella push` (the current repo's branch; `-C <dir>` for another
-  repo) as that one command, never inside a longer one (the dialog shows the whole command, so a long one
-  buries the question). `gh pr create` and the like still go through the same prompt. The tool hook makes
-  Claude Code show the owner a yes/no prompt naming the repo and branch, with the diff open in a pane beside
-  the window; the owner answers it.
-- If the refusal carries the owner's words "d" or "diff" (No + Tab to amend), they want to see the changes:
-  run `stella diff --show` (it opens the pane, or prints the diffstat for you to quote), then push again. That prompt is the ask
-  (principle 3) for a push from a guarded repo; no need to ask in chat as well.
+- When a push is needed, run `~/.local/bin/stella push --plan -C <dir>`: it prints the owner's question. Ask it with
+  AskUserQuestion exactly as it says (a dropdown: Push, with the diff in its preview pane, or Defer). If he picks
+  Push, run `~/.local/bin/stella push -C <dir>` as that one command, never inside a longer one; the pick is the
+  approval, so Claude Code shows no second prompt. Defer: do not push. `git push` typed raw, `gh pr create` and the
+  like still raise Claude Code's own yes/no prompt, which is the ask for them. No need to ask in chat as well.
 - The prompt comes once per repo and head, only for the real push, and only at the end of the work: don't
   push intermediate states, and don't run a push to test something. Subagents inherit an approval.
 - If the owner declines, the push doesn't happen. Never work around a declined push: no other command,

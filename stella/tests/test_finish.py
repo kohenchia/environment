@@ -28,7 +28,7 @@ def test_finishing_with_unpushed_commits_is_blocked_once(env, repo):
     _commit(env, repo)
     first = _stop(env, repo)
     assert first["decision"] == "block"
-    assert "stella push -C" in first["reason"] and "push -u origin" not in first["reason"] and "1 unpushed commit" in first["reason"]
+    assert "stella push --plan -C" in first["reason"] and "AskUserQuestion" in first["reason"] and "push -u origin" not in first["reason"] and "1 unpushed commit" in first["reason"]
     assert "run `stella" not in first["reason"] and "review-push" not in first["reason"]
     assert _stop(env, repo) == {}  # one reminder per head per session: no loop
 
@@ -114,7 +114,7 @@ def test_done_is_refused_once_then_goes_through(env, repo):
     _commit(env, repo)
     sess = {"STELLA_SESSION_ID": S}
     r = env.run("done", "alpha", "built it", env=sess, cwd=repo, check=False)
-    assert r.returncode == 1 and "stella push -C" in r.stderr
+    assert r.returncode == 1 and "stella push --plan -C" in r.stderr
     assert not [e for e in env.events() if e["type"] == "done"]
     r = env.run("done", "alpha", "built it", env=sess, cwd=repo, check=False)
     assert r.returncode == 0

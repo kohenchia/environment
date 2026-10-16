@@ -5,8 +5,9 @@ Guarded repos: the repo the core lives in, plus any listed in settings.
 * The push prompt. `check_bash` (run by the PreToolUse hook) spots a Claude
   session's command that pushes from any git repo with a remote (guarded or
   not) and returns an "ask" verdict, so Claude Code shows the owner its own
-  yes/no prompt before the command runs (`stella push` is the short command sessions
-  use; the reason is plain text, and the diff opens in a pane beside the session). A push the owner types at a terminal
+  yes/no prompt before the command runs (the reason is plain text; Claude Code shows it all in
+  one colour and prints escape codes raw). Sessions ask the owner first through a dropdown (`plan`,
+  `answered`): a Push the owner picked there is remembered, so the `stella push` that follows is not asked. A push the owner types at a terminal
   is plain git. A session launched with `--auto-push` (STELLA_AUTO_PUSH=1) was
   told up front to push for the owner, so it is not asked.
 * The leak guard's git hooks. `install` puts `pre-commit` and `commit-msg`
@@ -18,11 +19,11 @@ and the unusable push URL it set on every remote.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shlex
-import shutil
 import subprocess
 import sys
 import time
@@ -323,13 +324,79 @@ def _others(command: str) -> str:
     return ", ".join(names[:3]) + (f" (+{len(names) - 3} more)" if len(names) > 3 else "")
 
 
-DIFF_PANE = "push-diff"
-DIFF_STALE = 60  # seconds a queued viewer request stays valid
-DIFF_MAX = 1800  # a viewer pane closes itself after this many seconds, answered or not
+# The owner's question as Claude Code's own dropdown (AskUserQuestion): "Push" (its preview pane shows what is sent) or "Defer".
+# `plan` builds the question and its preview and remembers it; when the owner picks Push, `answered` (PostToolUse) records the
+# approval of that repo head, so the `stella push` that follows is not asked a second time.
+PUSH_LABEL, DEFER_LABEL, PREVIEW_LINES = "Push", "Defer", 60
 
 
-def _diff_dir() -> Path:
-    return store_dir() / "pushdiff"
+def _plan_dir() -> Path:
+    return store_dir() / "pushplan"
+
+
+def plan(where: Path) -> dict:
+    """The AskUserQuestion for a push from `where`: its question, preview text and what was remembered. Empty when nothing is sent."""
+    d = where if where.is_dir() else where.parent
+    root = guarded_root(d) or _remote_root(d)
+    if not root:
+        return {}
+    head = _head(d)
+    if is_approved(root, d):
+        return {"approved": True}
+    if _nothing_to_send(d):
+        return {"nothing": True}
+    branch, what, subjects, more, on_remote = _facts(d)
+    detail = ", ".join(n for n in (what, "" if on_remote else "new branch", head[:7]) if n)
+    question = f"Push {alias(root)} → {branch} ({detail})?"
+    rng, _ = _remote_range(d)
+    git = ["git", "-C", str(d), "-c", "color.ui=never"]
+    cmds = ([git + ["diff", "--stat", rng], git + ["diff", rng]] if rng else [git + ["log", "--stat", "--max-count=5"]])
+    lines = [f"· {x}" for x in subjects] + ([f"  … and {more} more"] if more else []) + [""]
+    for c in cmds:
+        lines += subprocess.run(c, capture_output=True, text=True, timeout=10).stdout.splitlines() + [""]
+    if len(lines) > PREVIEW_LINES:
+        lines = lines[:PREVIEW_LINES] + [f"… {len(lines) - PREVIEW_LINES} more lines: `stella diff` prints them all"]
+    key = hashlib.sha1(question.encode()).hexdigest()[:12]
+    _plan_dir().mkdir(parents=True, exist_ok=True)
+    (_plan_dir() / f"{key}.json").write_text(json.dumps({"root": str(root), "head": head, "question": question, "ts": time.time()}))
+    return {"question": question, "preview": "\n".join(lines).rstrip()}
+
+
+def _chosen(response, label: str) -> bool:
+    """Whether the AskUserQuestion response says the owner picked `label` (its shape is Claude Code's: look for it anywhere,
+    ignoring the question list and the options themselves)."""
+    def strings(x, skip=False):
+        if isinstance(x, str):
+            yield x
+        elif isinstance(x, dict):
+            for k, v in x.items():
+                if k not in {"questions", "options"}:
+                    yield from strings(v)
+        elif isinstance(x, list):
+            for v in x:
+                yield from strings(v)
+
+    return any(t == label or re.search(r'="%s"' % re.escape(label), t) or t.startswith(f"{label} selected") for t in strings(response))
+
+
+def answered(tool_input: dict, response) -> str:
+    """PostToolUse of AskUserQuestion: if it was one of ours and the owner picked Push, remember the approval. Returns
+    "push", "defer" or "" (not ours, or he answered something else)."""
+    for q in (tool_input or {}).get("questions") or []:
+        text = q.get("question", "") if isinstance(q, dict) else ""
+        f = _plan_dir() / f"{hashlib.sha1(text.encode()).hexdigest()[:12]}.json"
+        try:
+            p = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if _chosen(response, PUSH_LABEL):
+            keep = [e for e in _approved() if e != f"{p['root']}@{p['head']}"][-499:] + [f"{p['root']}@{p['head']}"]
+            _approvals_file().parent.mkdir(parents=True, exist_ok=True)
+            _approvals_file().write_text(json.dumps(keep))
+            return "push"
+        if _chosen(response, DEFER_LABEL):
+            return "defer:" + f"{p['root']}@{p['head']}"
+    return ""
 
 
 def _diff_command(where: Path, color: bool = True) -> str:
@@ -340,84 +407,6 @@ def _diff_command(where: Path, color: bool = True) -> str:
     if rng:
         return f"{git} diff --stat {shlex.quote(rng)}; echo; {git} diff {shlex.quote(rng)}"
     return f"{git} log --stat --max-count=5; echo; {git} log -p --max-count=5"
-
-
-def viewer_command(targets: dict[Path, Path], marker: Path, token: str) -> str:
-    """What the viewer pane runs: the colored diff in a pager (delta if installed, else `less -R`). It closes itself when the
-    marker no longer holds this token (the push was answered, see `clear_diff`) or after DIFF_MAX seconds."""
-    pager = "delta --paging=always" if shutil.which("delta") else "less -R"
-    body = "; ".join(f"echo '=== {alias(r)} ==='; {_diff_command(w)}" for r, w in sorted(targets.items()))
-    watch = (f'n=0; while [ "$(cat {shlex.quote(str(marker))} 2>/dev/null)" = {shlex.quote(token)} ] && [ $n -lt {DIFF_MAX} ]; '
-             f'do sleep 1; n=$((n+1)); done; tmux kill-pane -t "$TMUX_PANE"')
-    return f"({watch}) >/dev/null 2>&1 & w=$!; ({body}) | {pager}; kill $w 2>/dev/null"
-
-
-def clear_diff(sid: str) -> None:
-    """The session moved on, so the push prompt was answered (yes ran the push, no was refused): the viewer pane closes itself."""
-    if sid:
-        (_diff_dir() / f"{re.sub(r'[^A-Za-z0-9_-]', '_', sid)}.open").unlink(missing_ok=True)
-
-
-def _split(srv, pane: str, targets: dict[Path, Path], marker: Path, token: str) -> bool:
-    """Open the viewer as a split beside `pane`, without taking the keyboard from it."""
-    if srv.run("display-message", "-p", "-t", pane, "#{pane_id}", check=False, timeout=3).returncode != 0:
-        return False
-    cmd = viewer_command(targets, marker, token)
-    r = srv.run("split-window", "-d", "-h", "-l", "45%", "-t", pane, "-c", str(next(iter(targets.values()))), cmd, check=False, timeout=5)
-    return r.returncode == 0
-
-
-def open_diff(touched: dict[Path, Path], sid: str) -> str:
-    """Put the diff of each push on screen beside the session's pane while the prompt is up. Returns "pane" (opened), "queued"
-    (the scheduler, which can reach tmux, opens it within a second or two) or "" (no way to show it). The hook's own shell
-    often cannot reach tmux; the scheduler can."""
-    pane, tm = os.environ.get("TMUX_PANE", ""), os.environ.get("TMUX", "")
-    if not (pane and tm):
-        return ""
-    d = _diff_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    key = re.sub(r"[^A-Za-z0-9_-]", "_", sid or pane)
-    marker, token = d / f"{key}.open", f"{os.getpid()}-{time.time()}"
-    marker.write_text(token)
-    sock = tm.split(",", 1)[0]
-    try:
-        from stella import tmuxctl
-
-        srv = tmuxctl.server_for_socket(sock)
-        if srv and _split(srv, pane, touched, marker, token):
-            return "pane"
-    except (OSError, subprocess.SubprocessError):
-        pass
-    from stella import scheduler
-
-    pid = scheduler.running_pid()
-    if not pid or not scheduler.serves_diffs(pid):  # a scheduler started before this existed never opens it
-        marker.unlink(missing_ok=True)
-        return ""
-    req = {"sock": sock, "pane": pane, "marker": str(marker), "token": token, "ts": time.time(),
-           "targets": {str(r): str(w) for r, w in touched.items()}}
-    (d / f"{key}.json").write_text(json.dumps(req))
-    return "queued"
-
-
-def process_diff_requests() -> None:
-    """Scheduler side: open each queued viewer pane (the scheduler runs where tmux is reachable)."""
-    from stella import tmuxctl
-
-    for f in sorted(_diff_dir().glob("*.json")):
-        try:
-            req = json.loads(f.read_text())
-        except (OSError, ValueError):
-            req = None
-        f.unlink(missing_ok=True)
-        if not req or time.time() - req.get("ts", 0) > DIFF_STALE:
-            continue
-        marker = Path(req["marker"])
-        if not marker.exists() or marker.read_text() != req["token"]:
-            continue  # answered before it opened
-        srv = tmuxctl.server_for_socket(req["sock"])
-        if srv:
-            _split(srv, req["pane"], {Path(r): Path(w) for r, w in req["targets"].items()}, marker, req["token"])
 
 
 def _git_out(where: Path, *args: str) -> str:
@@ -501,7 +490,7 @@ def _unresolved(pushes: list[tuple[list[str], str, Path]]) -> str | None:
     return None
 
 
-def check_bash(command: str, cwd: str, sid: str = "") -> Verdict:
+def check_bash(command: str, cwd: str) -> Verdict:
     """Ask the owner before a command that pushes from a repo with a remote runs. Once per repo and head."""
     pushes: list[tuple[list[str], str, Path]] = []
     _walk(command, Path(os.path.expanduser(cwd or os.getcwd())), pushes)
@@ -522,9 +511,7 @@ def check_bash(command: str, cwd: str, sid: str = "") -> Verdict:
     groups = "\n\n".join(_summary(r, w, not plain) for r, w in sorted(touched.items()))
     asked = tuple(f"{r}@{_head(w)}" for r, w in sorted(touched.items()))
     also = _others(command)
-    shown = open_diff(touched, sid)
-    diff = "Diff: pane on the right" if shown else "Diff: no viewer; No + Tab, type d"
-    tail = (f"⚠ This command also runs {also}. Push only?\n\n" if also else "") + f"Yes: push · No: defer · {diff}"
+    tail = (f"⚠ This command also runs {also}. Push only?\n\n" if also else "") + "Yes: push · No: defer"
     return Verdict("ask", f"{groups}\n\n{tail}", asked)
 
 

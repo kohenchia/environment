@@ -182,14 +182,6 @@ def running_pid() -> int | None:
         return -1
 
 
-def serves_diffs(pid: int) -> bool:
-    """Whether the running scheduler (started after push-diff panes existed) opens them."""
-    try:
-        return int((store_dir() / "scheduler.diffs").read_text()) == pid
-    except (OSError, ValueError):
-        return False
-
-
 # ---------------------------------------------------------------- entry points
 
 
@@ -199,7 +191,6 @@ def run_forever(interval: int = 60) -> int:
         print("another stella scheduler is already running")
         return 1
     (store_dir() / "scheduler.pid").write_text(str(os.getpid()))
-    (store_dir() / "scheduler.diffs").write_text(str(os.getpid()))  # this scheduler opens the push-diff panes
     every = settings().wake_check_minutes * 60
     print(f"{ledger.now():%Y-%m-%d %H:%M} stella scheduler: daily log for each day that ends (runs from {settings().daily_time} after local midnight); checking every {interval}s;"
           f" wake-line backstop every {every // 60}m", flush=True)
@@ -220,21 +211,17 @@ def run_forever(interval: int = 60) -> int:
         sweep_wrapup()
         end = time.monotonic() + interval
         while time.monotonic() < end:  # the last-resort queues (tyfp, adoption) are served here
-            time.sleep(min(1, max(0.1, end - time.monotonic())))
+            time.sleep(min(3, max(0.1, end - time.monotonic())))
             _close_queued()
 
 
 def _close_queued() -> None:
-    from stella import gate, wrapup
+    from stella import wrapup
 
     try:
         wrapup.process_requests()
     except Exception as e:  # noqa: BLE001
         print(f"gg error: {type(e).__name__}: {e}", flush=True)
-    try:
-        gate.process_diff_requests()
-    except Exception as e:  # noqa: BLE001
-        print(f"push-diff error: {type(e).__name__}: {e}", flush=True)
 
 
 def sweep_wrapup() -> None:

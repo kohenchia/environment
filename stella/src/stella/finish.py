@@ -97,8 +97,8 @@ def _push_command(root: Path, where: Path) -> str:
     branch = gate._git_out(where, "rev-parse", "--abbrev-ref", "HEAD")
     if branch in {"", "HEAD"}:
         return (f"HEAD in {root} is on no branch: put the commits on one (`git -C {root} switch -c <name>`), "
-                f"then run `{CALL} push -C {root}`")
-    return f"run `{CALL} push -C {root}`"
+                f"then run `{CALL} push --plan -C {root}`")
+    return f"run `{CALL} push --plan -C {root}` and follow it"
 
 
 def check(sid: str, cwd: str, own: bool = False, may_block: bool = True) -> Result:
@@ -136,10 +136,12 @@ def check(sid: str, cwd: str, own: bool = False, may_block: bool = True) -> Resu
     sessions.save(sid, sess)
     if lines:
         res.block = (
-            "You have unpushed commits in repos you worked in. Push now, as the last step of your work: the tool hook "
-            f"makes Claude Code show {owner} the push prompt (Yes, or No to defer; the diff opens beside the window), so they never have "
-            "to remember a push. Do not ask in chat and do not tell them to run anything.\n" + "\n".join(lines)
-            + f"\nRun it as that one command and nothing else in it. If the refusal says \"d\" or \"diff\", they want to see the changes: run `{CALL} diff --show`, then push again. If they answer no otherwise, it is deferred: say \"not pushed, deferred\" with the repo, branch and commit, and finish."
+            "You have unpushed commits in repos you worked in. Push now, as the last step of your work. Each line below gives "
+            f"`{CALL} push --plan -C <repo>`: it prints {owner}'s question (Claude Code's own dropdown: Push, with what is sent in "
+            "its preview pane, or Defer). Ask it with AskUserQuestion exactly as it says; if they pick Push, run "
+            f"`{CALL} push -C <repo>` as that one command and nothing else in it (no second prompt appears). Do not ask in chat "
+            "and do not tell them to run anything.\n" + "\n".join(lines)
+            + "\nIf they pick Defer (or answer anything else without Push), it is deferred: say \"not pushed, deferred\" with the repo, branch and commit, and finish."
         )
     return res
 

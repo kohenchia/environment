@@ -56,8 +56,8 @@ def test_the_prompt_is_short_grouped_and_ends_with_the_choices(env, repo):
     reason = _pretool_out(env, "git push origin main", repo)["permissionDecisionReason"]
     assert reason.splitlines() == [
         "▲ PUSH  dotfiles → main", "  1 commit", "", "  · change", "",
-        "Yes: push · No: defer · Diff: no viewer; No + Tab, type d"]  # no tmux in tests: nothing opens
-    assert "\x1b" not in reason and "FORCE" not in reason and not list(env.store.glob("push-diff*"))
+        "Yes: push · No: defer"]
+    assert "\x1b" not in reason and "FORCE" not in reason 
 
 
 def test_a_new_branch_and_more_commits_are_counted(env, repo):
@@ -92,44 +92,6 @@ def test_stella_push_pushes_the_current_branch_and_refuses_a_detached_head(env, 
     env.git(repo, "checkout", "-q", "--detach")
     r = env.run("push", cwd=repo, check=False)
     assert r.returncode == 2 and "no branch" in r.stderr
-
-
-def test_the_diff_pane_is_queued_for_the_scheduler_and_closes_when_the_push_is_answered(env, repo, monkeypatch):
-    from stella import scheduler
-
-    _commit(env, repo)
-    monkeypatch.setenv("STELLA_STORE", str(env.store))
-    lock = scheduler._try_lock()  # a running scheduler
-    (env.store / "scheduler.pid").write_text(str(os.getpid()))
-    (env.store / "scheduler.diffs").write_text(str(os.getpid()))
-    try:
-        tmux = {"TMUX": f"{env.tmp}/sock,1,0", "TMUX_PANE": "%7"}
-        out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"}, env=tmux)
-        assert out["permissionDecisionReason"].endswith("Diff: pane on the right")
-        req = json.loads((env.store / "pushdiff" / "S1.json").read_text())
-        marker = Path(req["marker"])
-        assert req["pane"] == "%7" and marker.read_text() == req["token"] and list(req["targets"].values()) == [str(repo)]
-        from stella import gate
-
-        cmd = gate.viewer_command({repo: repo}, marker, req["token"])
-        assert "diff --stat" in cmd and "less -R" in cmd and "kill-pane" in cmd and str(marker) in cmd
-        env.hook("posttool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"}, env=tmux)
-        assert not marker.exists()  # the viewer's watcher sees this and closes its pane
-    finally:
-        lock.close()
-
-
-def test_without_a_scheduler_or_tmux_nothing_is_queued(env, repo):
-    _commit(env, repo)
-    tmux = {"TMUX": f"{env.tmp}/sock,1,0", "TMUX_PANE": "%7"}
-    out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"}, env=tmux)
-    assert "no viewer" in out["permissionDecisionReason"] and not list((env.store / "pushdiff").glob("*"))
-
-
-def test_stella_diff_show_prints_the_diffstat_when_no_pane_opens(env, repo):
-    _commit(env, repo)
-    out = env.run("diff", "--show", cwd=repo).stdout
-    assert "f.txt" in out and "+x" in out and "stella push" in out
 
 
 def test_a_force_push_says_so_on_the_first_line(env, repo):
@@ -413,16 +375,65 @@ def test_a_push_with_dash_c_only_asks_about_that_repo_not_the_sessions_own(env, 
     assert reason.count("▲ PUSH") == 1 and "other → main" in reason and "dotfiles" not in reason
 
 
-def test_a_scheduler_that_predates_the_diff_pane_is_not_promised(env, repo, monkeypatch):
-    from stella import scheduler
+def _plan(env, repo):
+    return env.run("push", "--plan", "-C", str(repo), cwd=env.tmp).stdout
 
+
+def test_plan_prints_the_dropdown_question_with_the_diff_as_its_preview(env, repo):
+    sha = _commit(env, repo)
+    out = _plan(env, repo)
+    assert f"question: Push dotfiles → main (1 commit, {sha[:7]})?" in out and "header: Push" in out
+    assert '"Push"' in out and '"Defer"' in out and "--- preview ---" in out
+    assert "· change" in out and "f.txt" in out and "+x" in out and "\x1b" not in out
+
+
+def test_a_long_diff_is_cut_in_the_preview(env, repo):
+    _commit(env, repo, text="line\n" * 300)
+    out = _plan(env, repo)
+    assert "more lines: `stella diff` prints them all" in out and out.count("\n") < 90
+
+
+def _answer(env, repo, question, response, sid="S1"):
+    return env.hook("posttool", {"tool_name": "AskUserQuestion", "session_id": sid, "cwd": str(repo),
+                                 "tool_input": {"questions": [{"question": question}]}, "tool_response": response})
+
+
+def _question(env, repo):
+    return next(l for l in _plan(env, repo).splitlines() if l.strip().startswith("question:")).split("question: ", 1)[1]
+
+
+@pytest.mark.parametrize("response", [
+    {"answers": {"Q": "Push"}},
+    'User has answered your questions: "Q"="Push" selected preview: x. You can now continue.',
+    {"questions": [{"question": "Q", "options": [{"label": "Push"}, {"label": "Defer"}]}], "answers": {"Q": "Push"}},
+])
+def test_picking_push_approves_that_head_so_stella_push_is_not_asked_again(env, repo, response):
     _commit(env, repo)
-    monkeypatch.setenv("STELLA_STORE", str(env.store))
-    lock = scheduler._try_lock()
-    (env.store / "scheduler.pid").write_text(str(os.getpid()))  # running, but no scheduler.diffs: an old process
-    try:
-        out = env.hook("pretool", {"tool_name": "Bash", "tool_input": {"command": "stella push"}, "cwd": str(repo), "session_id": "S1"},
-                       env={"TMUX": f"{env.tmp}/sock,1,0", "TMUX_PANE": "%7"})
-        assert "pane on the right" not in out["permissionDecisionReason"] and not list((env.store / "pushdiff").glob("*.json"))
-    finally:
-        lock.close()
+    assert _pretool(env, f"stella push -C {repo}", env.tmp) == "ask"
+    _answer(env, repo, _question(env, repo), response)
+    assert _pretool(env, f"stella push -C {repo}", env.tmp) is None
+    assert "Already approved" in _plan(env, repo)
+    _commit(env, repo, text="y\n", msg="more")  # a new head is asked again
+    assert _pretool(env, f"stella push -C {repo}", env.tmp) == "ask"
+
+
+@pytest.mark.parametrize("response", [{"answers": {"Q": "Defer"}}, 'User has answered your questions: "Q"="Defer" selected', {"answers": {"Q": "Other text"}},
+                                      {"questions": [{"options": [{"label": "Push"}]}], "answers": {}}])
+def test_defer_or_anything_else_does_not_approve(env, repo, response):
+    _commit(env, repo)
+    _answer(env, repo, _question(env, repo), response)
+    assert _pretool(env, f"stella push -C {repo}", env.tmp) == "ask"
+
+
+def test_an_answer_to_some_other_question_approves_nothing(env, repo):
+    _commit(env, repo)
+    _answer(env, repo, "Push dotfiles → main (1 commit, abc1234)?", {"answers": {"Q": "Push"}})
+    assert _pretool(env, f"stella push -C {repo}", env.tmp) == "ask"
+
+
+def test_defer_is_remembered_as_asked_so_the_stop_hook_records_the_deferral(env, repo):
+    _commit(env, repo)
+    _answer(env, repo, _question(env, repo), {"answers": {"Q": "Defer"}})
+    r = env.run("hook", "stop", input=json.dumps({"session_id": "S1", "cwd": str(repo), "last_assistant_message": "NEXT FOR YOU: x"}))
+    assert "not pushed, deferred" in json.loads(r.stdout)["systemMessage"]
+    assert len([e for e in env.events() if e["type"] == "push_deferred"]) == 1

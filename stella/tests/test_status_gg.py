@@ -132,7 +132,7 @@ def test_unpushed_commits_get_the_push_block_with_the_rule_then_next_for_you(env
     led.team(dir=str(repo))
     _commit(env, repo)
     first = _stop(env, "Committed.", repo)
-    assert "stella push -C" in first["reason"] and "LAST block" in first["reason"]  # one block carries both
+    assert "stella push --plan -C" in first["reason"] and "LAST block" in first["reason"]  # one block carries both
     assert _stop(env, "Committed.", repo, active=True) == {}
     again = _stop(env, "All set.\n\n" + DONE, repo)  # next turn: the push was not made
     assert again["decision"] == "block" and "1 unpushed commit in dotfiles" in again["reason"]
@@ -311,7 +311,7 @@ def test_gg_with_an_unpushed_commit_raises_the_push_prompt_instead_of_a_command(
     _commit(env, r)
     out = _gg(env, _gg_env(env, sock, pane, **TEAM), cwd=r)
     ctx = out["hookSpecificOutput"]["additionalContext"]  # the model runs the push, so Claude Code asks
-    assert "typed `gg`" in ctx and "1 unpushed commit in proj" in ctx and "stella push -C" in ctx and "tell" in ctx
+    assert "typed `gg`" in ctx and "1 unpushed commit in proj" in ctx and "stella push --plan -C" in ctx and "tell" in ctx
     time.sleep(0.7)
     assert "alpha" in tm("list-windows", "-a", "-F", "#{window_name}").stdout
     # once the push is done, gg closes it
@@ -626,7 +626,7 @@ def test_tyfp_closes_exactly_the_clean_idle_ones_and_reports_once(env, led, wind
     assert "left open: busy: its session is busy" in ctx
     assert "left open: blocked: uncommitted in blocked: wip.txt" in ctx
     assert "left open: pushy: 1 unpushed commit in pushy" in ctx
-    assert f"stella push -C {w['pushy'][0]}" in ctx and f"push -C {w['blocked'][0]}" not in ctx
+    assert f"stella push --plan -C {w['pushy'][0]}" in ctx and f"push --plan -C {w['blocked'][0]}" not in ctx
     time.sleep(2.5)
     left = _names(tm) - {"zsh", "sh", "bash"}
     assert {"busy", "blocked", "pushy"} <= left and not ({"ok1", "ok2", "keep", "typer"} & left)
