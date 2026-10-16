@@ -121,3 +121,15 @@ def test_launch_forwards_only_pass_env_variables(env, tmux, fake_claude):
     assert _wait(fake_claude / "passed.txt").split() == ["t0ken", "unset"]
     script = (env.store / "launch" / "bz.sh").read_text()
     assert "t0ken" not in script
+
+
+def test_clean_exit_closes_the_window_but_a_crash_keeps_it(env, tmux):
+    sock = tmux["TMUX"].split(",")[0]
+    for name, claude in (("quits", "true"), ("crashes", "false")):
+        env.write_config(claude_bin=claude, tmux_session="work")
+        env.say("A", f"S, build {name}")
+        env.run("launch", "builder", "--order", "1", "--name", name, env=tmux)
+    time.sleep(1.5)
+    windows = subprocess.run(["tmux", "-S", sock, "list-windows", "-t", "work", "-F", "#{window_name}"],
+                             capture_output=True, text=True).stdout.split()
+    assert "quits" not in windows and "crashes" in windows

@@ -80,7 +80,9 @@ def new_window(srv: Server, name: str, directory: str, command: str, env: dict[s
         "new-window", "-d", "-P", "-F", "#{window_id}", "-t", f"={session}:", "-n", name, "-c", directory,
         *env_args, command,
     ).stdout.strip()
-    srv.run("set-option", "-w", "-t", out, "remain-on-exit", "on", check=False)
+    # A clean exit (status 0, e.g. /quit) closes the window; a crash keeps the dead pane so its last
+    # output can be read.
+    srv.run("set-option", "-w", "-t", out, "remain-on-exit", "failed", check=False)
     return out
 
 
