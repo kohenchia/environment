@@ -119,11 +119,12 @@ bindings = [
   { key = "ArrowUp",     mods = "Command|Option", chars = "\u001B[1;6A" },
   { key = "ArrowDown",   mods = "Command|Option", chars = "\u001B[1;6B" },
 
-  # resize a pane — hold the chord to keep going (tmux binds these with -r)
-  { key = "ArrowLeft",  mods = "Command|Control", chars = "\u001B[1;7D" },
-  { key = "ArrowRight", mods = "Command|Control", chars = "\u001B[1;7C" },
-  { key = "ArrowUp",    mods = "Command|Control", chars = "\u001B[1;7A" },
-  { key = "ArrowDown",  mods = "Command|Control", chars = "\u001B[1;7B" },
+  # resize a pane, hold the chord to keep going (tmux binds these with -r). Cmd+Opt+Ctrl, not Cmd+Ctrl:
+  # Cmd+Ctrl+Shift+arrows move the tab and shared modifiers made the two collide.
+  { key = "ArrowLeft",  mods = "Command|Option|Control", chars = "\u001B[7101~" },
+  { key = "ArrowRight", mods = "Command|Option|Control", chars = "\u001B[7102~" },
+  { key = "ArrowUp",    mods = "Command|Option|Control", chars = "\u001B[7103~" },
+  { key = "ArrowDown",  mods = "Command|Option|Control", chars = "\u001B[7104~" },
 
   { key = "Enter", mods = "Command|Shift", chars = "\u001Bz" },    # zoom
   { key = "Space", mods = "Command|Shift", chars = "\u001B " },    # next layout

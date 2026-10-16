@@ -102,7 +102,7 @@ can never retitle your project tab. `renumber-windows` is on, so closing a tab r
 | `Cmd+Shift+D` | Split down |
 | `Cmd+Shift+←↑↓→` | Move focus between panes |
 | `Cmd+Opt+←↑↓→` | Move the pane itself in that direction |
-| `Cmd+Ctrl+←↑↓→` | Resize the pane (hold to keep resizing) |
+| `Cmd+Opt+Ctrl+←↑↓→` | Resize the pane (hold to keep resizing); not Cmd+Ctrl, which collided with tab moves |
 | `Cmd+Shift+Enter` | Zoom the pane in / out |
 | `Cmd+Shift+Space` | Cycle pane layouts |
 | `Cmd+R` | Rename the pane (sets the border label) |
