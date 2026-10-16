@@ -555,12 +555,22 @@ def verify_pane(srv: tmuxctl.Server, req: dict):
     if not p:
         return f"pane {req.get('pane')} is gone"
     procs = windows._procs()
-    cp = req.get("claude_pid")
-    if not cp or cp not in procs or not windows._is_claude(procs[cp][1]) or cp not in windows._descendants(p["pane_pid"], procs):
+    tree = windows._descendants(p["pane_pid"], procs)
+    live = fleet.sessions()[0]
+    cp, sid = req.get("claude_pid"), req.get("sid")
+    if cp and not (cp in procs and windows._is_claude(procs[cp][1]) and cp in tree):
+        cp = None
+    if cp:
+        for a in live:
+            if a.get("pid") == cp and a.get("sessionId") and sid and a["sessionId"] != sid:
+                return f"pane {req.get('pane')} now holds another session"
+    elif sid:
+        # A hook often cannot read the process table, so no pid came with the request: the session id is the identity.
+        cp = next((a["pid"] for a in live if a.get("sessionId") == sid and a.get("pid") in tree), None) or next(
+            (x for x in tree if x in procs and windows._is_claude(procs[x][1])
+             and windows._flag(procs[x][1], "--resume", "-r", "--session-id") == sid), None)
+    if not cp:
         return f"pane {req.get('pane')} no longer holds the session that asked"
-    for a in fleet.sessions()[0]:
-        if a.get("pid") == cp and a.get("sessionId") and req.get("sid") and a["sessionId"] != req["sid"]:
-            return f"pane {req.get('pane')} now holds another session"
     for q in panes:
         if q["window_id"] == p["window_id"] and q["pane_id"] != p["pane_id"] and any(
                 x in procs and windows._is_claude(procs[x][1]) for x in windows._descendants(q["pane_pid"], procs)):
@@ -581,7 +591,7 @@ def _queue(sid: str, cwd: str, sock: str, pane: str, t: state.Team | None) -> Wr
     if not scheduler.running_pid():
         return Wrap(False, "gg: nothing blocks it, but this session cannot reach tmux and the scheduler is not running to close"
                            " it; run `stella run` in a terminal, or type /exit.")
-    return Wrap(True, "wrapped up: nothing blocks it; the scheduler closes the window within seconds (this session cannot reach tmux)")
+    return Wrap(True, "nothing blocks it; the scheduler closes the window within seconds (this session cannot reach tmux). If it stays open, `stella attention` says why.")
 
 
 def process_requests() -> list[str]:

@@ -613,3 +613,25 @@ def test_gg_and_tyfp_are_documented_side_by_side(env):
         assert "`gg`" in t and "`tyfp`" in t, f
     h = env.run("--help").stdout
     assert "tyfp" in h and "gg" in h
+
+
+def test_a_request_without_a_pid_is_verified_by_the_session_id(env, led, window):
+    """A sandboxed hook often cannot read the process table, so it sends no pid; the session id found in the pane's Claude is enough."""
+    env.write_config(wrapup_auto=False)
+    r = _repo(env, "beta")
+    wid, sock, tm = window("#!/bin/sh\nsleep 600\n", "beta")
+    led.team(name="beta", dir=str(r), window=wid, socket=sock, done_ago=10)
+    pane = tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0]
+    # the same window again, now running the fake Claude with the session id on its command line, as `claude --resume <id>`
+    tm("kill-window", "-t", wid)
+    script = env.tmp / "claude-beta.sh"
+    wid = tm("new-window", "-d", "-P", "-F", "#{window_id}", "-t", "=work:", "-n", "beta", f"{script} --resume sess-beta").stdout.strip()
+    time.sleep(0.5)
+    pane = tm("list-panes", "-t", wid, "-F", "#{pane_id}").stdout.split()[0]
+    led.add("launch", team="beta", archetype="builder", order=1, dir=str(r), window=wid, socket=sock)
+    led.add("done", team="beta", text="x")
+    (env.store / "gg").mkdir()
+    (env.store / "gg" / "req.json").write_text(json.dumps(
+        {"sock": sock, "pane": pane, "sid": "sess-beta", "cwd": str(r), "team": "beta", "claude_pid": None, "ts": time.time()}))
+    _process(env, sock)
+    assert _wait_gone(tm, "beta") and "wrapped_up" in _types(env)
