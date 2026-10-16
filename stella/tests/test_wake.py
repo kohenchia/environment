@@ -242,7 +242,7 @@ def test_stella_prefix_in_a_team_window_is_unchanged(quiet):
     team = {"STELLA_TEAM": "alpha"}
     env.hook("prompt", {"prompt": "/stella:build x", "session_id": "T", "cwd": "/tmp"}, env=team)
     out = env.hook("prompt", {"prompt": "[Stella] use sqlite", "session_id": "T", "cwd": "/tmp"}, env=team)
-    assert out["additionalContext"].startswith("Status line")  # only the per-turn status rule, no handback, no order
+    assert out["additionalContext"].startswith("Status block")  # only the per-turn status rule, no handback, no order
     assert not [e for e in env.events() if e["type"] in {"order", "direct"}]
 
 

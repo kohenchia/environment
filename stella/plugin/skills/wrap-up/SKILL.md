@@ -16,7 +16,7 @@ prompt, through the same code as below.
    is never wrapped up.
 2. Read its output. If it names an unpushed commit, push it now (`~/.local/bin/stella push -C <repo>`: Claude Code
    shows the owner the yes/no prompt; never tell him to run anything), then run `stella wrap` again. For
-   anything else it names, say it in one line and end with `NEXT FOR YOU: <that>`. If it says it is not in
+   anything else it names, say it in one line and end with the NEXT FOR YOU block listing that. If it says it is not in
    a tmux window or could not find its window, tell the owner to type `/exit` and close the window themselves.
 3. When it closed, reply with one short line saying the window is closing. Do not start other work: the window
    is about to go.

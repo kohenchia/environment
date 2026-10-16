@@ -76,6 +76,11 @@ def cmd_note(a):
     print(f"recorded note #{ev['seq']}")
 
 
+def cmd_shown(a):
+    ev = ledger.append("list_shown", by="cli", items=a.item, session=_session())
+    print(f"recorded the list shown #{ev['seq']} ({len(a.item)} items)")
+
+
 def cmd_attention(a):
     from stella import finish
 
@@ -83,12 +88,12 @@ def cmd_attention(a):
     finish.clear_pushed(st)
     items = st.attention()
     if a.json:
-        print(json.dumps([{"key": i.key, "seq": i.seq, "text": i.text} for i in items], indent=1))
+        print(json.dumps([{"n": n, "key": i.key, "seq": i.seq, "text": i.text} for n, i in enumerate(items, 1)], indent=1))
         return
     if not items:
         print("Nothing needs you.")
-    for i in items:
-        print(f"- [{i.key}] {i.text}")
+    for n, i in enumerate(items, 1):
+        print(f"{n}. [{i.key}] {i.text}")  # numbered in the order the status block lists them
 
 
 def cmd_ack(a):
@@ -629,11 +634,12 @@ tyfp: type exactly `tyfp` as a prompt in any session in the Stella tmux server a
 included; busy, running, blocked sessions and Stella's own stay. One report: `wrapped up: <names>` and `left open: <name>:
 <reason>`; for a session blocked only by an unpushed commit the push prompt is raised. The session it was typed in goes last.
 
-status line: every turn of every session in the Stella tmux server ends with exactly one last line:
-`NEXT FOR YOU: <what only the owner can do or decide>`, `ALL DONE: ready to wrap up. Type gg.`, or
-`WORKING: <what is still running>`. The Stop hook checks it and blocks the stop once, with the exact line to write,
-when it is missing or contradicts the facts (ALL DONE with unpushed commits, a deferred push, an open question or
-uncommitted changes).
+status block: every turn of every session in the Stella tmux server ends with a block as the last thing of the final
+message: a line of 40 U+2501 characters, then `🟧 **NEXT FOR YOU** (N)` and N numbered items (the owner answers "do 2"),
+`🟩 **ALL DONE** — ready to wrap up. Type `gg`.`, or `🟦 **WORKING** — <what is still running>`. The Stop hook checks
+it and blocks the stop once, with the exact block to write, when it is missing, malformed (count and items differ, no
+items) or contradicts the facts (ALL DONE with unpushed commits, a deferred push, an open question or uncommitted
+changes). The old one-line forms are accepted for one release, with the same single block.
 """
 
 
@@ -671,6 +677,8 @@ def build() -> argparse.ArgumentParser:
     sp.add_argument("--supersedes", type=int, action="append")
     sp = c("note", cmd_note, "Record a note")
     sp.add_argument("text")
+    sp = c("shown", cmd_shown, "Record the numbered list just shown to the owner (a bare number from him refers to it; `brief` shows the last one)")
+    sp.add_argument("item", nargs="+")
     sp = c("attention", cmd_attention, "What needs the owner")
     sp.add_argument("--json", action="store_true")
     sp = c("ack", cmd_ack, "Acknowledge attention items (keys from `~/.local/bin/stella attention`, or 'all')")

@@ -10,7 +10,7 @@ from test_gate import _commit
 from test_status_gg import SESS, _stop
 from test_wrapup import _repo, _sweep, led  # noqa: F401 - fixtures
 
-DONE = "Done.\nALL DONE: ready to wrap up. Type gg."
+DONE = "Done.\n\n" + "━" * 40 + "\n🟩 **ALL DONE** — ready to wrap up. Type `gg`."
 
 
 def _old(path, hours=5):

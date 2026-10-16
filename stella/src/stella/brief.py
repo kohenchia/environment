@@ -57,6 +57,8 @@ def describe(ev: dict) -> str:
         return f"#{ev['seq']} closed order #{ev.get('order')} as {ev.get('status')}"
     if t == "note":
         return f"#{ev['seq']} note: {_clip(ev.get('text', ''))}"
+    if t == "list_shown":
+        return f"#{ev['seq']} showed the owner a list of {len(ev.get('items') or [])}: {_clip('; '.join(ev.get('items') or []))}"
     if t == "correction":
         return f"#{ev['seq']} correction: {_clip(ev.get('text', ''))}"
     if t == "push_deferred":
@@ -80,7 +82,7 @@ def describe(ev: dict) -> str:
     return f"#{ev['seq']} {t}"
 
 
-QUIET = {"ack", "started", "clear_alert", "reaped", "wake", "wrapped_up"}
+QUIET = {"list_shown", "ack", "started", "clear_alert", "reaped", "wake", "wrapped_up"}
 
 
 def delta(session_id: str, since: int, st: State | None = None) -> list[str]:
@@ -129,6 +131,8 @@ def render(st: State) -> str:
     finish.clear_pushed(st)
     att = st.attention(now)
     sections.append(("Needs you", [f"- {_clip(a.text, 130)}" for a in att], 1))
+    sections.append((f"Last list shown (#{st.last_list_seq}; a bare number from the owner means one of these)",
+                     [f"{n}. {_clip(x, 110)}" for n, x in enumerate(st.last_list, 1)], 1))
     sections.append(("Follow-ups", followup_lines(st, now), 1))
     from stella import wrapup
 

@@ -59,26 +59,43 @@ stella doctor    # check everything
 | **Push prompt** | When a Claude session runs a command that pushes from any git repo with a remote (`git push`, `gh pr create`, …), the tool hook asks Claude Code to show you its yes/no prompt first, showing one short group per repo (`▲ PUSH  <repo> → <branch>`, `N commits · new branch · FORCE`, the newest three subjects) and a last line `Yes: push · No: defer · Diff: pane on the right`. The dialog's own buttons are Claude Code's (Yes / No); a hook can add nothing to them, so the diff is put on screen instead: when the prompt is raised the hook opens a split pane beside the session's pane (`less -R`, or `delta` if installed; diffstat first), through the scheduler when the hook's own shell cannot reach tmux (up to a second later) (only a scheduler started after this existed does it: after an update, `stella run` again, or the last line says `no viewer`), and the pane closes itself when the push is answered (the session's next tool call, prompt or stop). Without tmux or a scheduler the last line says `Diff: no viewer; No + Tab, type d`: the refusal then carries your `d` and the session runs `stella diff --show` (pane, else the diffstat in its reply) and pushes again. The prompt is plain text: Claude Code colours the whole reason yellow and the hook can only add glyphs and spacing. Sessions push with `stella push [-C <dir>]` (the current branch of one repo, `git push -u origin <branch>`, after a leak scan of what it sends in a protected repo; no force, no refspec), and nothing else in that command, so the dialog's command line is one calm line; a longer command that also pushes gets `⚠ This command also runs …. Push only?` in the prompt. A raw `git push` (and `gh pr create`, …) is gated exactly as before. Yes runs the push; no stops it and leaves it outstanding. It looks at the parsed command, so text that merely mentions a push (a commit message, a grep, a heredoc) never asks. A yes is remembered per repo and head commit for every session and subagent (recorded by a PostToolUse hook after the push ran), so the same head is asked once; a plain push with nothing ahead of its upstream is not asked. A `git push` you type in a terminal is plain git. Teams push their own branch before reporting done, and it is structural: a Stop hook (and `stella done`) refuses once, per repo head and session, when a session finishes with unpushed commits in a repo it worked in (its directory, and repos it committed to), telling the session to run `stella push` now so this prompt appears. A no is recorded as deferred ("not pushed, deferred"), reported once and never asked again for that head. There is no command for you to run: it is the prompt, or nothing; `stella launch --auto-push` skips the prompt when you said up front to push |
 | **Extensions** | Directories listed in `~/.config/stella/extensions.toml` that add teams, knowledge maps, persona and playbook addenda, doctor checks, the daily-log prompt, and leak-guard rules. The core never names one |
 
-### The status line
+### The status block
 
 Every turn of every session in the Stella tmux server (team leads, one-off teams, windows you opened by hand,
-and Stella's own) ends with exactly one last line, so you never reread the output to ask "is anything left for me?":
+and Stella's own) ends with a block as the last thing of the final message (plain markdown, nothing after it), so
+you never reread the output to ask "is anything left for me?", and can answer with a number ("do 2"):
 
 ```
-NEXT FOR YOU: approve the push of environment status-gg (2 commits); answer the open question: which database?
-ALL DONE: ready to wrap up. Type gg.
-WORKING: the nightly eval is still running
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟧 **NEXT FOR YOU** (2)
+1. approve the push of environment status-gg (2 commits)
+2. answer the open question: which database?
+```
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟩 **ALL DONE** — ready to wrap up. Type `gg`.
+```
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟦 **WORKING** — the nightly eval is still running
 ```
 
-`NEXT FOR YOU` is the one or two things only you can do or decide (a question, a decision, a deferred push, a
-review to post); `ALL DONE` means nothing is unpushed, uncommitted, deferred or open for you; `WORKING` only when
-background work continues after the turn. It is structural: the Stop hook reads the turn's last assistant message
-and, when the line is missing or contradicts the facts (ALL DONE with unpushed commits, a deferred push, an open
-needs-you flag or uncommitted changes), blocks the stop once with the exact line to write (never a loop: the
-second stop of the turn passes). A deferred push is `NEXT FOR YOU` until you drop it (`stella ack push-deferred:<repo>@<sha>`)
-or its commit reaches a remote. In Stella's session `NEXT FOR YOU` lists the items from `stella attention`, and
-the empty case is `ALL DONE: nothing needs you.` (she is never wrapped up, so no gg). The rule is also in the
-lead prompt, the team skills, Stella's persona, and the per-turn hook context.
+The rule line is 40 U+2501 characters. `NEXT FOR YOU` lists the things only you can do or decide (a question, a decision, a
+deferred push, a review to post), one numbered item each; `ALL DONE` means nothing is unpushed, uncommitted,
+deferred or open for you; `WORKING` only when background work continues after the turn. It is structural: the Stop
+hook reads the turn's last assistant message and, when the block is missing, malformed (the (N) count differs from
+the items, no items) or contradicts the facts (ALL DONE with unpushed commits, a deferred push, an open needs-you
+flag or uncommitted changes), blocks the stop once with the exact block to write (never a loop: the second stop of
+the turn passes). The old one-line forms (`NEXT FOR YOU: ...` as the last line) are still accepted for one release,
+but block once with the new block. A deferred push is an item until you drop it (`stella ack push-deferred:<repo>@<sha>`)
+or its commit reaches a remote. In Stella's session the items are the ones from `stella attention` (which prints
+them numbered, in the same order), and the empty case is `ALL DONE — nothing needs you.` (she is never wrapped up,
+so no gg).
+
+A bare number from you ("2", "do 2", "approve 1 and 3") means items of the session's last NEXT FOR YOU block.
+Stella records each list she presents with `stella shown "<item>" …`, so after a compaction or restart
+`stella brief` shows it as "Last list shown". The rule is also in the lead prompt, the team skills, Stella's persona,
+and the per-turn hook context.
 
 ### Wrapping up a session
 

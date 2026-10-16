@@ -1,20 +1,30 @@
-"""The status line every turn ends with, and the readiness check `gg` shares with it.
+"""The status block every turn ends with, and the readiness check `gg` shares with it.
 
-The last line of a session's final message of a turn is exactly one of:
+The last block of a session's final message of a turn (nothing after it) is a rule line of 40 U+2501 characters,
+then exactly one of:
 
-    NEXT FOR YOU: <the one or two things only the owner can do or decide>
-    ALL DONE: ready to wrap up. Type gg.
-    WORKING: <what is still running>
+    🟧 **NEXT FOR YOU** (3)
+    1. approve the push of X
+    2. decide Y
+    3. post the review of Z
 
-so the owner never rereads the output to ask whether anything is left for them. The Stop hook enforces it:
-`judge` compares the final message with the facts (`blockers`) and, when the line is missing or contradicts
-them (ALL DONE while commits are unpushed, a push was deferred, a needs-you flag is open, files are
-uncommitted), the hook blocks the stop once with the exact line to write. `stop_hook_active` means that
-block was already used this turn, so the hook never loops.
+    🟩 **ALL DONE** — ready to wrap up. Type `gg`.
+
+    🟦 **WORKING** — <what is still running>
+
+so the owner never rereads the output to ask whether anything is left for them, and can answer with a number
+("do 2"). The Stop hook enforces it: `judge` compares the final message with the facts (`blockers`) and, when the
+block is missing, malformed (the (N) count differs from the numbered items, no items) or contradicts the facts
+(ALL DONE while commits are unpushed, a push was deferred, a needs-you flag is open, files are uncommitted), the
+hook blocks the stop once with the exact block to write. `stop_hook_active` means that block was already used this
+turn, so the hook never loops. The retired one-line forms (`NEXT FOR YOU: ...`, `ALL DONE: ...`, `WORKING: ...`
+as the last line) are still accepted for one release, but block once with the new block, so a running session
+that was taught the old rule is moved over without a loop.
 
 `blockers` is also what `gg` and `stella wrapup <team>` check before closing a session: ALL DONE is only
 true when `gg` would succeed. Stella's own session is the exception: she is never wrapped up, so her
-blockers are the items from `stella attention` and her "nothing to do" line says so instead of "Type gg".
+blockers are the items from `stella attention` (numbered in the order shown) and her "nothing to do" line says
+so instead of "Type gg".
 """
 
 from __future__ import annotations
@@ -27,30 +37,39 @@ from pathlib import Path
 
 from stella import finish, gate, related, state, wrapup
 
+RULE_CH = "\u2501"
+RULE_LINE = RULE_CH * 40
+ALL_DONE = f"{RULE_LINE}\n🟩 **ALL DONE** — ready to wrap up. Type `gg`."
+ALL_DONE_STELLA = f"{RULE_LINE}\n🟩 **ALL DONE** — nothing needs you."
+
+# The retired one-line forms, accepted once with a block.
 MARKERS = ("NEXT FOR YOU:", "ALL DONE:", "WORKING:")
-ALL_DONE = "ALL DONE: ready to wrap up. Type gg."
-ALL_DONE_STELLA = "ALL DONE: nothing needs you."
+
+FORMAT = (
+    "the LAST block of your final message, nothing after it, plain markdown (not in a code fence): a line of 40 ━ characters"
+    " on its own line, then exactly one of `🟧 **NEXT FOR YOU** (N)` followed by N numbered items `1.` `2.` … (one thing"
+    " only the owner can do or decide per item, short and imperative: a question, a decision, a deferred push, a review to"
+    " post), `🟩 **ALL DONE** — ready to wrap up. Type `gg`.` (only when nothing is unpushed, uncommitted, deferred or open"
+    " for the owner), or `🟦 **WORKING** — <what is still running>` (only when the turn ends while background work"
+    " continues)."
+)
+NUMBERS = (
+    "When the owner answers with just a number, or \"do 2\" / \"approve 1 and 3\", he means items of your last NEXT FOR YOU block."
+)
 
 RULE = (
-    "Status line (structural, the Stop hook checks it): the LAST line of your final message of every turn is exactly one of"
-    " `NEXT FOR YOU: <the one or two things only the owner can do or decide: a question, a decision, a deferred push,"
-    " a review to post>`, `ALL DONE: ready to wrap up. Type gg.` (only when nothing is unpushed, uncommitted, deferred or"
-    " open for the owner), or `WORKING: <what is still running>` (only when the turn ends while background work continues)."
-    " In plain words, no list after it. (`gg` wraps up just this session; `tyfp` wraps up every session that is done.)"
+    f"Status block (structural, the Stop hook checks it): {FORMAT} {NUMBERS}"
+    " (`gg` wraps up just this session; `tyfp` wraps up every session that is done.)"
 )
 
-
-TURN_RULE = (
-    "Status line, checked by the Stop hook: the LAST line of your final message ends with exactly one of"
-    " `NEXT FOR YOU: <the one or two things only the owner can do or decide>`,"
-    " `ALL DONE: ready to wrap up. Type gg.` (only if nothing is unpushed, uncommitted, deferred or open for the owner), or"
-    " `WORKING: <what is still running>` (only if background work continues after this turn)."
-)
+TURN_RULE = f"Status block, checked by the Stop hook: {FORMAT} {NUMBERS}"
 STELLA_TURN_RULE = (
-    "Status line, checked by the Stop hook: the LAST line of your final message ends with exactly one of"
-    " `NEXT FOR YOU: <the items from `~/.local/bin/stella attention`, or the one decision you need>`,"
-    " `ALL DONE: nothing needs you.` (only when `stella attention` is empty and you owe no answer), or"
-    " `WORKING: <what is still running>`. You are never wrapped up, so there is no gg line for you."
+    "Status block, checked by the Stop hook: the LAST block of your final message, nothing after it, plain markdown (not in a"
+    " code fence): a line of 40 ━ characters on its own line, then `🟧 **NEXT FOR YOU** (N)` with the N items from"
+    " `~/.local/bin/stella attention` (or the one decision you need) numbered `1.` `2.` … in the order shown, or"
+    " `🟩 **ALL DONE** — nothing needs you.` (only when `stella attention` is empty and you owe no answer), or"
+    " `🟦 **WORKING** — <what is still running>`. You are never wrapped up, so there is no gg for you."
+    f" When you present a list, record it with `~/.local/bin/stella shown \"<item 1>\" \"<item 2>\" …`. {NUMBERS}"
 )
 
 
@@ -143,13 +162,64 @@ def _session(sid: str) -> dict:
 # ---------------------------------------------------------------- the line
 
 
+def _item(text: str, n: int = 150) -> str:
+    text = " ".join((text or "").split())
+    return text if len(text) <= n else text[: n - 1] + "…"
+
+
+def next_block(items: list[str]) -> str:
+    """The NEXT FOR YOU block for these items, numbered 1..N in the order given."""
+    return "\n".join([RULE_LINE, f"🟧 **NEXT FOR YOU** ({len(items)})"] + [f"{i}. {_item(t)}" for i, t in enumerate(items, 1)])
+
+
+def working_block(what: str) -> str:
+    return f"{RULE_LINE}\n🟦 **WORKING** — {what}"
+
+
 def expected(bl: list[Blocker], own: bool = False) -> str:
-    """The exact line the facts call for."""
+    """The exact block the facts call for: one numbered item per blocker."""
     if bl:
-        asks = [b.ask for b in bl]
-        shown = "; ".join(asks[:2]) + (f"; and {len(asks) - 2} more" if len(asks) > 2 else "")
-        return f"NEXT FOR YOU: {shown}"
+        return next_block([b.ask for b in bl])
     return ALL_DONE_STELLA if own else ALL_DONE
+
+
+@dataclass
+class Block:
+    kind: str  # NEXT FOR YOU | ALL DONE | WORKING
+    count: int | None  # the (N) in the label line, if any
+    items: list[str]
+    numbers: list[int]  # the numbers the items carry
+    extra: list[str]  # text after the label (or after the items) that is not part of the block
+
+
+_LABEL = re.compile(r"^(?:[\U0001F7E0-\U0001F7EB]\uFE0F?\s*)?[*_]*\s*(NEXT FOR YOU|ALL DONE|WORKING)\b", re.I)
+_ITEM = re.compile(r"^\s*(\d+)[.)]\s+(\S.*)$")
+
+
+def parse_block(text: str) -> Block | None:
+    """The final block: the last rule line (a run of >= 20 U+2501) followed by the label line and, for NEXT FOR YOU, the
+    numbered items to the end of the message. None when the message does not end with one."""
+    lines = (text or "").splitlines()
+    rules = [i for i, ln in enumerate(lines) if re.fullmatch(f"{RULE_CH}{{20,}}", ln.strip().strip("*_ "))]
+    if not rules:
+        return None
+    rest = [ln for ln in lines[rules[-1] + 1:] if ln.strip()]
+    m = _LABEL.match(rest[0].strip()) if rest else None
+    if not m:
+        return None
+    kind = m.group(1).upper()
+    cm = re.match(r"[*_\s]*\((\d+)\)", rest[0].strip()[m.end():])
+    blk = Block(kind, int(cm.group(1)) if cm else None, [], [], [])
+    for ln in rest[1:]:
+        im = _ITEM.match(ln)
+        if kind == "NEXT FOR YOU" and im:
+            blk.numbers.append(int(im.group(1)))
+            blk.items.append(im.group(2).strip())
+        elif kind == "NEXT FOR YOU" and blk.items and ln[:1].isspace():
+            blk.items[-1] += " " + ln.strip()  # a wrapped item
+        else:
+            blk.extra.append(ln.strip())
+    return blk
 
 
 _STRIP = " \t*_`>#-"
@@ -161,9 +231,9 @@ def last_line(text: str) -> str:
 
 
 def marker(text: str) -> str | None:
+    """The retired one-line form: the last line starts with `NEXT FOR YOU:`, `ALL DONE:` or `WORKING:`."""
     line = last_line(text)
     return next((m for m in MARKERS if line.startswith(m)), None)
-
 
 def final_message(data: dict) -> str:
     """The turn's last assistant text: the hook's own field when Claude Code gives one, else the transcript's tail."""
@@ -198,19 +268,50 @@ def final_message(data: dict) -> str:
     return ""
 
 
-def judge(text: str, bl: list[Blocker], own: bool = False) -> str | None:
-    """None when the final message ends with a status line the facts allow; else why not, with the exact line."""
-    m = marker(text)
-    want = expected(bl, own)
-    if m is None:
-        return (f"Your final message does not end with the status line. Write the last line as exactly this one, in plain words,"
-                f" as the LAST line of your final message (reply with one or two sentences of context, then the line): {want}")
-    if m == "ALL DONE:" and bl:
-        return ("Your final message ends with ALL DONE, but not everything is done: " + "; ".join(b.text for b in bl)
-                + f". Make the last line exactly: {want}")
-    if m == "WORKING:" and any(b.kind in {"asking", "deferred"} for b in bl):
+def _contradiction(kind: str, bl: list[Blocker]) -> str | None:
+    if kind == "ALL DONE" and bl:
+        return "Your final message ends with ALL DONE, but not everything is done: " + "; ".join(b.text for b in bl) + "."
+    if kind == "WORKING" and any(b.kind in {"asking", "deferred"} for b in bl):
         return ("Your final message ends with WORKING, but the owner has something open: "
-                + "; ".join(b.text for b in bl if b.kind in {"asking", "deferred"}) + f". Make the last line exactly: {want}")
+                + "; ".join(b.text for b in bl if b.kind in {"asking", "deferred"}) + ".")
+    return None
+
+
+def _write(want: str) -> str:
+    return f" Make the LAST block of your final message exactly this (plain markdown, nothing after it):\n\n{want}"
+
+
+def judge(text: str, bl: list[Blocker], own: bool = False) -> str | None:
+    """None when the final message ends with a status block the facts allow; else why not, with the exact block."""
+    want = expected(bl, own)
+    blk = parse_block(text)
+    if blk is None:
+        old = marker(text)
+        if old is None:
+            return ("Your final message does not end with the status block. Reply with one or two sentences of context, then the"
+                    f" block, as the LAST thing of your final message (plain markdown, nothing after it):\n\n{want}")
+        # The retired one-line form: block once, with the block to copy (a question or a wait carries over its text).
+        said = last_line(text)[len(old):].strip()
+        if not bl and old == "NEXT FOR YOU:":
+            want = next_block([s.strip() for s in said.split(";") if s.strip()] or [said or "see the message above"])
+        elif not bl and old == "WORKING:":
+            want = working_block(said or "background work")
+        bad = _contradiction(old[:-1], bl)
+        return (bad + " " if bad else "") + ("The one-line status (`" + old + " …`) is retired; the status is now a block." + _write(want))
+    bad = _contradiction(blk.kind, bl)
+    if bad:
+        return bad + _write(want)
+    if blk.extra:
+        return ("Something follows the status block in your final message; the block must be the last thing, with nothing after it."
+                + _write(blk.kind == "NEXT FOR YOU" and next_block(blk.items) or want))
+    if blk.kind == "NEXT FOR YOU":
+        fixed = want if bl else (next_block(blk.items) if blk.items else None)
+        if not blk.items:
+            return ("Your NEXT FOR YOU block has no numbered items; list at least one thing only the owner can do or decide"
+                    " as `1. …`" + (_write(want) if bl else f", or, if nothing needs the owner, end with the ALL DONE block:\n\n{want}"))
+        if blk.count is None or blk.count != len(blk.items) or blk.numbers != list(range(1, len(blk.items) + 1)):
+            return (f"Your NEXT FOR YOU block says ({blk.count}) but has {len(blk.items)} numbered item(s)"
+                    f" numbered {blk.numbers}; the count must match and the items must be numbered 1..N." + _write(fixed))
     return None
 
 
@@ -223,7 +324,7 @@ def stop_reason(data: dict, sid: str, own: bool, t: state.Team | None, push_bloc
     if push_block:
         # The push comes first and its outcome is not known yet: give the rule, not the line.
         return RULE + " After the push: if the owner declined, " + (
-            "write the NEXT FOR YOU line naming the deferred push; if it went through and nothing else is open, the ALL DONE line.")
+            "write the NEXT FOR YOU block naming the deferred push; if it went through and nothing else is open, the ALL DONE block.")
     return judge(final_message(data), bl, own)
 
 

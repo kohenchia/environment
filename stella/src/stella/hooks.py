@@ -200,7 +200,7 @@ def _tyfp(data: dict) -> None:
     _emit("UserPromptSubmit",
           f"The owner typed `tyfp` (wrap up every session that is done). Report to them exactly this, then raise the pushes below:\n"
           f"{res['text']}\n\nThe sessions above whose only blocker is an unpushed commit: run each push now, so Claude Code shows them"
-          f" its prompt (never ask in chat, never tell them to run anything):\n{cmds}\nThen end with the status line.")
+          f" its prompt (never ask in chat, never tell them to run anything):\n{cmds}\nThen end with the status block.")
 
 
 def _block_prompt(reason: str) -> None:
@@ -223,7 +223,7 @@ def _gg(data: dict) -> None:
     _emit("UserPromptSubmit",
           f"The owner typed `gg` to wrap this session up, and it did not close: {w.message}. Do not ask in chat and tell"
           f" them nothing to run. {how}\nThen say in one line what still blocks the close, if anything, and end with the"
-          " status line (NEXT FOR YOU: … while something is open; ALL DONE: ready to wrap up. Type gg. if nothing is).")
+          " status block (🟧 NEXT FOR YOU with numbered items while something is open; 🟩 ALL DONE — ready to wrap up. Type `gg`. if nothing is).")
 
 
 FOLLOWUPS = "Your open follow-ups (act on READY ones; `~/.local/bin/stella followup close N` when done):\n"

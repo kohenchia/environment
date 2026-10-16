@@ -17,6 +17,17 @@ def window(_bw):
     return lambda script, name="alpha": _bw(script, name, True)
 
 
+RULE = "━" * 40
+DONE = f"{RULE}\n🟩 **ALL DONE** — ready to wrap up. Type `gg`."
+DONE_STELLA = f"{RULE}\n🟩 **ALL DONE** — nothing needs you."
+
+
+def nxt(*items, count=None):
+    """A NEXT FOR YOU block; `count` overrides the (N) to write a wrong one."""
+    n = len(items) if count is None else count
+    return "\n".join([RULE, f"🟧 **NEXT FOR YOU** ({n})"] + [f"{i}. {t}" for i, t in enumerate(items, 1)])
+
+
 SESS = "sess-alpha"
 TEAM = {"STELLA_TEAM": "alpha"}
 
@@ -37,57 +48,107 @@ def _transcript(env, text):
 # ---------------------------------------------------------------- the status line
 
 
-def test_a_missing_line_is_blocked_once_with_the_exact_line(env, led):
+def test_a_missing_block_is_blocked_once_with_the_exact_block(env, led):
     r = _repo(env)
     led.team(dir=str(r))
     out = _stop(env, "I built it. Everything is in main.", r)
-    assert out["decision"] == "block" and "ALL DONE: ready to wrap up. Type gg." in out["reason"]
+    assert out["decision"] == "block" and DONE in out["reason"]
     assert _stop(env, "I built it.", r, active=True) == {}  # at most one block per turn: no loop
 
 
 def test_the_transcripts_last_assistant_text_is_what_is_read(env, led):
     r = _repo(env)
     led.team(dir=str(r))
-    data = {"session_id": SESS, "cwd": str(r), "transcript_path": str(_transcript(env, "Done.\nALL DONE: ready to wrap up. Type gg."))}
+    data = {"session_id": SESS, "cwd": str(r), "transcript_path": str(_transcript(env, "Done.\n\n" + DONE))}
     assert env.run("hook", "stop", input=json.dumps(data), env=TEAM).stdout.strip() == ""
     data["transcript_path"] = str(_transcript(env, "Done, nothing else."))
     assert json.loads(env.run("hook", "stop", input=json.dumps(data), env=TEAM).stdout)["decision"] == "block"
 
 
-@pytest.mark.parametrize("line", ["ALL DONE: ready to wrap up. Type gg.", "NEXT FOR YOU: pick a name", "WORKING: the eval run",
-                                  "**ALL DONE: ready to wrap up. Type gg.**"])
-def test_each_line_passes_when_the_facts_allow_it(env, led, line):
+@pytest.mark.parametrize("block", [DONE, nxt("pick a name"), nxt("pick a name", "approve the push of proj"),
+                                   f"{RULE}\n🟦 **WORKING** — the eval run", f"{RULE}\n🟩 ALL DONE — ready to wrap up. Type gg.",
+                                   f"{RULE}\n🟧 NEXT FOR YOU (1)\n1. pick a name\n   and wrap this item\n"])
+def test_each_block_passes_when_the_facts_allow_it(env, led, block):
     r = _repo(env)
     led.team(dir=str(r))
-    assert _stop(env, f"Summary.\n\n{line}\n", r) == {}
+    assert _stop(env, f"Summary.\n\n{block}\n", r) == {}
+
+
+def test_the_old_one_line_forms_are_accepted_once_with_a_block(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    for old, block in (("ALL DONE: ready to wrap up. Type gg.", DONE),
+                       ("**NEXT FOR YOU: pick a name; decide Y**", nxt("pick a name", "decide Y")),
+                       ("WORKING: the eval run", f"{RULE}\n🟦 **WORKING** — the eval run")):
+        out = _stop(env, f"Summary.\n{old}", r)
+        assert out["decision"] == "block" and "retired" in out["reason"] and block in out["reason"], old
+        assert _stop(env, f"Summary.\n{old}", r, active=True) == {}  # the second stop of the turn passes: no loop
+
+
+def test_the_count_must_match_the_numbered_items(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    out = _stop(env, "Questions.\n\n" + nxt("pick a name", "decide Y", count=3), r)
+    assert out["decision"] == "block" and "says (3) but has 2" in out["reason"] and nxt("pick a name", "decide Y") in out["reason"]
+    bare = _stop(env, f"x\n\n{RULE}\n🟧 **NEXT FOR YOU**\n1. a", r)  # no (N) at all
+    assert nxt("a") in bare["reason"]
+    skipped = _stop(env, f"x\n\n{RULE}\n🟧 **NEXT FOR YOU** (2)\n1. a\n3. b", r)
+    assert nxt("a", "b") in skipped["reason"]
+    assert _stop(env, "x\n\n" + nxt("pick a name", "decide Y", count=3), r, active=True) == {}
+
+
+def test_an_empty_next_for_you_list_is_blocked(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    out = _stop(env, f"x\n\n{RULE}\n🟧 **NEXT FOR YOU** (0)\n", r)
+    assert out["decision"] == "block" and "no numbered items" in out["reason"] and DONE in out["reason"]
+
+
+def test_text_after_the_block_is_blocked(env, led):
+    r = _repo(env)
+    led.team(dir=str(r))
+    out = _stop(env, f"x\n\n{nxt('pick a name')}\n\nLet me know!", r)
+    assert out["decision"] == "block" and "nothing after it" in out["reason"] and nxt("pick a name") in out["reason"]
 
 
 def test_all_done_with_uncommitted_changes_is_blocked(env, led):
     r = _repo(env)
     led.team(dir=str(r))
     (r / "wip.txt").write_text("x\n")
-    out = _stop(env, "Done.\nALL DONE: ready to wrap up. Type gg.", r)
-    assert "uncommitted in proj: wip.txt" in out["reason"] and "NEXT FOR YOU: commit or discard the changes in proj" in out["reason"]
-    assert _stop(env, "Done.\nNEXT FOR YOU: commit wip.txt", r) == {}
+    out = _stop(env, "Done.\n\n" + DONE, r)
+    assert "uncommitted in proj: wip.txt" in out["reason"] and nxt("commit or discard the changes in proj") in out["reason"]
+    assert _stop(env, "Done.\n\n" + nxt("commit wip.txt"), r) == {}
 
 
 def test_all_done_with_an_open_question_is_blocked(env, led):
     r = _repo(env)
     led.team(dir=str(r))
     led.add("report", ago=1, team="alpha", text="which database?", needs_you=True)
-    out = _stop(env, "ALL DONE: ready to wrap up. Type gg.", r)
-    assert "an open question: which database?" in out["reason"]
+    out = _stop(env, DONE, r)
+    assert "an open question: which database?" in out["reason"] and "1. answer the open question: which database?" in out["reason"]
 
 
 def test_unpushed_commits_get_the_push_block_with_the_rule_then_next_for_you(env, led, repo):
     led.team(dir=str(repo))
     _commit(env, repo)
     first = _stop(env, "Committed.", repo)
-    assert "stella push -C" in first["reason"] and "LAST line" in first["reason"]  # one block carries both
+    assert "stella push -C" in first["reason"] and "LAST block" in first["reason"]  # one block carries both
     assert _stop(env, "Committed.", repo, active=True) == {}
-    again = _stop(env, "All set.\nALL DONE: ready to wrap up. Type gg.", repo)  # next turn: the push was not made
+    again = _stop(env, "All set.\n\n" + DONE, repo)  # next turn: the push was not made
     assert again["decision"] == "block" and "1 unpushed commit in dotfiles" in again["reason"]
-    assert "NEXT FOR YOU: approve the push of dotfiles main (1 commit)" in again["reason"]
+    assert nxt("approve the push of dotfiles main (1 commit)") in again["reason"]
+
+
+def test_every_blocker_is_one_numbered_item(env, led, repo):
+    led.team(dir=str(repo))
+    _commit(env, repo)
+    (repo / "wip.txt").write_text("x\n")
+    led.add("report", ago=1, team="alpha", text="which database?", needs_you=True)
+    _stop(env, "x", repo)  # the push block comes first; the facts follow on the next stop
+    out = _stop(env, DONE, repo)["reason"]
+    block = out[out.index(RULE):]
+    assert block.splitlines()[1] == "🟧 **NEXT FOR YOU** (3)"
+    assert [ln[:2] for ln in block.splitlines()[2:]] == ["1.", "2.", "3."]
 
 
 def test_a_deferred_push_is_next_for_you_until_it_is_dropped(env, led, repo):
@@ -96,24 +157,34 @@ def test_a_deferred_push_is_next_for_you_until_it_is_dropped(env, led, repo):
     pre = {"tool_name": "Bash", "tool_input": {"command": "git push -u origin main"}, "cwd": str(repo), "session_id": SESS}
     _stop(env, "x", repo)
     env.hook("pretool", pre, env=TEAM)  # the prompt appeared; the owner said no
-    _stop(env, "NEXT FOR YOU: x", repo)  # recorded as deferred
-    for bad in ("ALL DONE: ready to wrap up. Type gg.", "WORKING: nothing"):
+    _stop(env, nxt("x"), repo)  # recorded as deferred
+    for bad in (DONE, f"{RULE}\n🟦 **WORKING** — nothing"):
         out = _stop(env, bad, repo)
         assert out["decision"] == "block" and "push of dotfiles main" in out["reason"] and "was deferred" in out["reason"]
-    assert _stop(env, "NEXT FOR YOU: push of dotfiles is deferred; push it or drop it", repo) == {}
+    assert _stop(env, nxt("push of dotfiles is deferred; push it or drop it"), repo) == {}
     key = json.loads(env.run("attention", "--json").stdout)[0]["key"]
     env.run("ack", key)  # dropped
-    assert _stop(env, "ALL DONE: ready to wrap up. Type gg.", repo) == {}
+    assert _stop(env, DONE, repo) == {}
 
 
 def test_stellas_session_lists_attention_items_and_has_no_gg(env, led):
     own = {"STELLA_SELF": "1"}
     out = _stop(env, "Hello.", "/tmp", extra=own, sid="stella-s")
-    assert "ALL DONE: nothing needs you." in out["reason"] and "Type gg" not in out["reason"]
-    assert _stop(env, "Quiet.\nALL DONE: nothing needs you.", "/tmp", extra=own, sid="stella-s") == {}
+    assert DONE_STELLA in out["reason"] and "Type `gg`" not in out["reason"]
+    assert _stop(env, "Quiet.\n\n" + DONE_STELLA, "/tmp", extra=own, sid="stella-s") == {}
     led.add("alert", key="k1", text="the nightly sweep failed")
-    out = _stop(env, "All fine.\nALL DONE: nothing needs you.", "/tmp", extra=own, sid="stella-s")
-    assert "NEXT FOR YOU: the nightly sweep failed" in out["reason"]
+    led.add("alert", key="k2", text="disk is nearly full")
+    out = _stop(env, "All fine.\n\n" + DONE_STELLA, "/tmp", extra=own, sid="stella-s")
+    assert nxt("disk is nearly full", "the nightly sweep failed") in out["reason"]  # newest first, the order `attention` prints
+    shown = env.run("attention").stdout.splitlines()
+    assert shown[0].startswith("1. ") and "disk is nearly full" in shown[0] and shown[1].startswith("2. ")
+
+
+def test_the_list_shown_is_recorded_and_in_the_brief(env):
+    assert "Last list shown" not in env.run("brief").stdout
+    env.run("shown", "approve the push of X", "decide Y")
+    out = env.run("brief").stdout
+    assert "Last list shown" in out and "1. approve the push of X" in out and "2. decide Y" in out
 
 
 def test_a_session_outside_tmux_and_not_a_team_is_not_held_to_it(env):
@@ -128,12 +199,13 @@ def test_the_rule_is_in_the_per_turn_context_the_lead_prompt_and_the_skills(env,
     led.team(dir=str(r))
     env.say(SESS, "hello", env=TEAM)  # first prompt (seen_first)
     ctx = env.hook("prompt", {"prompt": "next", "session_id": SESS, "cwd": str(r)}, env=TEAM)["additionalContext"]
-    assert "NEXT FOR YOU" in ctx and "ALL DONE: ready to wrap up. Type gg." in ctx
-    assert "ALL DONE: ready to wrap up. Type gg." in launch.lead_prompt("t", "adhoc", 1, "do it")
-    assert "ALL DONE: ready to wrap up. Type gg." in env.run("context", "--team").stdout
+    assert "NEXT FOR YOU" in ctx and "ALL DONE** — ready to wrap up. Type `gg`." in ctx and "do 2" in ctx
+    assert "ALL DONE** — ready to wrap up. Type `gg`." in launch.lead_prompt("t", "adhoc", 1, "do it")
+    assert "ALL DONE** — ready to wrap up. Type `gg`." in env.run("context", "--team").stdout
     root = Path(__file__).resolve().parents[1] / "plugin"
     for f in ("skills/build/SKILL.md", "skills/investigate/SKILL.md", "skills/stella/SKILL.md", "agents/stella.md"):
         assert "NEXT FOR YOU" in (root / f).read_text(), f
+        assert "NEXT FOR YOU:" not in (root / f).read_text(), f  # the retired one-line form is no longer taught
 
 
 # ---------------------------------------------------------------- gg

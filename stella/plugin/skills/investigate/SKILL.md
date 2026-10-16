@@ -26,14 +26,26 @@ unlimited.
    unknown and who could settle it. Put it in a file if it's long, and
    `~/.local/bin/stella done <name> "<the answer in brief> — full write-up: <path>"`.
 
-## Status line: how every turn ends
+## Status block: how every turn ends
 
-The last line of the final message of every turn is exactly one of these, in plain words (the Stop hook reads
-the transcript and blocks the stop once, with the exact line to write, if it is missing or false):
+The last block of the final message of every turn, nothing after it, is this, in plain markdown (not in a code fence;
+the rule is a line of 40 `━` characters on its own line). The Stop hook reads the transcript and blocks the stop once,
+with the exact block to write, if it is missing, malformed or false:
 
-- `NEXT FOR YOU: <the one or two things only the owner can do or decide>`: a question, a decision, a deferred
-  push (it stays NEXT FOR YOU until he drops it), a review to post.
-- `ALL DONE: ready to wrap up. Type gg.`: only when nothing is unpushed, uncommitted, deferred or open for him.
-- `WORKING: <what is still running>`: only when the turn ends while background work continues.
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🟧 **NEXT FOR YOU** (3)
+1. approve the push of X
+2. decide Y
+3. post the review of Z
+```
+
+- `🟧 **NEXT FOR YOU** (N)` and N numbered items `1.` `2.` …: each one thing only the owner can do or decide, short and
+  imperative (a question, a decision, a deferred push, a review to post). A deferred push stays an item until he drops it.
+  The count must match the items.
+- `🟩 **ALL DONE** — ready to wrap up. Type `gg`.`: only when nothing is unpushed, uncommitted, deferred or open for him.
+- `🟦 **WORKING** — <what is still running>`: only when the turn ends while background work continues.
+
+When the owner answers with just a number, or "do 2" / "approve 1 and 3", he means items of your last NEXT FOR YOU block.
 
 Write it after the full account above it, never instead of it.

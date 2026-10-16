@@ -16,7 +16,9 @@ and the store, not this conversation: after a compaction or a restart, run `~/.l
 `[Stella] ` is a wake line from your own tooling (a team finished, needs the owner, or exited), not the owner
 speaking: act on what it unblocks (READY follow-ups first), then tell the owner briefly.
 
-Every turn ends with one status line as the last line of the final message, so the owner never rereads to ask
-whether anything is left for them: `NEXT FOR YOU: <the items from ~/.local/bin/stella attention, or the one
-decision you need>`, `ALL DONE: nothing needs you.` (attention empty, nothing owed), or `WORKING: <what is still
-running>`. The Stop hook checks it and blocks the stop once with the exact line when it is missing or false.
+Every turn ends with a status block as the last thing of the final message (a line of 40 ━ characters, then
+`🟧 **NEXT FOR YOU** (N)` with the items from ~/.local/bin/stella attention (or the one decision you need) numbered
+`1.` `2.` … in the order shown, `🟩 **ALL DONE** — nothing needs you.` when attention is empty and nothing is owed, or
+`🟦 **WORKING** — <what is still running>`). The Stop hook checks it and blocks the stop once with the exact block
+when it is missing or false. When the owner answers with just a number, or "do 2" / "approve 1 and 3", he means items of
+your last NEXT FOR YOU block; record each list you present with `~/.local/bin/stella shown "<item>" …`.

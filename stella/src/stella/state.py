@@ -109,6 +109,8 @@ class State:
     acked: set[str] = field(default_factory=set)
     push_deferred: list[dict] = field(default_factory=list)
     followups: dict[int, Followup] = field(default_factory=dict)
+    last_list: list[str] = field(default_factory=list)  # the numbered list last shown to the owner
+    last_list_seq: int = 0
 
     def open_orders(self) -> list[Order]:
         return [o for o in self.orders.values() if o.status == "open" and o.kind == "instruction"]
@@ -188,6 +190,8 @@ def fold(since_events=None) -> State:
             if o:
                 o.status = ev.get("status", "done")
                 o.note = ev.get("note")
+        elif t == "list_shown":
+            st.last_list, st.last_list_seq = list(ev.get("items") or []), ev["seq"]
         elif t == "decision":
             st.decisions.append(ev)
             for s in ev.get("supersedes", []) or []:
