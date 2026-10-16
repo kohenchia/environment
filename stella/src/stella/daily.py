@@ -168,7 +168,7 @@ def run_daily(date: dt.date, claude: str | None = None) -> int:
         ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: no sessions, nothing to log")
         return 0
     p = digest(date)
-    rc = headless(_daily_prompt(date, p), store_dir() / "runs" / f"daily-{date:%Y-%m-%d}.log", claude=claude)
+    rc = headless(_daily_prompt(date, p), store_dir() / "runs" / f"daily-{date:%Y-%m-%d}.log", model="sonnet", claude=claude)
     ledger.append("note", by="scheduler", text=f"daily log for {date:%Y-%m-%d}: {'written' if rc == 0 else f'FAILED (exit {rc})'}")
     if rc != 0:
         ledger.append("alert", by="scheduler", key=f"daily:{date}", text=f"daily log for {date} failed; see runs/daily-{date}.log")

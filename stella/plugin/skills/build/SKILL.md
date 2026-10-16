@@ -22,6 +22,9 @@ first: it says which repo a new tool belongs in and the rules of each repo.
 
 ## 2 · Plan (planner subagent, or you for small work)
 
+Planning, building and verifying are judgment work: run every subagent below on `model: "opus"`.
+Use `sonnet` only for mechanical side tasks (finding callers, listing files, collecting logs).
+
 A numbered list of steps, each with the file(s) it touches and how it is verified. Report the plan
 in one line with `~/.local/bin/stella report`.
 
