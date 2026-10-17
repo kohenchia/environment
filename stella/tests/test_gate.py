@@ -466,3 +466,16 @@ def test_defer_is_remembered_as_asked_so_the_stop_hook_records_the_deferral(env,
     r = env.run("hook", "stop", input=json.dumps({"session_id": "S1", "cwd": str(repo), "last_assistant_message": "NEXT FOR YOU: x"}))
     assert "not pushed, deferred" in json.loads(r.stdout)["systemMessage"]
     assert len([e for e in env.events() if e["type"] == "push_deferred"]) == 1
+
+
+def test_the_program_path_is_not_taken_for_a_repo_it_pushes(env, repo):
+    """`~/.local/bin/stella` is a link into the repo the core lives in: it once added a phantom push from ~/.local/bin."""
+    bin_ = env.home / ".local" / "bin"
+    bin_.mkdir(parents=True)
+    (bin_ / "stella").symlink_to(repo / "f.txt")
+    _commit(env, repo)
+    cmd = f"~/.local/bin/stella push -C {repo} 2>&1 | tail -2; cd ~ && zsh -i -c 'echo x' </dev/null >/dev/null 2>&1"
+    reason = _pretool_out(env, cmd, env.tmp)["permissionDecisionReason"]
+    assert reason.count("▲ PUSH") == 1 and "dotfiles → main" in reason and "→ ?" not in reason
+    assert "null" not in reason
+

@@ -248,7 +248,11 @@ def _touched(pushes: list[tuple[list[str], str, Path]], command: str) -> dict[Pa
     for seg, _, here in pushes:
         if "-C" not in seg:  # `-C <dir>` replaces the directory the command runs from: the session's own repo is not pushed
             add(here)
+        prog = _command(seg)
+        start = len(seg) - len(prog[1]) if prog else 0  # the program's own path (`~/.local/bin/stella`) is not a repo it pushes
         for i, tok in enumerate(seg):
+            if i < start:
+                continue
             if tok in {"-C", "--git-dir", "--work-tree", "-R", "--repo"} and i + 1 < len(seg):
                 add(here / os.path.expanduser(seg[i + 1]))
             elif tok.startswith(("/", "~", "./", "../")):
@@ -315,7 +319,7 @@ def _others(command: str) -> str:
         if not cmd or seg[0] == "cd" or _kind(seg):
             continue
         word, args = cmd
-        if word in _FILTERS or word.isdigit():  # `| tail -1`, `2>&1`: not something the command also does
+        if word in _FILTERS or word.isdigit() or seg[0].startswith("/dev/"):  # `| tail -1`, `2>&1`: not something the command also does
             continue
         if word == "uv" and args[:1] == ["run"]:  # name the program, not the launcher
             rest = [a for a in args[1:] if not a.startswith("-")]
