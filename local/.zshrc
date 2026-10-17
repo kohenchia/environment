@@ -611,6 +611,49 @@ if [[ -e "$HOME/.zshrc_work" ]]; then
     source "$HOME/.zshrc_work"
 fi
 
+# ── Claude Code workspace ─────────────────────────────────────────────
+# One tmux session, `work`. Its first window is the main one: the Claude agents
+# view on the left, the session you are working in on the right. Both panes are
+# shells that run Claude, so quitting Claude in either one drops you back at the
+# prompt instead of closing the pane. See docs/claude-code.md.
+
+# cag: the agents view. Sessions dispatched from it skip permission prompts, like `cy`.
+alias cag='claude agents --dangerously-skip-permissions'
+
+# cw [name|id]: open a background session in this terminal. Ctrl+Z drops back to
+# the shell and the session keeps running. With no argument, pick one with fzf.
+function cw() {
+    if [[ -n "$1" ]]; then
+        claude attach "$@"
+        return
+    fi
+    local pick
+    pick=$(claude agents --json 2>/dev/null | python3 -c '
+import json, sys
+for s in json.load(sys.stdin):
+    if s.get("kind") == "background":
+        print("\t".join([s["id"], s.get("state") or s.get("status") or "", s.get("name") or "", s.get("cwd") or ""]))' \
+        | fzf --delimiter='\t' --with-nth=2.. --prompt='session> ') || return
+    claude attach "${pick%%$'\t'*}"
+}
+
+# tw: attach the `work` session, building its main window the first time.
+# Alacritty starts a plain login shell rather than tmux, so this is the way in,
+# and detaching with C-b d drops you back at that shell.
+function tw() {
+    if ! tmux has-session -t work 2>/dev/null; then
+        tmux new-session -d -s work -n main -c "$HOME/github" || return 1
+        tmux split-window -h -l 62% -t work:1 -c "$HOME/github"
+        tmux send-keys -t work:1.1 cag Enter
+        tmux select-pane -t work:1.2
+    fi
+    if [[ -n "$TMUX" ]]; then
+        tmux switch-client -t work
+    else
+        tmux attach -t work
+    fi
+}
+
 # ── Git Worktree helpers ──────────────────────────────────────────────
 # Work on multiple features in parallel without stashing or branch-switching.
 #

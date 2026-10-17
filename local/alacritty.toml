@@ -100,12 +100,8 @@ bindings = [
   { key = "}", mods = "Command|Shift", chars = "\u001B[1;4C" },
 
   # reorder the tab itself
-  # Shift is not reported on these chords on this Mac (the terminal saw Cmd+Ctrl+Shift+Left as plain
-  # Cmd+Ctrl+Left: `cat -v` printed ^[[1;13D), so the same move is bound without it as well.
   { key = "ArrowLeft",  mods = "Command|Control|Shift", chars = "\u001B[1;8D" },
   { key = "ArrowRight", mods = "Command|Control|Shift", chars = "\u001B[1;8C" },
-  { key = "ArrowLeft",  mods = "Command|Control", chars = "\u001B[1;8D" },
-  { key = "ArrowRight", mods = "Command|Control", chars = "\u001B[1;8C" },
 
   # ── Panes = tools ───────────────────────────────────────────────────────
   { key = "D", mods = "Command", chars = "\u001Bd" },          # split right
@@ -122,6 +118,12 @@ bindings = [
   { key = "ArrowRight",  mods = "Command|Option", chars = "\u001B[1;6C" },
   { key = "ArrowUp",     mods = "Command|Option", chars = "\u001B[1;6A" },
   { key = "ArrowDown",   mods = "Command|Option", chars = "\u001B[1;6B" },
+
+  # resize a pane — hold the chord to keep going (tmux binds these with -r)
+  { key = "ArrowLeft",  mods = "Command|Control", chars = "\u001B[1;7D" },
+  { key = "ArrowRight", mods = "Command|Control", chars = "\u001B[1;7C" },
+  { key = "ArrowUp",    mods = "Command|Control", chars = "\u001B[1;7A" },
+  { key = "ArrowDown",  mods = "Command|Control", chars = "\u001B[1;7B" },
 
   { key = "Enter", mods = "Command|Shift", chars = "\u001Bz" },    # zoom
   { key = "Space", mods = "Command|Shift", chars = "\u001B " },    # next layout

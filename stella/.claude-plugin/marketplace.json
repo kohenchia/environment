@@ -1,7 +1,0 @@
-{
-  "name": "stella-local",
-  "owner": {"name": "local"},
-  "plugins": [
-    {"name": "stella", "source": "./plugin", "description": "Stella: chief of staff for Claude Code sessions"}
-  ]
-}

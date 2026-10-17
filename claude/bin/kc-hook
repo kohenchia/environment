@@ -1,0 +1,191 @@
+#!/usr/bin/env python3
+"""Claude Code hooks for every session: `kc-hook <stop|prompt|pretool>`, the hook input as JSON on stdin.
+
+stop     The final message of a turn must end with the status block (below). When it is missing or
+         malformed, block the stop once with the rule; `stop_hook_active` means that already happened.
+prompt   A message that starts with "Stella"/"S" (or ends with her name, or says "ask/tell Stella") is
+         for Stella: tell the session to relay it with the `stella` skill. Her own session (cwd
+         ~/.local/share/stella) is exempt: everything typed there is for her.
+pretool  A `git push` into ~/github/environment (or one of its worktrees) asks the owner first. That is
+         the only gated write. KC_OWNER_SAID_PUSH=1 in front of the command skips the ask, for when the
+         owner's own instructions in this session say to push there.
+
+Standard library only, so it runs under any python3. A hook that fails must never trap a session, so every
+handler swallows its own errors.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from pathlib import Path
+
+HOME = Path.home()
+STELLA_HOME = HOME / ".local/share/stella"
+PROTECTED = HOME / "github/environment"  # pushes here ask the owner
+
+# ---------------------------------------------------------------- status block
+
+RULE_LINE = "━" * 40
+FORMAT = (
+    "the LAST block of your final message, nothing after it, plain markdown (not in a code fence): a line of 40 ━"
+    " characters on its own line, then exactly one of `\U0001f7e7 **NEXT FOR YOU** (N)` followed by N numbered items"
+    " `1.` `2.` ... (one thing only the owner can do or decide per item, short and imperative), `\U0001f7e9 **ALL DONE**"
+    " — nothing left for you.` (only when nothing is uncommitted, unpushed or open for the owner), or"
+    " `\U0001f7e6 **WORKING** — <what is still running>` (only when background work continues after the turn)."
+)
+_HEAD = re.compile(r"^(?:\U0001f7e7\s*\*\*NEXT FOR YOU\*\*\s*\((\d+)\)|\U0001f7e9\s*\*\*ALL DONE\*\*.*|\U0001f7e6\s*\*\*WORKING\*\*\s*—\s*\S.*)$")
+_ITEM = re.compile(r"^(\d+)\.\s+\S")
+
+
+def final_message(data: dict) -> str:
+    msg = data.get("last_assistant_message")
+    if isinstance(msg, str) and msg.strip():
+        return msg
+    path = data.get("transcript_path")
+    if not path:
+        return ""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - 400_000))
+        raw = f.read().decode("utf-8", "replace")
+    for line in reversed(raw.splitlines()):
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") != "assistant":
+            continue
+        content = (ev.get("message") or {}).get("content")
+        text = content if isinstance(content, str) else "\n".join(
+            b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
+        if text.strip():
+            return text
+    return ""
+
+
+def check_block(text: str) -> str | None:
+    """None when `text` ends with a well-formed status block, else what is wrong."""
+    lines = text.rstrip().splitlines()
+    try:
+        at = max(i for i, ln in enumerate(lines) if ln.strip() == RULE_LINE)
+    except ValueError:
+        return "Your final message does not end with the status block."
+    body = [ln.strip() for ln in lines[at + 1:] if ln.strip()]
+    if not body:
+        return "The status rule line is not followed by a status."
+    m = _HEAD.match(body[0])
+    if not m:
+        return "The line after the status rule is not one of the three statuses."
+    if body[0].startswith("\U0001f7e7"):
+        items = body[1:]
+        nums = [int(i.group(1)) for i in map(_ITEM.match, items) if i]
+        if len(nums) != len(items):
+            return "Something other than numbered items follows NEXT FOR YOU; the block must be the last thing."
+        if not items or nums != list(range(1, len(items) + 1)) or int(m.group(1)) != len(items):
+            return "The NEXT FOR YOU count must match its items, numbered 1..N, and there must be at least one."
+    elif len(body) > 1:
+        return "Something follows the status line; the block must be the last thing of the message."
+    return None
+
+
+def stop(data: dict) -> None:
+    # Print mode and SDK runs (`claude -p`) have no owner reading the turn; their entrypoint is sdk-*.
+    if data.get("stop_hook_active") or os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
+        return
+    bad = check_block(final_message(data))
+    if bad:
+        print(json.dumps({"decision": "block", "reason": f"{bad} Rewrite the end of your final message: {FORMAT}"}))
+
+
+# ---------------------------------------------------------------- addressing Stella
+
+_START = re.compile(
+    r"^\s*(?:(?:hey|hi|hello|ok|okay|and|also|please)[\s,]+)?(?:@?stella\b[\s,:;.!?-]*|s\s*[,:]|s\s+(?=\w))",
+    re.IGNORECASE,
+)
+_ASK = re.compile(r"\b(?:ask|tell)\s+stella\b", re.IGNORECASE)
+_END = re.compile(r"[,\s]stella[\s.!?]*$", re.IGNORECASE)
+
+
+def is_addressed(text: str) -> bool:
+    return bool(_START.match(text) or _ASK.search(text) or _END.search(text))
+
+
+def prompt(data: dict) -> None:
+    text = data.get("prompt") or ""
+    cwd = Path(data.get("cwd") or os.getcwd())
+    if cwd == STELLA_HOME or not is_addressed(text):
+        return
+    note = (
+        "This message is addressed to Stella, the owner's assistant, not to this session. Load the `stella` skill"
+        " and follow its \"Relaying a message\" section: send the message to Stella's own session, say in one line that"
+        " you passed it on, and do not act on it yourself."
+    )
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": note}}))
+
+
+# ---------------------------------------------------------------- the environment push prompt
+
+_PUSH = re.compile(r"\bgit\b[^;&|\n]*\bpush\b")
+
+
+def _repo_root(path: Path) -> Path | None:
+    try:
+        out = subprocess.run(["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             capture_output=True, text=True, timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(out).parent.resolve() if out else None
+
+
+def _dirs(command: str, cwd: Path) -> list[Path]:
+    """The directories a push in `command` could run in: the cwd, every `cd X` and every `git -C X`."""
+    out = [cwd]
+    try:
+        words = shlex.split(command, posix=True)
+    except ValueError:
+        words = command.split()
+    for i, w in enumerate(words[:-1]):
+        if w == "cd" or (w == "-C" and "git" in words[max(0, i - 3):i]):
+            out.append(Path(os.path.expanduser(words[i + 1])))
+    return [p if p.is_absolute() else cwd / p for p in out]
+
+
+def pretool(data: dict) -> None:
+    if data.get("tool_name") != "Bash":
+        return
+    command = (data.get("tool_input") or {}).get("command") or ""
+    if not _PUSH.search(command) or re.match(r"^\s*KC_OWNER_SAID_PUSH=1\s", command):
+        return
+    cwd = Path(data.get("cwd") or os.getcwd())
+    protected = PROTECTED.resolve()
+    if not any(_repo_root(d) == protected for d in _dirs(command, cwd) if d.is_dir()):
+        return
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "ask",
+        "permissionDecisionReason": "Push to ~/github/environment (personal, public remote). Push it?",
+    }}))
+
+
+HANDLERS = {"stop": stop, "prompt": prompt, "pretool": pretool}
+
+
+def main() -> int:
+    if len(sys.argv) != 2 or sys.argv[1] not in HANDLERS:
+        print(f"usage: kc-hook <{'|'.join(HANDLERS)}>", file=sys.stderr)
+        return 2
+    try:
+        HANDLERS[sys.argv[1]](json.load(sys.stdin))
+    except Exception as e:  # noqa: BLE001 - a broken hook must never trap a session
+        print(f"kc-hook {sys.argv[1]}: {type(e).__name__}: {e}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

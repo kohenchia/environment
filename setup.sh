@@ -391,13 +391,20 @@ LINKS=(
     # `h` — color-coded command tutorials. Linked into ~/.local/bin (on PATH per
     # local/.shell-common.zsh) so it's runnable as `h <command>`.
     "bin/h|$HOME/.local/bin/h"
-    # tmux-bell-notify — the tmux alert-bell hook calls this to post a macOS
-    # notification for a window that rang the bell. See docs/tmux.md.
-    "bin/tmux-bell-notify|$HOME/.local/bin/tmux-bell-notify"
-    # tmux-sidebar — the vertical tab list down the left of every window, created
-    # and kept docked by hooks in ~/.tmux.conf. See docs/tmux.md.
-    "bin/tmux-sidebar|$HOME/.local/bin/tmux-sidebar"
+    # Claude Code: the public global instructions (they import the machine's own
+    # from ~/.claude/kc-extensions/ at the end) and `stella`, which starts, opens
+    # and launches sessions. See docs/claude-code.md.
+    "claude/CLAUDE.md|$HOME/.claude/CLAUDE.md"
+    "claude/bin/stella|$HOME/.local/bin/stella"
 )
+
+# Every public skill and agent, so a new one only needs a re-run of this script.
+for d in "$REPO_DIR"/claude/skills/*/; do
+    LINKS+=("claude/skills/$(basename "$d")|$HOME/.claude/skills/$(basename "$d")")
+done
+for f in "$REPO_DIR"/claude/agents/*.md; do
+    LINKS+=("claude/agents/$(basename "$f")|$HOME/.claude/agents/$(basename "$f")")
+done
 
 # Alacritty — macOS only. This config's whole job is translating Cmd chords
 # into the ESC sequences ~/.tmux.conf listens for, and `Command` only exists
@@ -449,6 +456,18 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
         warn "Skipped VS Code settings: on WSL they live on the Windows host."
         printf '  Copy %s\n  to   %%APPDATA%%\\Code\\User\\settings.json\n' \
             "${REPO_DIR}/vscode-user-settings.json"
+    fi
+
+    # The `kc` plugin carries the hooks every session runs (claude/plugin). A
+    # directory marketplace, so the hooks.json in this repo is what gets installed;
+    # after changing it, run `claude plugin update kc@kc-local`.
+    if command -v claude >/dev/null 2>&1; then
+        claude plugin marketplace add "${REPO_DIR}/claude" >/dev/null 2>&1 || true
+        if claude plugin install kc@kc-local >/dev/null 2>&1 || claude plugin update kc@kc-local >/dev/null 2>&1; then
+            info "Claude Code plugin kc@kc-local installed"
+        else
+            warn "Could not install the kc plugin; run: claude plugin install kc@kc-local"
+        fi
     fi
 
     printf "\n${GREEN}Setup complete.${NC} Open a new terminal to load the configuration.\n"

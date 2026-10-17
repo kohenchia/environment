@@ -18,8 +18,8 @@ work                                                          14:32
 - `local/.tmux.conf` — the bindings, symlinked to `~/.tmux.conf`
 - `local/alacritty.toml` — the Cmd translation layer, symlinked to
   `~/.config/alacritty/alacritty.toml` (macOS only)
-- `bin/tmux-bell-notify` — posts the macOS banner when a window rings the bell, symlinked to
-  `~/.local/bin/tmux-bell-notify`
+- `local/.zshrc` — `tw`, which attaches the `work` session and builds its main window (see
+  [The main window](#the-main-window))
 
 ---
 
@@ -86,7 +86,7 @@ the normal way.
 | `Cmd+T` | New tab in the same directory, named after it |
 | `Cmd+Shift+[` / `]` | Previous / next tab |
 | `Cmd+Shift+←` / `→` | Previous / next tab (same thing, arrow form) |
-| `Cmd+Ctrl+←` / `→` (or with Shift) | Move the current tab left / right (Shift is not reported on this Mac, so both work) |
+| `Cmd+Ctrl+Shift+←` / `→` | Move the current tab left / right |
 | `Cmd+Shift+R` | Rename the tab |
 | `Cmd+Shift+W` | Close the tab (asks first) |
 
@@ -102,6 +102,7 @@ can never retitle your project tab. `renumber-windows` is on, so closing a tab r
 | `Cmd+Shift+D` | Split down |
 | `Cmd+Shift+←↑↓→` | Move focus between panes |
 | `Cmd+Opt+←↑↓→` | Move the pane itself in that direction |
+| `Cmd+Ctrl+←↑↓→` | Resize the pane (hold to keep resizing) |
 | `Cmd+Shift+Enter` | Zoom the pane in / out |
 | `Cmd+Shift+Space` | Cycle pane layouts |
 | `Cmd+R` | Rename the pane (sets the border label) |
@@ -125,7 +126,7 @@ Splits inherit the current directory, so `Cmd+D` in a project tab lands you in t
 | `Cmd+N` / `Cmd+Q` / `Cmd+±` | New window / quit / font size (Alacritty defaults) |
 
 Mouse works throughout: click a tab in the status bar to switch to it, click a pane to focus it,
-scroll to enter copy mode. Copy-mode yanks reach the macOS clipboard
+drag a border to resize, scroll to enter copy mode. Copy-mode yanks reach the macOS clipboard
 through OSC 52 (`set-clipboard on` in tmux, `osc52 = "OnlyCopy"` in Alacritty).
 
 ### Clicking a link
@@ -157,7 +158,7 @@ there. Widen or zoom the pane (`Cmd+Shift+Enter`) before clicking a long URL.
 None of this involves OSC 8 hyperlinks. Claude Code prints URLs as plain text here — its only OSC 8
 path is gated on a terminal allowlist that Alacritty isn't on, and tmux would drop the sequence anyway
 because `terminal-features` doesn't claim `hyperlinks` and no terminfo entry on this machine advertises
-`Hls`. That's why the linked labels in a startup banner (Docs, Support) aren't clickable while
+`Hls`. That's why the wrapper around Claude Code banner's Docs/Marketplace/Support links aren't clickable while
 ordinary URLs are.
 
 ---
@@ -179,7 +180,7 @@ to restore. While off, everything passes straight through to the pane.
 Cmd+T                       # new tab, named after the current directory
 cd ~/github/notes           # or start there and Cmd+Shift+R to rename
 Cmd+D                       # split right
-claude                      # Claude Code in the right pane
+cy                          # Claude Code in the right pane
 ```
 
 Pane borders are labelled with whatever is running in them, and **`Cmd+R`** (or
@@ -270,8 +271,7 @@ strftime(3), so it's plain specifiers — `%a %b %d %I:%M:%S %p`. `%d` is zero-p
 
 **Seconds are possible, and they cost a redraw a second.** `status-interval` is how often tmux repaints
 the status line, and it's the *only* thing that advances the clock — at the 5s default the seconds would
-jump in fives. So it's set to `1`. Drop the `:%S` and it can go back to `5`. The `✳` marker is unaffected
-either way: that redraw is event-driven, not on the interval.
+jump in fives. So it's set to `1`. Drop the `:%S` and it can go back to `5`.
 
 Below the bar is a blank row, so the coloured strip doesn't sit flush against the pane under it. That's
 `status 2` to buy the row plus `status-format[1]` to paint it — and it *has* to be painted: an empty
@@ -316,148 +316,36 @@ make it read as a second, lit selection.
 
 ---
 
-## The ✳ "waiting on you" marker
+## The main window
 
-When Claude Code finishes and you're looking at another window, it rings the terminal bell. tmux flags
-the window the bell came from, and that flag draws a red `✳` in front of the name:
-
-```
- notes  ▐ 1 notes ▌ 2 ✳ dashboard  3 payments                  09:53
-```
-
-```tmux
-set -g monitor-bell on
-set -g bell-action other        # flag only windows you are NOT in
-set -g visual-bell off          # no "Bell in window X" message
-
-set -g @bell_mark "#{?window_bell_flag,#[fg=colour196]✳ #[fg=colour232],}"
-set -g window-status-format " #I #{E:@bell_mark}#W "
-```
-
-Claude has to be told to use the bell, because its terminal auto-detection has no Alacritty case — it
-handles `Apple_Terminal`, `iTerm.app`, `kitty` and `ghostty`, and everything else falls through to
-`no_method_available`, meaning no notification at all. In `~/.claude/settings.json`:
-
-```json
-"preferredNotifChannel": "terminal_bell"
-```
-
-`focus-events on` (already set above) is what lets Claude know you're looking elsewhere; it doesn't
-notify for a pane you're watching. The flag clears the moment you visit the window, so there's no marker
-to reset and no way for a stale one to linger.
-
-### Why the bell, and not a hook
-
-The obvious design — a Claude Code `Stop` hook that runs `tmux set-option` on the pane — **cannot work
-here, and it's worth knowing why before trying it again.**
-
-**Everything Claude Code spawns is denied access to the tmux socket on this machine.** A hook-driven
-version of this marker ran 117 times across 12 distinct panes; the hooks fired perfectly and `$TMUX_PANE`
-was correct every time. 116 of the 117 tmux calls came back:
+`tw` attaches the `work` session, creating it the first time with one window, `main`, split in two:
 
 ```
-error connecting to /private/tmp/tmux-501/default (Operation not permitted)
+work  ▐ 1 main ▌                                               Fri Oct 16 09:53:05 PM
+──▌1 · claude agents▐──────────────┬── 2 · fix login redirect ─────────────────────
+ Needs input                       │ > the redirect loses the query string when…
+ ✻ pr-123-sam          review…  2m │
+ Working                           │
+ ✢ stella              Stel…   24s │
+ Completed                         │
+ ∙ fix-login-redirect  Fixed…  1h  │
 ```
 
-The single success was a manual `tmux` call from a Bash tool invocation. The denial persists with
-`sandbox.enabled: false` and `CLAUDE_CODE_DISABLE_SANDBOX=1`, so it isn't reachable from settings — it's
-an outer boundary, most likely a wrapper around Claude Code.
+- **Left: the Claude agents view** (`cag`, which is `claude agents` with permission prompts skipped for
+  the sessions it dispatches). It lists every session, interactive and background, grouped by what
+  they need. It is how a session that is waiting on you gets your attention: there are no tab markers
+  or desktop banners.
+- **Right: the session you are working in.** Start one with `cy`, or open a background one with
+  `cw <name>` (`cw` alone picks with fzf). Ctrl+Z (or ← in the session) puts it back in the background
+  and drops you to the shell; it keeps running and stays in the agents view.
 
-The bell sidesteps it because **nothing in the chain spawns a process from Claude**. Claude writes `\a`
-in-process from its renderer (`notifyBell()`), the tmux server sets the flag, and the tmux server —
-started by your shell, not by Claude — is what runs the notifier below.
+Both panes are shells running Claude, never Claude as the pane's own command, so quitting Claude in
+either pane leaves you at the prompt instead of closing the pane. Other windows (`Cmd+T`) are for
+whatever else you need: logs, a server, an editor.
 
-### The macOS banner
-
-`bin/tmux-bell-notify` posts a Notification Center banner so the signal reaches you when Alacritty is
-hidden or on another Space:
-
-```tmux
-set-hook -g alert-bell 'run-shell -b "tmux-bell-notify \"#{window_name}\""'
-```
-
-`-b` backgrounds it, so a slow `osascript` never stalls the server. `#{window_name}` is quoted because a
-window name can contain spaces — verified with one that does. It posts as *Script Editor*, which macOS
-may need allowed once under *System Settings → Notifications*.
-
-### What this costs
-
-**The bell is window-level, so there is no per-pane marker.** `window_bell_flag` flags a window and tmux
-has no pane equivalent, so the tab dot and the banner tell you *which window*, not which pane inside it.
-Per-pane granularity would need a process talking to the tmux socket — the blocked path.
-
-Pane borders therefore carry no marker, just the label. `@pane_label` still strips a leading `✳ ` out of
-the title text, because Claude Code 1.9.0 emits a constant `✳ <title>` under a multiplexer whether it's
-working or waiting (the `tengu_static_title_under_mux` gate, on by default). Left in, every Claude pane
-would show a glyph that looks like the marker but means nothing. That constant is also why the title
-itself can't be used as the signal: it no longer distinguishes the two states at all.
-
-**The marker is bright red — `colour196` (`ff0000`).** It reads strongest against the terminal's
-near-black and against the pale tab blocks. The one weak case is a window whose own hue *is* red
-(window 1): a bright red glyph on that window's mid-red bar is close in tone. `colour124` is the darker
-alternative if that ever grates. The default `window-status-bell-style` is `reverse`, which would repaint
-the whole tab and fight its hue, so it's set to `default` and the glyph carries the signal alone.
-
-Updates are event-driven, not tied to `status-interval`.
-
-### If it stops working
-
-Test the tmux half without Claude at all — from another window, `sleep 5; printf '\a'`, then switch away
-before it fires. Then narrow down:
-
-```bash
-tmux list-windows -F '#{window_index} bell=#{window_bell_flag} mark=[#{E:@bell_mark}]'
-tmux show -gv bell-action          # expect: other
-tmux show-hooks -g | grep alert-bell
-./setup.sh --check                 # confirms tmux-bell-notify is linked
-```
-
-If the dot appears but no banner, it's the notifier — run `tmux-bell-notify test` by hand and check the
-notification permission. If neither appears, Claude isn't belling: confirm `preferredNotifChannel` is
-`terminal_bell` and that Claude Code was restarted after setting it.
-
----
-
-## The sidebar: tabs as a vertical list
-
-The tab strip lives down the left of every window instead of along the top:
-
-```
-┌────────────────────────────────────────────────────────┐
-│ main                                Thu Oct 16 10:31 AM│  ← top bar: session + clock only
-├──────────────┬─────────────────────────────────────────┤
-│▐ 1 stella    │                                         │
-│▎ 2 review    │          your panes, as before          │
-│▎ 3 ✳ wakeup  │                                         │
-│▎ 4 notes     │                                         │
-└──────────────┴─────────────────────────────────────────┘
-```
-
-**Every shortcut is unchanged.** `Cmd+1`…`9`, `Cmd+0`, `Cmd+T`, `Cmd+Shift+[` `]`, `Cmd+Shift+R`
-and `Cmd+Shift+W` still drive `select-window` and friends; the list follows. Each row keeps its hue,
-the current window is the pale block, and the ✳ "waiting on you" marker sits in front of the name.
-Clicking a row jumps to that window.
-
-How it works: tmux has no vertical window list, so each window carries one narrow pane (flagged
-`@sidebar`) running `bin/tmux-sidebar run`, which redraws `tmux list-windows`. An `after-new-window`
-hook adds it to new windows, `window-layout-changed` docks it back to the far left at `@sidebar_width`
-(24 columns, fixed), and reloading the config adds it to windows that already exist. It never takes focus.
-
-| Thing | Behaviour |
-|---|---|
-| `C-b b` | Toggle sidebars everywhere. Off puts the tabs back in the top bar. |
-| `Cmd+Shift+←↑↓→` | Never rests on the sidebar: a hook hands focus to its neighbour, even after a click or a closed pane |
-| `Cmd+Opt+←↑↓→` | Will not swap a pane with the sidebar |
-| `Cmd+Shift+Space` | Cycles layouts of the tool panes; the sidebar stays put |
-| `Cmd+Shift+Enter` | Zooming a pane hides the sidebar until you unzoom |
-| Pane labels | Numbered from the first tool pane, not the sidebar |
-| Last tool pane closed | The sidebar sees it is alone and exits, closing the window |
-
-Windows narrower than 72 columns get no sidebar. Known limit: a few double-width symbols such as ✅ ⭐ ⚡ are counted as one column, so a window name stuffed with them can wrap its row; CJK and most emoji are measured correctly. `Cmd+Shift+←` and `Cmd+Opt+←` no longer wrap from the leftmost tool pane to the rightmost. Costs: 24 columns of every window, one extra process per window that looks at tmux once a second (and at once when a hook pokes it), and
-`#{window_panes}` is one higher than it used to be, so anything that counts panes sees the sidebar.
-Stella's `window_dead` already looks past it.
-
----
+There is no "waiting on you" marker on the tabs and no macOS notification: `monitor-bell` is off and the
+bell hook and its notifier are gone. A server that ran the old config keeps the old hooks until
+`~/.tmux.conf` is sourced again; the "Retired bindings" block at its top resets them.
 
 ## Rearranging panes
 
@@ -482,7 +370,7 @@ process out of a project tab so it stops competing for space, or pulling a shell
 working in. Add `-h`/`-v` to control which way the target splits, and `-d` to leave the focus where
 it is instead of following the pane.
 
-Dragging a pane border does nothing: border drags are unbound, because the sidebar's width is fixed and resizing it re-fired the layout hook in every window (a refresh loop). There is no key, command or mouse gesture to resize the sidebar.
+Dragging a pane border with the mouse resizes it; that works out of the box with `mouse on`.
 
 ---
 

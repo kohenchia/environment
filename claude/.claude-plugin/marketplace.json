@@ -1,0 +1,7 @@
+{
+  "name": "kc-local",
+  "owner": {"name": "local"},
+  "plugins": [
+    {"name": "kc", "source": "./plugin", "description": "Hooks every session runs: the status block, messages for Stella, the push prompt for this repo"}
+  ]
+}
