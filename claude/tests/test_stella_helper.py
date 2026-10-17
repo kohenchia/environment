@@ -16,6 +16,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 STELLA = REPO / "claude/bin/stella"
 FAKE = REPO / "claude/tests/fake-claude"
+FAKE_HERDR = REPO / "claude/tests/fake-herdr"
+PR = "https://github.example.com/acme/widgets/pull/2428"
 
 
 class Helper(unittest.TestCase):
@@ -36,6 +38,20 @@ class Helper(unittest.TestCase):
         (self.tokens / "aaaaaaaa-0000-0000-0000-000000000000").write_text("personal\n")
         self.work = self.home / "github/demo"
         self.work.mkdir(parents=True)
+        self.gh_state = self.home / "gh-state"  # what the fake `gh pr view` prints; absent = no PR
+        (self.bin / "gh").write_text(f"#!/bin/sh\ncat {self.gh_state} 2>/dev/null || exit 1\n")
+        (self.bin / "gh").chmod(0o755)
+        self.herdr_tabs = self.home / "herdr-tabs.json"
+        self.herdr_log = self.home / "herdr.jsonl"
+
+    def with_herdr(self):
+        (self.bin / "herdr").symlink_to(FAKE_HERDR)
+
+    def tabs(self):
+        return json.loads(self.herdr_tabs.read_text()) if self.herdr_tabs.exists() else {}
+
+    def pr_is(self, state):
+        self.gh_state.write_text(json.dumps({"state": state, "url": PR}))
 
     def tearDown(self):
         self.t.cleanup()
@@ -45,7 +61,8 @@ class Helper(unittest.TestCase):
 
     def run_stella(self, *args, cwd=None):
         env = {"HOME": str(self.home), "STELLA_PATH": f"{self.bin}:/usr/bin:/bin", "FAKE_CLAUDE_LOG": str(self.log),
-               "FAKE_CLAUDE_AGENTS": str(self.agents)}
+               "FAKE_CLAUDE_AGENTS": str(self.agents), "FAKE_HERDR_LOG": str(self.herdr_log),
+               "FAKE_HERDR_TABS": str(self.herdr_tabs)}
         return subprocess.run(["python3", str(STELLA), *args], cwd=cwd or self.sh, env=env,
                               capture_output=True, text=True, timeout=30)
 
@@ -212,6 +229,120 @@ class Helper(unittest.TestCase):
         self.set_agents([])
         self.run_stella("restart")
         self.assertTrue(any("--bg" in c and "--resume" not in c and "stella" in c for c in self.calls()))
+
+    # -------------------------------------------------------------- A: an open PR keeps the session
+
+    def test_rm_keeps_a_session_whose_pr_is_open(self):
+        for mode in ("local", "scout", "ship"):
+            self.crew(f"open-{mode}", id="abababab", mode=mode, pr=PR, report=str(self.home / "r.md"))
+            (self.home / "r.md").write_text("findings")
+            self.pr_is("OPEN")
+            p = self.run_stella("rm", f"open-{mode}")
+            self.assertEqual(p.returncode, 1, mode)
+            self.assertIn("still open", p.stderr)
+        self.assertFalse(any(c[:1] == ["rm"] for c in self.calls()))
+
+    def test_rm_looks_up_the_branch_pr_when_the_record_has_none(self):
+        self.pr_is("OPEN")
+        self.crew("by-branch", id="abababab", mode="scout", report=str(self.home / "r.md"))
+        (self.home / "r.md").write_text("findings")
+        self.assertIn("still open", self.run_stella("rm", "by-branch").stderr)
+        self.pr_is("MERGED")
+        self.assertEqual(self.run_stella("rm", "by-branch").returncode, 0)
+
+    # -------------------------------------------------------------- B: pr is a full URL
+
+    def test_launch_refuses_a_short_pr_reference(self):
+        for bad in ("acme/widgets#2398", "http://h/o/r/pull/1", "https://h/o/r/pull/x", "https://h/o/r/issues/3"):
+            self.crew("short-pr", pr=bad)
+            p = self.run_stella("launch", "short-pr")
+            self.assertEqual(p.returncode, 2, bad)
+            self.assertIn("full URL", p.stderr)
+        self.assertFalse(any("--bg" in c for c in self.calls()))
+        self.crew("full-pr", pr=PR)
+        self.assertEqual(self.run_stella("launch", "full-pr").returncode, 0)
+
+    # -------------------------------------------------------------- C: track-pr
+
+    def test_track_pr_writes_one_shape_of_record(self):
+        p = self.run_stella("track-pr", PR)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.rec("track-widgets-2428")
+        self.assertEqual((rec["mode"], rec["state"], rec["pr"]), ("track", "watching", PR))
+        self.assertNotIn("session", rec)
+        self.assertEqual(rec["watches"][0]["command"],
+                         ["gh", "pr", "view", PR, "--json", "state,reviewDecision,statusCheckRollup"])
+        self.assertEqual(self.run_stella("track-pr", PR).returncode, 2)  # already tracked
+        self.assertEqual(self.run_stella("track-pr", "acme/widgets#2428").returncode, 2)
+        self.assertEqual(self.run_stella("track-pr", PR, "two").returncode, 0)
+        self.assertEqual(self.rec("two")["pr"], PR)
+
+    def test_untrack_and_rm_of_a_track_record(self):
+        self.run_stella("track-pr", PR)
+        self.pr_is("OPEN")
+        p = self.run_stella("rm", "track-widgets-2428")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("still OPEN", p.stderr)
+        self.pr_is("MERGED")
+        self.assertEqual(self.run_stella("rm", "track-widgets-2428").returncode, 0)
+        self.assertEqual(self.rec("track-widgets-2428")["state"], "landed")
+        self.assertEqual(self.run_stella("track-pr", PR).returncode, 0)  # a landed one can be tracked again
+        self.pr_is("OPEN")
+        self.assertEqual(self.run_stella("untrack", "track-widgets-2428").returncode, 0)
+        self.assertEqual(self.rec("track-widgets-2428")["state"], "landed")
+        self.crew("not-a-track")
+        self.assertEqual(self.run_stella("untrack", "not-a-track").returncode, 2)
+
+    # -------------------------------------------------------------- D, G: herdr tabs
+
+    def live(self, *names):
+        rows = [{"id": "aaaaaaaa", "name": "stella", "kind": "background", "state": "working",
+                 "sessionId": "aaaaaaaa-0000-0000-0000-000000000000"}]
+        for i, n in enumerate(names):
+            rows.append({"id": f"{i + 1:08x}", "name": n, "kind": "background", "state": "working",
+                         "sessionId": f"{i + 1:08x}-s"})
+        self.set_agents(rows)
+
+    def test_view_all_opens_a_tab_for_each_live_session_without_one_adopted_included(self):
+        self.with_herdr()
+        self.live("built", "adopted-one")
+        self.crew("built", id="00000001")
+        self.crew("adopted-one", id="00000002", adopted=True)
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "stella"}))
+        self.assertEqual(self.run_stella("view", "--all").returncode, 0)
+        self.assertEqual(sorted(self.tabs().values()), ["adopted-one", "built", "stella"])
+        self.assertEqual(self.rec("built")["tab"], [t for t, n in self.tabs().items() if n == "built"][0])
+        self.run_stella("view", "--all")  # a second run opens nothing new
+        self.assertEqual(len(self.tabs()), 3)
+
+    def test_rm_closes_the_tab_it_opened(self):
+        self.with_herdr()
+        self.live("done-one")
+        self.crew("done-one", id="00000001", mode="scout", report=str(self.home / "r.md"))
+        (self.home / "r.md").write_text("findings")
+        self.run_stella("view", "done-one")
+        self.assertEqual(list(self.tabs().values()), ["done-one"])
+        self.assertEqual(self.run_stella("rm", "done-one").returncode, 0)
+        self.assertEqual(self.tabs(), {})
+        self.assertNotIn("tab", self.rec("done-one"))
+
+    def test_rm_finds_a_tab_by_its_label_when_the_record_has_no_id_of_it(self):
+        self.with_herdr()
+        self.herdr_tabs.write_text(json.dumps({"w1:t7": "old-one", "w1:t8": "keep"}))
+        self.crew("old-one", id="00000001", mode="scout", report=str(self.home / "r.md"))
+        (self.home / "r.md").write_text("findings")
+        self.assertEqual(self.run_stella("rm", "old-one").returncode, 0)
+        self.assertEqual(self.tabs(), {"w1:t8": "keep"})
+
+    def test_view_all_closes_tabs_of_sessions_that_exited_for_good(self):
+        self.with_herdr()
+        self.live("alive")  # `gone` is not listed at all; `landed-one` is listed but its record is landed
+        self.crew("alive", id="00000001")
+        self.crew("gone", id="000000f1")
+        self.crew("landed-one", id="00000002", state="landed")
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "alive", "w1:t2": "gone", "w1:t3": "landed-one"}))
+        self.run_stella("view", "--all")
+        self.assertEqual(sorted(self.tabs().values()), ["alive"])
 
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)

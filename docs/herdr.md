@@ -13,8 +13,9 @@ install it with the package manager, never a release older than v0.8.0.
 | One tab per crewmate | `claude attach <id>`: a view of a session that lives in the Claude daemon. Closing the tab does not stop it |
 | The sidebar | every agent and its state |
 
-`tw` starts the server if needed, builds `work` the first time (`stella`, then `stella view --all`) and
-attaches. Detach with `C-b q` or `C-b d`, or close the window: everything keeps running. `twt` is the
+`tw` starts the server if needed, builds `work` the first time (`stella`), runs `stella view --all` on every attach (it opens a tab
+for each live crewmate that has none, adopted ones too, and closes the tab of a session that has exited
+for good) and attaches. `stella rm` closes the tab of the crewmate it removes. Detach with `C-b q` or `C-b d`, or close the window: everything keeps running. `twt` is the
 tmux window from before, kept as the fallback.
 
 ## Keys

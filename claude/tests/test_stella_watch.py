@@ -187,6 +187,42 @@ class Watch(unittest.TestCase):
         state.write_text(json.dumps(pr))
         self.assertIn("PR merged", run())
 
+    def test_track_record_wakes_with_the_same_words_as_a_crewmate_pr(self):
+        bindir = self.home / "bin"
+        bindir.mkdir()
+        state = self.home / "pr.json"
+        (bindir / "gh").write_text(f"#!/bin/sh\ncat {state}\n")
+        (bindir / "gh").chmod(0o755)
+        url = "https://h/acme/widgets/pull/2428"
+        d = self.sh / "crew/track-2428"
+        d.mkdir()
+        (d / "record.json").write_text(json.dumps({
+            "name": "track-2428", "mode": "track", "state": "watching", "pr": url,
+            "watches": [{"name": "widgets#2428", "command": ["gh", "pr", "view", url]}]}))
+        env = {"HOME": str(self.home), "PATH": f"{bindir}:/usr/bin:/bin"}
+        run = lambda: subprocess.run(["python3", str(WATCH), "--once"], capture_output=True, text=True, env=env).stdout
+        pr = {"state": "OPEN", "reviewDecision": "", "reviews": [],
+              "statusCheckRollup": [{"name": "lint", "conclusion": "SUCCESS"}]}
+        state.write_text(json.dumps(pr))
+        self.assertEqual(run().strip(), "nothing to report")
+        pr["reviews"] = [{}]
+        state.write_text(json.dumps(pr))
+        self.assertEqual(run().strip(), f"track-2428: new review on {url}")  # once, not also as a watch change
+        pr["reviewDecision"], pr["statusCheckRollup"][0]["conclusion"] = "CHANGES_REQUESTED", "FAILURE"
+        state.write_text(json.dumps(pr))
+        out = run()
+        self.assertIn(f"track-2428: changes requested on {url}", out)
+        self.assertIn(f"track-2428: PR check failing: lint {url}", out)
+        pr["state"] = "MERGED"
+        state.write_text(json.dumps(pr))
+        self.assertIn(f"track-2428: PR merged {url}", run())
+        (d / "record.json").write_text(json.dumps({"name": "track-2428", "mode": "track", "state": "landed",
+                                                    "pr": url}))
+        pr["state"] = "OPEN"
+        pr["reviews"] = [{}, {}]
+        state.write_text(json.dumps(pr))
+        self.assertEqual(run().strip(), "nothing to report")
+
     def test_record_command_watch(self):
         out = self.home / "job.txt"
         out.write_text("RUNNING")

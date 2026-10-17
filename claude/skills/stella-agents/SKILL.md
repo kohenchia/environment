@@ -32,11 +32,17 @@ as one line, `team · D/N done · W working`), **Queued** (over a cap, with why)
 ## Tidy
 
 Crewmates Stella launched: `~/.local/bin/stella rm <name>` for each finished one; it removes the session
-and its worktree only when the work has landed, and says what is missing otherwise. Never adopted ones.
+and its worktree (and closes its tab) only when the work has landed, and says what is missing otherwise.
+An open PR counts as not landed, whatever the mode: `stella rm` refuses a session whose record `pr`, or
+whose branch's PR, is still OPEN, and says so. Leave that session in place: removing it would leave the PR
+unwatched. If its PR should be watched without the session, `stella track-pr <url>` first. Track records
+(`mode: track`) follow the same rule: `stella rm` removes one once its PR is merged or closed. Never adopted
+ones.
 
 Other sessions: only **Finished** ones, and only when nothing is left open from them: their repo
 (`git -C <cwd> status --short` and `git -C <cwd> log @{u}..` when there is an upstream) has nothing the
-session left uncommitted or unpushed, and their last message asks nothing of Kohen. For each:
+session left uncommitted or unpushed, their branch has no open PR (`gh pr view` in its `cwd`), and their last
+message asks nothing of Kohen. For each:
 `claude rm <id>` (the transcript stays, so `claude --resume` still finds it). Never remove a session that
 is busy, waiting on Kohen or stuck; list those for him instead, with what to do about each. A stuck session
 on a rate limit or budget usually only needs `claude respawn <id>` later, or a token switch.

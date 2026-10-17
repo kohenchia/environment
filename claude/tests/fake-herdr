@@ -1,0 +1,25 @@
+#!/usr/bin/env python3
+"""A stand-in for the `herdr` CLI, for tests. Every call is appended as one JSON line to $FAKE_HERDR_LOG.
+The tabs live in the JSON file $FAKE_HERDR_TABS ({id: label}): `tab create` adds one and prints the reply
+shape herdr documents (`.result.tab`, `.result.root_pane`), `tab list` prints them, `tab close` removes one.
+"""
+
+import json
+import os
+import sys
+
+args = sys.argv[1:]
+with open(os.environ["FAKE_HERDR_LOG"], "a") as f:
+    f.write(json.dumps(args) + "\n")
+path = os.environ["FAKE_HERDR_TABS"]
+tabs = json.load(open(path)) if os.path.exists(path) else {}
+if args[:2] == ["tab", "create"]:
+    tid = f"w1:t{len(tabs) + 1 + int(os.environ.get('FAKE_HERDR_BUMP', '0'))}"
+    tabs[tid] = args[args.index("--label") + 1]
+    json.dump(tabs, open(path, "w"))
+    print(json.dumps({"result": {"tab": {"tab_id": tid, "label": tabs[tid]}, "root_pane": {"pane_id": tid + ":p1"}}}))
+elif args[:2] == ["tab", "list"]:
+    print(json.dumps({"result": {"tabs": [{"tab_id": t, "label": label} for t, label in tabs.items()]}}))
+elif args[:2] == ["tab", "close"]:
+    tabs.pop(args[2], None)
+    json.dump(tabs, open(path, "w"))

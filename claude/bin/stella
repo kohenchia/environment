@@ -10,9 +10,13 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella launch <name>         launch the crewmate whose brief and record Stella wrote in crew/<name>/
                                  (only from her own session); exit 75 and mark it queued when over a cap
     stella adopt <name|id> [--team T]   record a session she did not launch (observation only)
-    stella view <name> | --all   open crewmates as terminal tabs (herdr), or print the attach command
+    stella track-pr <url> [name] watch a PR with no session: a track record, so a merge, a failing check,
+                                 requested changes or a new review wakes her (`untrack <name>` ends it)
+    stella view <name> | --all   open crewmates as terminal tabs (herdr; `--all` opens the missing ones and
+                                 closes the tabs of sessions that are gone), or print the attach command
     stella stop <name> | respawn <name> [--model M] | logs <name>
-    stella rm <name>             remove a finished crewmate and its worktree, only once its work has landed
+    stella rm <name>             remove a finished crewmate, its worktree and its tab, only once its work has
+                                 landed (an open PR keeps it); a track record goes once its PR is closed
     stella live-check [show|before|diff]   the tripwire (it needs the process table)
 
 A record is crew/<name>/record.json in Stella's home. Stella writes `repo`, `branch` (or `dir`), `skill`,
@@ -56,6 +60,8 @@ REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
 MODEL = re.compile(r"^[a-z0-9][a-z0-9.\[\]-]{0,40}$")
 SHORT_ID = re.compile(r"^[0-9a-f]{8}$")
+# `gh pr view owner/repo#N` silently fails on the enterprise host, so a `pr` is always a full URL.
+PR_URL = re.compile(r"^https://([A-Za-z0-9.-]+)/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/pull/([0-9]+)$")
 
 
 def die(msg: str, code: int = 2) -> None:
@@ -235,12 +241,21 @@ def worktree(rec: dict) -> Path:
     return d
 
 
+def check_pr(url: str) -> str:
+    if not PR_URL.match(url):
+        die(f"bad pr {url!r}: write the full URL, https://<host>/<owner>/<repo>/pull/<N>"
+            " (`gh pr view owner/repo#N` does not resolve on the enterprise host, so no PR event would ever fire)")
+    return url
+
+
 def launch(name: str) -> None:
     if Path.cwd().resolve() != STELLA_HOME.resolve():
         die("launch runs only from Stella's own session")
     rec = load(name)
-    if rec.get("adopted"):
-        die(f"{name} is adopted: it was not launched by Stella")
+    if rec.get("adopted") or rec.get("mode") == "track":
+        die(f"{name} is adopted or tracked: it was not launched by Stella")
+    if rec.get("pr"):
+        check_pr(rec["pr"])
     if rec.get("id") and any(a.get("id") == rec["id"] and a.get("state") in ("working", "blocked")
                              for a in agents()):
         die(f"{name} is already running ({rec['id']})")
@@ -297,9 +312,59 @@ def adopt(target: str, team: str | None) -> None:
 
 # ------------------------------------------------------------------ view / lifecycle
 
+def _herdr() -> str:
+    return subprocess.run(["sh", "-c", "command -v herdr"], capture_output=True, text=True).stdout.strip()
+
+
 def _herdr_pane(out: str) -> str | None:
     m = re.search(r'"pane_id"\s*:\s*"([^"]+)"', out)
     return m.group(1) if m else None
+
+
+def _tab_id(out: str) -> str | None:
+    """The id of the tab in a `herdr tab create` reply (`.result.tab`)."""
+    try:
+        tab = json.loads(out)["result"]["tab"]
+        return tab.get("tab_id") or tab.get("id")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _herdr_tabs(herdr: str) -> dict[str, str]:
+    """{tab id: label} of every tab, from `herdr tab list` (any nesting; a tab has an id and a label)."""
+    p = subprocess.run([herdr, "tab", "list"], capture_output=True, text=True, timeout=30)
+    found: dict[str, str] = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            tid = x.get("tab_id") or x.get("id")
+            label = x.get("label") or x.get("custom_name")
+            if isinstance(tid, str) and isinstance(label, str):
+                found[tid] = label
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    try:
+        walk(json.loads(p.stdout))
+    except ValueError:
+        pass
+    return found
+
+
+def close_tab(rec: dict) -> bool:
+    """Close the herdr tab opened for this crewmate (`herdr tab close`): the id kept in its record, else
+    the tab carrying its name as label. True when a tab was closed."""
+    herdr = _herdr()
+    if not herdr:
+        return False
+    tabs = _herdr_tabs(herdr)
+    ids = [rec["tab"]] if rec.get("tab") in tabs else [t for t, label in tabs.items() if label == rec.get("name")]
+    for t in ids:
+        subprocess.run([herdr, "tab", "close", t], capture_output=True, text=True, timeout=30)
+    return bool(ids)
 
 
 def view(name: str, quiet: bool = False) -> None:
@@ -307,7 +372,7 @@ def view(name: str, quiet: bool = False) -> None:
     sid = rec.get("id")
     if not sid or not SHORT_ID.match(sid):
         die(f"{name} has no session id yet")
-    herdr = subprocess.run(["sh", "-c", "command -v herdr"], capture_output=True, text=True).stdout.strip()
+    herdr = _herdr()
     if herdr:
         t = subprocess.run([herdr, "tab", "create", "--label", name, "--cwd", rec.get("dir") or str(HOME)],
                            capture_output=True, text=True, timeout=30)
@@ -315,6 +380,9 @@ def view(name: str, quiet: bool = False) -> None:
         if t.returncode == 0 and pane:
             subprocess.run([herdr, "pane", "run", pane, f"claude attach {sid}"], capture_output=True, text=True,
                            timeout=30)
+            tab = _tab_id(t.stdout)
+            if tab:
+                save(name, {**load(name), "tab": tab})
             if not quiet:
                 print(f"{name}: herdr tab opened")
             return
@@ -323,10 +391,23 @@ def view(name: str, quiet: bool = False) -> None:
 
 
 def view_all() -> None:
-    live = {a.get("id") for a in agents(False)}
+    """A tab for every live crewmate that has none (adopted ones included), and no tab for a session that
+    has exited for good: its record is landed, or `claude agents --all` no longer lists it."""
+    listed = agents(True)
+    live = {a.get("id") for a in agents(False)} - {None}
+    known = {a.get("id") for a in listed}
+    herdr = _herdr()
+    tabs = _herdr_tabs(herdr) if herdr else {}
     for rec in records():
-        if rec.get("id") in live:
+        sid = rec.get("id")
+        if not sid or rec.get("mode") == "track":
+            continue
+        has_tab = (rec.get("tab") in tabs) or rec.get("name") in tabs.values()
+        if sid in live and not has_tab:
             view(rec["name"])
+        elif has_tab and sid not in live and (rec.get("state") == "landed" or sid not in known):
+            close_tab(rec)
+            save(rec["name"], {k: v for k, v in load(rec["name"]).items() if k != "tab"})
 
 
 def lifecycle(cmd: str, name: str, model: str | None = None) -> None:
@@ -355,21 +436,34 @@ def lifecycle(cmd: str, name: str, model: str | None = None) -> None:
     sys.exit(claude("respawn", sid, capture=False).returncode)
 
 
+def pr_state(rec: dict, d: Path) -> tuple[str, str]:
+    """(state, url) of the crewmate's PR: the record's `pr` URL, else the PR of its branch ('' when none)."""
+    url = rec.get("pr") or ""
+    argv = ["gh", "pr", "view", *([url] if url else []), "--json", "state,url"]
+    try:
+        p = subprocess.run(argv, cwd=d if d.is_dir() else HOME, capture_output=True, text=True, timeout=TIMEOUT)
+        got = json.loads(p.stdout)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return "", url
+    return got.get("state") or "", got.get("url") or url
+
+
 def landed(rec: dict) -> str | None:
     """None when the crewmate's work is safely somewhere else, else why not."""
     mode = rec.get("mode") or "ship"
+    d = Path(rec.get("dir") or "")
+    state, url = pr_state(rec, d)
+    if state == "OPEN":  # an open PR is not landed whatever the mode: removing it would leave the PR unwatched
+        return f"its PR is still open ({url}); keep it so the watcher keeps telling Stella what happens to it"
     if mode == "scout":
         report = Path(os.path.expanduser(rec.get("report") or ""))
         return None if rec.get("report") and report.is_file() else "its report is missing"
-    d = Path(rec.get("dir") or "")
     if not (d / ".git").exists():
         return "its directory is not a git checkout, so nothing proves the work landed"
     if git(d, "status", "--porcelain").stdout.strip():
         return "uncommitted changes in its worktree"
     if mode == "ship":  # a squash-merged PR whose remote branch is gone has landed even without an upstream
-        pr = subprocess.run(["gh", "pr", "view", "--json", "state", "-q", ".state"], cwd=d,
-                            capture_output=True, text=True, timeout=TIMEOUT).stdout.strip()
-        return None if pr == "MERGED" else f"its PR is not merged ({pr or 'no PR'})"
+        return None if state == "MERGED" else f"its PR is not merged ({state or 'no PR'})"
     if git(d, "rev-parse", "--abbrev-ref", "@{u}").returncode != 0:
         return "its branch was never pushed"
     if git(d, "rev-list", "--count", "@{u}..HEAD").stdout.strip() not in ("", "0"):
@@ -377,8 +471,38 @@ def landed(rec: dict) -> str | None:
     return None
 
 
+# ------------------------------------------------------------------ PR tracking
+
+def track_pr(url: str, name: str | None) -> None:
+    m = PR_URL.match(check_pr(url))
+    name = check_name(name or f"track-{m.group(3)}-{m.group(4)}".lower())
+    if record_path(name).exists() and load(name).get("state") != "landed":
+        die(f"{name} already has a record")
+    save(name, {"name": name, "mode": "track", "state": "watching", "pr": url,
+                "tracked_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                "watches": [{"name": f"{m.group(3)}#{m.group(4)}",
+                             "command": ["gh", "pr", "view", url, "--json", "state,reviewDecision,statusCheckRollup"]}]})
+    print(f"tracking {url} as {name}")
+
+
+def untrack(name: str, require_closed: bool = False) -> None:
+    rec = load(name)
+    if rec.get("mode") != "track":
+        die(f"{name} is not a track record")
+    if require_closed:
+        state, _ = pr_state(rec, HOME)
+        if state not in ("MERGED", "CLOSED"):
+            die(f"{name} not removed: its PR is still {state or 'unknown'}; `stella untrack {name}` stops watching it", 1)
+    rec["state"] = "landed"
+    rec["removed_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    save(name, rec)
+    print(f"{'removed' if require_closed else 'untracked'} {name}")
+
+
 def rm(name: str) -> None:
     rec = load(name)
+    if rec.get("mode") == "track":
+        return untrack(name, require_closed=True)
     if rec.get("adopted"):
         die(f"{name} is adopted: Stella never removes it (say 'release' to drop the record)")
     why = landed(rec)
@@ -386,6 +510,8 @@ def rm(name: str) -> None:
         die(f"{name} not removed: {why}", 1)
     if SHORT_ID.match(rec.get("id") or ""):
         claude("rm", rec["id"])
+    close_tab(rec)
+    rec.pop("tab", None)
     wt = HOME / "github" / f"{rec.get('repo')}-wt" / (rec.get("branch") or name)
     if rec.get("repo") and REPO.match(rec["repo"]) and wt.is_dir():  # as `wtr` does; the branch is kept
         p = git(HOME / "github" / rec["repo"], "worktree", "remove", str(wt))
@@ -424,6 +550,10 @@ def main(argv: list[str]) -> None:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}", target):
             die(f"bad session name or id {target!r}")
         adopt(target, team)
+    elif cmd == "track-pr" and len(rest) in (1, 2):
+        track_pr(rest[0], rest[1] if len(rest) == 2 else None)
+    elif cmd == "untrack" and len(rest) == 1:
+        untrack(rest[0])
     elif cmd == "view" and rest == ["--all"]:
         view_all()
     elif cmd == "view" and len(rest) == 1:
@@ -439,7 +569,7 @@ def main(argv: list[str]) -> None:
     elif cmd in ("-h", "--help", "help"):
         print(__doc__.split("\n\n")[1])
     else:
-        die("usage: stella [open|start|restart|id|agents|launch|adopt|view|stop|respawn|logs|rm|live-check] ...")
+        die("usage: stella [open|start|restart|id|agents|launch|adopt|track-pr|untrack|view|stop|respawn|logs|rm|live-check] ...")
 
 
 if __name__ == "__main__":

@@ -38,10 +38,12 @@ is for her; relayed messages arrive prefixed `From …`.
    `~/github/environment/claude/bin/stella-watch`, exactly that (session shells do not have `~/.local/bin`
    on PATH; never `~/.local/bin/stella-watch`, which contains the helper's allowlisted path and would be
    refused). It exits when something needs her; its output is the wake.
-4. Recreate her recurring duties with `CronList` / `CronCreate` (they live only as long as her session):
-   the daily log at 00:10 (`/kc-log day`), the agents tidy at 08:30 (`/stella-agents tidy`), the knowledge
-   audit on Mondays at 09:00 (`/stella-audit`), plus any duty the extension adds.
-5. Tell Kohen in a few lines what is running, what waits on him, and anything stuck.
+4. Check her recurring duties with `CronList` and recreate each missing one with `CronCreate` (they live
+   only as long as her session): the daily log at 00:10 (`/kc-log day`), the agents tidy at 08:30
+   (`/stella-agents tidy`), the knowledge audit on Mondays at 09:00 (`/stella-audit`), plus any duty the
+   extension adds.
+5. Tell Kohen in a few lines what is running, what waits on him, and anything stuck, and always one line on
+   the duties: "duties: 3 of 3 present", or "duties: recreated <which>" (a missing one is visible, not silent).
 
 ### Running the crew
 
@@ -49,9 +51,13 @@ is for her; relayed messages arrive prefixed `From …`.
 
 1. Write `crew/<name>/brief.md`: Kohen's words verbatim under "Kohen asked", then the skill line and the
    full order (`/kc-dev …`, `/kc-review …`, `/kc-debug …`, `/kc-plan …`, `/kc-tutorial …`), then what done
-   means for its mode. The brief is the crewmate's first prompt, so it must need nothing from her.
+   means for its mode. The brief is the crewmate's first prompt, so it must need nothing from her. Say in it
+   once that the crewmate never calls `stella` or messages another crewmate: it reports through its status
+   block and everything else goes through her.
 2. Write `crew/<name>/record.json` with the row's fields: `name`, `repo` + `branch` or `dir`, `skill`,
-   `model`, `weight`, `mode`, and when they apply `team`, `then`, `report`, `pr`, `watches`.
+   `model`, `weight`, `mode`, and when they apply `team`, `then`, `report`, `pr`, `watches`. `pr` is the full
+   PR URL (`https://<host>/<owner>/<repo>/pull/<N>`), never `owner/repo#N`: `launch` refuses the short form,
+   and `gh pr view` cannot resolve it on the enterprise host, so no PR event would ever fire.
 3. `~/.local/bin/stella launch <name>`. Exit 75 means queued over a cap (slots, Opus weight, a throttle
    pause or the budget gate); the reason is printed; the watcher wakes her when room frees. Never work
    around a cap.
@@ -86,11 +92,43 @@ and no watcher). Per event:
 
 **Escalate.** A Sonnet crewmate stuck on a question she cannot answer: `stella respawn <name> --model opus`.
 
-**Look in.** `stella view <name>` opens it as a terminal tab (or prints the attach command).
+**Look in.** `stella view <name>` opens it as a terminal tab (or prints the attach command); `tw` opens a
+tab for every live crewmate that has none each time it attaches.
 
-**Finish.** `stella rm <name>` removes the session and its worktree only when the work has landed (clean
-tree, pushed, PR merged for ship, report written for scout). If it refuses, tell Kohen what is missing.
+**Finish.** `stella rm <name>` removes the session, its worktree and its terminal tab only when the work
+has landed (clean tree, pushed, PR merged for ship, report written for scout, and no PR still open in any
+mode). If it refuses, tell Kohen what is missing. A PR to watch with no session: `stella track-pr <url>`.
 Never stop, restart or remove an adopted session.
+
+### Kohen says, Stella runs
+
+Kohen speaks in plain words and will not remember the CLI; she maps what he says to the command. `stella`
+below is the helper `~/.local/bin/stella`.
+
+| Kohen says | She runs |
+|---|---|
+| "what's running", "what needs me" | `stella agents --all`, then the `stella-agents` report |
+| "do X" (work to be done) | writes `brief.md` and `record.json`, then `stella launch <name>` |
+| "track 2428", "watch that PR" | `stella track-pr <full PR URL> [name]` |
+| "stop watching 2428" | `stella untrack <name>` |
+| "adopt X", "keep an eye on my X session" | `stella adopt <name or id> [--team T]` (observation only) |
+| "let me see X", "open X's tab" | `stella view <name>`; all of them: `stella view --all` |
+| "stop X" | `stella stop <name>` |
+| "escalate X", "X is stuck, use Opus" | `stella respawn <name> --model opus` |
+| "restart X" | `stella respawn <name>` |
+| "what is X doing", "show X's log" | `stella logs <name>` |
+| "remove X", "clean up X" | `stella rm <name>`: only if it has landed (an open PR keeps it; a track record goes once its PR is closed); if it refuses, say why |
+| "tidy" | the `stella-agents` tidy: `stella rm` for each finished crewmate |
+| "restart yourself", "reload your skill" | `stella restart` |
+| "is the setup disturbed" | `stella live-check show` (`before`, `diff` around a change) |
+| a crewmate or PR needs her attention | the watcher, started as in "Start of session" |
+
+How each is invoked, because the command sandbox is strict: the helper path alone, with plain arguments,
+as one Bash command. Never join it with another command (`&&`, `;`, a pipe) and never put its path inside a
+heredoc or any file-writing command: the guard refuses any command whose text contains that path, so write
+briefs and records with a heredoc that does not spell it. The watcher is started by its repo path
+(`~/github/environment/claude/bin/stella-watch`) as a background command, never as
+`~/.local/bin/stella-watch`. Crewmates never call `stella`; everything goes through her.
 
 ### Talking to Kohen
 

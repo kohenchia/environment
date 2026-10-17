@@ -144,6 +144,42 @@ def _launch_window_open(seen: dict) -> bool:
     return opened
 
 
+def pr_events(name: str, url: str, prev: dict, cur: dict) -> list[str]:
+    """What changed on a PR since the last check, worded the same for a crewmate and a track record."""
+    events = []
+    try:
+        pr = pr_state(url)
+    except Exception as e:  # noqa: BLE001 - one bad PR must not blind the watcher
+        pr = {}
+        cur["pr_error"] = f"{type(e).__name__}"
+    old = prev.get("pr") or {}
+    if pr:
+        if pr.get("state") == "MERGED" and old.get("state") != "MERGED":
+            events.append(f"{name}: PR merged {url}")
+        new_fail = set(pr.get("failing", [])) - set(old.get("failing", []))
+        if new_fail:
+            events.append(f"{name}: PR check failing: {', '.join(sorted(new_fail))} {url}")
+        if pr.get("decision") == "CHANGES_REQUESTED" and old.get("decision") != "CHANGES_REQUESTED":
+            events.append(f"{name}: changes requested on {url}")
+        elif pr.get("reviews", 0) > old.get("reviews", pr.get("reviews", 0)):
+            events.append(f"{name}: new review on {url}")
+        cur["pr"] = pr
+    return events
+
+
+def check_tracked(seen: dict, remote: bool, r: dict) -> list[str]:
+    """A track record has no session: only its PR is watched (the `watches` entry the helper writes is the
+    same query, kept for older watchers, and is not run a second time)."""
+    if not remote:
+        return []
+    key = f"track:{r.get('name')}"
+    prev = seen.get(key, {})
+    cur = dict(prev)
+    events = pr_events(r.get("name"), r["pr"], prev, cur)
+    seen[key] = cur
+    return events
+
+
 def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
     events, now = [], time.time()
     recs = records()
@@ -155,7 +191,11 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
     held = []
     for r in recs:
         name, session = r.get("name"), r.get("session") or ""
-        if r.get("state") in ("landed", "queued") or not session:
+        if r.get("state") in ("landed", "queued"):
+            continue
+        if not session:
+            if r.get("mode") == "track" and r.get("pr"):
+                events += check_tracked(seen, remote, r)
             continue
         prev = seen.get(session, {})  # keyed by session, so a relaunch under the same name starts fresh
         cur = dict(prev)
@@ -193,23 +233,7 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
                 events.append(f"{name}: steer not delivered after {int(age // 60)} min: {s.get('text', '')[:120]}")
                 cur[key] = True
         if remote and r.get("pr"):
-            try:
-                pr = pr_state(r["pr"])
-            except Exception as e:  # noqa: BLE001 - one bad PR must not blind the watcher
-                pr = {}
-                cur["pr_error"] = f"{type(e).__name__}"
-            old = prev.get("pr") or {}
-            if pr:
-                if pr.get("state") == "MERGED" and old.get("state") != "MERGED":
-                    events.append(f"{name}: PR merged {r['pr']}")
-                new_fail = set(pr.get("failing", [])) - set(old.get("failing", []))
-                if new_fail:
-                    events.append(f"{name}: PR check failing: {', '.join(sorted(new_fail))} {r['pr']}")
-                if pr.get("decision") == "CHANGES_REQUESTED" and old.get("decision") != "CHANGES_REQUESTED":
-                    events.append(f"{name}: changes requested on {r['pr']}")
-                elif pr.get("reviews", 0) > old.get("reviews", pr.get("reviews", 0)):
-                    events.append(f"{name}: new review on {r['pr']}")
-                cur["pr"] = pr
+            events += pr_events(name, r["pr"], prev, cur)
         if cur.get("held"):
             held.append(cur)
         seen[session] = cur
@@ -222,7 +246,8 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
             events.append(cur.pop("held") + " (held for its team)")
     events += check_watches(seen, remote, read_json(EXTENSION, {}).get("watches", []), "")
     for r in recs:
-        if r.get("state") not in ("landed",) and r.get("watches"):
+        tracked = r.get("mode") == "track" and r.get("pr")
+        if r.get("state") not in ("landed",) and r.get("watches") and not tracked:
             events += check_watches(seen, remote, r["watches"], f"{r.get('name')}: ")
     return events, seen
 
