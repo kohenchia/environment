@@ -19,6 +19,8 @@
 
 [general]
 live_config_reload = true
+# Machine-specific additions (e.g. extra link hints). A missing file is skipped with a warning.
+import = ["~/.config/alacritty/work.toml"]
 
 [window]
 # The whole design rests on this staying "None" — see the header above.
@@ -73,6 +75,9 @@ history = 10000                 # what a raw Alacritty window scrolls back; insi
 # never reaches that handler. Shift suppresses mouse reporting for one event, so
 # Shift+click is the gesture that opens a link; Ctrl+Shift+O is the keyboard
 # route. See docs/tmux.md.
+#
+# The one exception is the optional `general.import` above: a machine that wants more link schemes
+# supplies its own `[[hints.enabled]]` there, restating the default regex as this paragraph demands.
 
 [keyboard]
 bindings = [
