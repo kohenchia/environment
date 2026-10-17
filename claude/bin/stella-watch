@@ -14,7 +14,7 @@ What wakes Stella, per crewmate record in crew/<name>/record.json:
   - its PR (record `pr`) is merged, gets a failing check, gets changes requested, or a new review;
   - a steer (record `steers`) has not shown up in its transcript after 10 minutes;
   - a queued launch while something finished, so a slot may have freed;
-  - a command or file watch from ~/.claude/kc-extensions/stella.json changes;
+  - a command or file watch changes: from ~/.claude/kc-extensions/stella.json, or a record's `watches`;
   - nothing for 8 hours ("heartbeat").
 A rate-limit error in a crewmate's transcript writes `throttle-until` (4 minutes) for the launch caps.
 """
@@ -179,14 +179,18 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
         seen[name] = cur
     if finished_any and any(r.get("state") == "queued" for r in recs):
         events.append("a crewmate finished and launches are queued: a slot may be free")
-    events += check_watches(seen, remote)
+    events += check_watches(seen, remote, read_json(EXTENSION, {}).get("watches", []), "")
+    for r in recs:
+        if r.get("state") not in ("landed",) and r.get("watches"):
+            events += check_watches(seen, remote, r["watches"], f"{r.get('name')}: ")
     return events, seen
 
 
-def check_watches(seen: dict, remote: bool) -> list[str]:
+def check_watches(seen: dict, remote: bool, watches: list[dict], who: str) -> list[str]:
+    """Command and file watches, from the machine's extension or a crewmate's record (`watches`)."""
     events = []
-    for w in read_json(EXTENSION, {}).get("watches", []):
-        name = w.get("name") or "watch"
+    for w in watches:
+        name = who + (w.get("name") or "watch")
         key = f"watch:{name}"
         if "file" in w:
             p = Path(os.path.expanduser(w["file"]))
@@ -195,7 +199,8 @@ def check_watches(seen: dict, remote: bool) -> list[str]:
                 events.append(f"{name}: {w['file']} changed")
             seen[key] = stamp
         elif "command" in w and remote:
-            p = subprocess.run(w["command"], capture_output=True, text=True, timeout=60)
+            argv = [os.path.expanduser(a) for a in w["command"]]
+            p = subprocess.run(argv, capture_output=True, text=True, timeout=60)
             out = p.stdout.strip()
             if w.get("writes"):
                 (STELLA_HOME / w["writes"]).write_text(out + "\n")

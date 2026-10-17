@@ -143,6 +143,15 @@ class Watch(unittest.TestCase):
         state.write_text(json.dumps(pr))
         self.assertIn("PR merged", run())
 
+    def test_record_command_watch(self):
+        out = self.home / "job.txt"
+        out.write_text("RUNNING")
+        self.crew("train", "g1", watches=[{"name": "job 7", "command": ["cat", str(out)]}])
+        self.say("g1", "WORKING")
+        self.assertEqual(self.once().strip(), "nothing to report")
+        out.write_text("FINISHED")
+        self.assertIn("train: job 7: changed", self.once())
+
     def test_writes_pidfile_and_wake(self):
         self.once()
         self.assertIn("beat", json.loads((self.sh / "watch.pid").read_text()))
