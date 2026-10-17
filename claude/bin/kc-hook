@@ -200,11 +200,28 @@ def _dirs(command: str, cwd: Path) -> list[Path]:
     return [p if p.is_absolute() else cwd / p for p in out]
 
 
+def _crewmate(session_id: str) -> bool:
+    """True when this session is a crewmate Stella launched (not one she adopted)."""
+    crew = STELLA_HOME / "crew"
+    for rec in crew.glob("*/record.json"):
+        try:
+            r = json.loads(rec.read_text())
+        except (OSError, ValueError):
+            continue
+        if session_id and r.get("session") == session_id and not r.get("adopted"):
+            return True
+    return False
+
+
 def pretool(data: dict) -> None:
     if data.get("tool_name") != "Bash":
         return
     command = (data.get("tool_input") or {}).get("command") or ""
-    if not _PUSH.search(command) or re.match(r"^\s*KC_OWNER_SAID_PUSH=1\s", command):
+    if not _PUSH.search(command):
+        return
+    # The owner's say-so skips the ask, but never for a crewmate Stella launched: Kohen does not talk
+    # to it about pushing, so it cannot have his say-so (one pushed with it on 2026-10-17).
+    if re.match(r"^\s*KC_OWNER_SAID_PUSH=1\s", command) and not _crewmate(data.get("session_id") or ""):
         return
     cwd = Path(data.get("cwd") or os.getcwd())
     protected = PROTECTED.resolve()

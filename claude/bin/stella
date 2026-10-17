@@ -285,6 +285,12 @@ def launch(name: str) -> None:
     row = started[-1]
     if row.get("sessionId") and row["sessionId"] != session:
         inherit_token(row["sessionId"])  # the token file is keyed by the real session
+    if rec.get("security") and row.get("sessionId"):
+        # Its job is the sandbox boundary itself: the machine's guard lets it edit that boundary's files.
+        sec = HOME / ".local/state/acc-guard/security-sessions"
+        sec.parent.mkdir(parents=True, exist_ok=True)
+        with sec.open("a") as f:
+            f.write(row["sessionId"] + "\n")
     rec.update({"id": row.get("id"), "session": row.get("sessionId"), "dir": str(d),
                 "state": "working", "launched_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     rec.pop("queued_because", None)

@@ -128,6 +128,21 @@ class TurnEndGuard(unittest.TestCase):
         self.record(state="landed")
         self.assertEqual(self.stop()[1], "")
 
+    def test_a_crewmate_cannot_skip_the_push_ask(self):
+        import subprocess as sp
+        repo = self.home / "github/environment"
+        repo.mkdir(parents=True)
+        sp.run(["git", "init", "-q", str(repo)], check=True)
+        self.record(session="crew-1")
+        cmd = f"KC_OWNER_SAID_PUSH=1 git -C {repo} push"
+        def pre(sid):
+            data = {"cwd": str(repo), "session_id": sid, "tool_name": "Bash", "tool_input": {"command": cmd}}
+            return run(NEW, "pretool", data, self.env)[1]
+        self.assertIn('"ask"', pre("crew-1"))
+        self.assertEqual(pre("kohens-own-session"), "")
+        self.record(session="crew-1", adopted=True)
+        self.assertEqual(pre("crew-1"), "")
+
     def test_never_outside_stellas_home(self):
         self.record()
         data = {"cwd": str(self.home), "last_assistant_message": GOOD}
