@@ -31,7 +31,15 @@ this already exists, revise it rather than starting another, and preserve Kohen'
 ## 3. Debate the approach
 
 For anything with more than one credible approach, name the alternatives and argue them (subagents as
-advocates and a judge, for a large decision). The plan records the choice and why each alternative lost.
+advocates, a challenger and a judge, for a large decision). The plan records the choice and why each
+alternative lost.
+
+Widen the field first, as `kc-review` step 2 says: for every hard constraint the research found, search
+all the repos for where it is already worked around; walk the layers (user surface, our code, the
+platform's configurable data, the platform's code, upstream) before going upstream; test every option
+dropped before the debate, including those dropped in an earlier round; treat principles as costs, and
+check the codebase for precedents that already depart from them. The challenger's only task is to find
+the strongest alternative the list omits or dropped, and the judge must answer it.
 
 ## 4. Write it in Kohen's plan style
 

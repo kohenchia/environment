@@ -36,9 +36,26 @@ State the problem the subject solves in one or two sentences, without its soluti
 best solution would look like, from the problem, the codebase and the knowledge, before looking at the
 subject's approach. This is the guard against anchoring on whatever the author chose.
 
+Before naming alternatives, widen the field. Each of these has missed a better design before:
+
+- **Same constraint, solved elsewhere.** List the hard constraints the research found ("the scheduler
+  pairs steps by X", "a run holds one Y per Z"). For each, search every repo involved for the places that
+  already work around it, in any feature or subsystem, not only the one under review. Every existing
+  workaround is a candidate alternative.
+- **Walk the layers before going upstream.** For a constraint, try in order: the user surface, our own
+  code, the platform's configurable data (rows, rules, types and settings a client can already write),
+  the platform's code, an upstream change. Rule out each layer with evidence before proposing the next.
+- **Nothing is dropped unexamined.** An option dropped before the debate needs a one-line reason
+  checked against the code, and an option dropped in an earlier round is re-tested, not inherited.
+- **Principles are costs, not vetoes.** When a principle would eliminate an option, check whether the
+  codebase already departs from it. If it does, report the drift and present the departure as a cost for
+  Kohen to weigh.
+
 Name two to four credible alternatives (the subject's approach is one of them). Debate them for real:
 for anything bigger than a small fix, spawn one subagent per alternative to argue for it as strongly as
-the code allows, then one judge subagent to try to disprove each case against the code. You decide which
+the code allows, plus one challenger whose only task is to find the strongest alternative the list omits or
+dropped, then one judge subagent to try to disprove each case against the code and to answer the
+challenger. You decide which
 design wins and say why the others lost. A small fix gets the same reasoning inline. If the subject is
 not the best design, the review says so first: everything else is secondary.
 
