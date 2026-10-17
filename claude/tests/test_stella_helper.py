@@ -451,6 +451,16 @@ class Helper(unittest.TestCase):
         self.assertTrue(runs[0][3].endswith("stella tab 00000001"))
         self.assertEqual(len(self.tabs()), 2)  # the tabs and their order are untouched
 
+    def test_view_all_repairs_stellas_own_tab_which_has_no_record(self):
+        self.with_herdr()
+        self.live()
+        self.herdr_tabs.write_text(json.dumps({"w4:t1": "Stella"}))
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w4:t1:p1": "Session 3479a9f0 has exited."})}
+        self.assertEqual(self.run_stella("view", "--all").returncode, 0)
+        runs = [c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "run"]]
+        self.assertEqual([r[2] for r in runs], ["w4:t1:p1"])
+        self.assertTrue(runs[0][3].endswith("stella tab aaaaaaaa"))
+
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)
         self.assertEqual(self.run_stella("frobnicate").returncode, 2)

@@ -568,6 +568,12 @@ def view_all() -> None:
         elif has_tab and sid not in live and (rec.get("state") == "landed" or sid not in known):
             close_tab(rec)
             save(rec["name"], {k: v for k, v in load(rec["name"]).items() if k != "tab"})
+    # Stella's own tab has no crew record: find it by its label and repair it the same way
+    me = stella_row()
+    if me and herdr:
+        for tab, label in tabs.items():
+            if label.lower() == "stella":
+                repair_tab(herdr, tab, me["id"])
 
 
 def lifecycle(cmd: str, name: str, model: str | None = None) -> None:
