@@ -1,49 +1,381 @@
-#!/bin/bash
-# stella: Kohen's assistant is an ordinary Claude Code session named "stella", in the agents view like any
-# other. This only starts, finds and opens it, and launches sessions exactly the way Kohen does by hand.
-#
-#   stella                         open Stella's session in this terminal (starting it if needed)
-#   stella start                   start it in the background if it is not running; print its id
-#   stella id                      print its id, or nothing (exit 1) when it is not running
-#   stella launch <name> <dir> <prompt...>
-#                                  start a background session named <name> in <dir> with that first
-#                                  prompt: the same session `cd <dir> && cy` would give, in the agents view
-#
-# Stella's session runs in ~/.local/share/stella, which is also how the hooks tell her session from others.
+#!/usr/bin/env python3
+"""stella: start, find and open Stella's session, and run her crew. The one command on this machine that
+runs outside the command sandbox, so every argument is validated and nothing is passed through a shell.
 
-set -euo pipefail
-HOME_DIR="$HOME/.local/share/stella"
-FLAGS=(--dangerously-skip-permissions)
+    stella                       open Stella's session in this terminal (starting it if needed)
+    stella start | id            start her in the background / print her id
+    stella agents [--all]        `claude agents --json`
+    stella launch <name>         launch the crewmate whose brief and record Stella wrote in crew/<name>/
+                                 (only from her own session); exit 75 and mark it queued when over a cap
+    stella adopt <name|id> [--team T]   record a session she did not launch (observation only)
+    stella view <name> | --all   open crewmates as terminal tabs (herdr), or print the attach command
+    stella stop <name> | respawn <name> [--model M] | logs <name>
+    stella rm <name>             remove a finished crewmate and its worktree, only once its work has landed
+    stella live-check [show|before|diff]   the tripwire (it needs the process table)
 
-stella_id() {
-    claude agents --json 2>/dev/null | python3 -c '
-import json, sys
-for s in json.load(sys.stdin):
-    if s.get("name") == "stella" and s.get("kind") == "background":
-        print(s.get("id")); break' | grep .
-}
+A record is crew/<name>/record.json in Stella's home. Stella writes `repo`, `branch` (or `dir`), `skill`,
+`model`, `weight`, `mode` (ship|scout|local), `team`, `then` and `report` before launch; this script fills
+`id`, `session`, `dir` and `state`. The brief, crew/<name>/brief.md, is the crewmate's first prompt.
 
-start() {
-    stella_id && return 0
-    mkdir -p "$HOME_DIR"
-    cd "$HOME_DIR"
-    claude --bg -n stella --agent stella "${FLAGS[@]}" \
-        "Session start: load the stella skill and do its start-of-session steps." >/dev/null
-    for _ in 1 2 3 4 5 6 7 8 9 10; do stella_id && return 0; sleep 1; done
-    echo "stella: started, but the session did not show up in 'claude agents' yet" >&2
-    return 1
-}
+Caps (W3-D25): at most SLOTS crewmates working or blocked, at most OPUS_UNITS of Opus weight working, no
+Opus-weighted launch while `throttle-until` is in the future, and no launch at all when `quota.json` says
+QUOTA_STOP of the day's budget is spent. Both files are written by stella-watch.
+"""
 
-case "${1:-open}" in
-    open) id="$(start)"; exec claude attach "$id" ;;
-    start) start ;;
-    id) stella_id ;;
-    launch)
-        [[ $# -ge 4 ]] || { echo "usage: stella launch <name> <dir> <prompt...>" >&2; exit 2; }
-        name="$2"; dir="${3/#\~/$HOME}"; shift 3
-        cd "$dir"
-        claude --bg -n "$name" "${FLAGS[@]}" "$*"
-        ;;
-    -h|--help|help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//' ;;
-    *) echo "usage: stella [open|start|id|launch <name> <dir> <prompt...>]" >&2; exit 2 ;;
-esac
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+
+HOME = Path.home()
+STELLA_HOME = HOME / ".local/share/stella"
+CREW = STELLA_HOME / "crew"
+TOKENS = Path(os.environ.get("CLAUDE_TOKEN_STATE", HOME / ".local/state/claude-token")) / "sessions"
+EXTENSION = HOME / ".claude/kc-extensions/stella.json"  # this machine's additions: start_roots, watches
+BIN = Path(__file__).resolve().parent
+FLAGS = ["--dangerously-skip-permissions"]
+SLOTS, OPUS_UNITS, QUOTA_STOP = 6, 4.0, 0.85
+QUEUED = 75
+
+NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
+REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
+BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
+MODEL = re.compile(r"^[a-z0-9][a-z0-9.\[\]-]{0,40}$")
+SHORT_ID = re.compile(r"^[0-9a-f]{8}$")
+
+
+def die(msg: str, code: int = 2) -> None:
+    print(f"stella: {msg}", file=sys.stderr)
+    sys.exit(code)
+
+
+def claude(*args: str, cwd: Path | None = None, capture: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(["claude", *args], cwd=cwd, capture_output=capture, text=True)
+
+
+def agents(all_: bool = True) -> list[dict]:
+    p = claude("agents", "--json", *(["--all"] if all_ else []))
+    try:
+        return json.loads(p.stdout or "[]")
+    except ValueError:
+        return []
+
+
+def stella_row() -> dict | None:
+    return next((a for a in agents(False) if a.get("name") == "stella" and a.get("kind") == "background"), None)
+
+
+# ------------------------------------------------------------------ Stella herself
+
+def start() -> str:
+    row = stella_row()
+    if row:
+        return row["id"]
+    STELLA_HOME.mkdir(parents=True, exist_ok=True)
+    claude("--bg", "-n", "stella", "--agent", "stella", "--model", "sonnet", *FLAGS,
+           "Session start: load the stella skill and do its start-of-session steps.", cwd=STELLA_HOME)
+    for _ in range(10):
+        row = stella_row()
+        if row:
+            return row["id"]
+        time.sleep(1)
+    die("started, but the session did not show up in 'claude agents' yet", 1)
+    return ""
+
+
+# ------------------------------------------------------------------ records
+
+def check_name(name: str) -> str:
+    if not NAME.match(name):
+        die(f"bad name {name!r} (lowercase letters, digits and dashes, at most 41)")
+    return name
+
+
+def record_path(name: str) -> Path:
+    return CREW / check_name(name) / "record.json"
+
+
+def load(name: str) -> dict:
+    p = record_path(name)
+    if not p.exists():
+        die(f"no record for {name} ({p})")
+    return json.loads(p.read_text())
+
+
+def save(name: str, rec: dict) -> None:
+    p = record_path(name)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rec, indent=1))
+    tmp.replace(p)
+
+
+def records() -> list[dict]:
+    out = []
+    for p in sorted(CREW.glob("*/record.json")):
+        try:
+            out.append(json.loads(p.read_text()))
+        except (OSError, ValueError):
+            pass
+    return out
+
+
+def live_state(rec: dict, rows: dict[str, dict]) -> str | None:
+    row = rows.get(rec.get("id") or "") or rows.get((rec.get("session") or "")[:8])
+    return row.get("state") if row else None
+
+
+# ------------------------------------------------------------------ caps
+
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def over_cap(rec: dict) -> str | None:
+    rows = {a.get("id", ""): a for a in agents()}
+    rows.update({(a.get("sessionId") or "")[:8]: a for a in agents()})
+    busy = [r for r in records() if r.get("name") != rec.get("name") and live_state(r, rows) in ("working", "blocked")]
+    working = [r for r in busy if live_state(r, rows) == "working"]
+    weight = float(rec.get("weight") or 0)
+    if len(busy) >= SLOTS:
+        return f"slot cap: {len(busy)} of {SLOTS} crewmates are working or blocked"
+    if weight and sum(float(r.get("weight") or 0) for r in working) + weight > OPUS_UNITS:
+        return f"Opus weight cap: {OPUS_UNITS} units in use would be exceeded"
+    until = read_json(STELLA_HOME / "throttle-until").get("until", 0)
+    if weight and until > time.time():
+        return f"Opus throttled; no Opus launch for {int(until - time.time())} s more"
+    frac = read_json(STELLA_HOME / "quota.json").get("fraction")
+    if isinstance(frac, (int, float)) and frac >= QUOTA_STOP:
+        return f"budget gate: {frac:.0%} of today's budget is spent"
+    return None
+
+
+# ------------------------------------------------------------------ launch
+
+def inherit_token(session: str) -> None:
+    """The crewmate bills the same token as Stella (W3-D29): copy her record before it starts."""
+    row = stella_row()
+    src = TOKENS / (row or {}).get("sessionId", "") if row else None
+    if src and src.is_file():
+        TOKENS.mkdir(parents=True, exist_ok=True)
+        (TOKENS / session).write_text(src.read_text())
+
+
+def worktree(rec: dict) -> Path:
+    if rec.get("repo"):
+        repo, branch = rec["repo"], rec.get("branch") or rec["name"]
+        if not REPO.match(repo) or not BRANCH.match(branch) or ".." in branch:
+            die(f"bad repo or branch: {repo} {branch}")
+        if not (HOME / "github" / repo).is_dir():
+            die(f"no repo at ~/github/{repo}")
+        wt = HOME / "github" / f"{repo}-wt" / branch
+        if not wt.is_dir():
+            p = subprocess.run(["zsh", "-i", "-c", 'wta "$1" "$2"', "wta", repo, branch],
+                               capture_output=True, text=True)
+            if not wt.is_dir():
+                die(f"wta {repo} {branch} failed: {p.stderr.strip()[-300:]}", 1)
+        return wt
+    d = Path(os.path.expanduser(rec.get("dir") or "")).resolve()
+    extra = [Path(os.path.expanduser(r)) for r in read_json(EXTENSION).get("start_roots", [])]
+    roots = [r.resolve() for r in (HOME / "github", STELLA_HOME, *extra)]
+    if not d.is_dir() or not any(d == r or r in d.parents for r in roots):
+        die(f"start directory must be under ~/github, Stella's home or a start_roots entry: {d}")
+    return d
+
+
+def launch(name: str) -> None:
+    if Path.cwd().resolve() != STELLA_HOME.resolve():
+        die("launch runs only from Stella's own session")
+    rec = load(name)
+    brief = (CREW / name / "brief.md")
+    if not brief.is_file() or not brief.read_text().strip():
+        die(f"no brief at {brief}")
+    model = rec.get("model") or "sonnet"
+    if not MODEL.match(model):
+        die(f"bad model {model!r}")
+    why = over_cap(rec)
+    if why:
+        rec["state"] = "queued"
+        rec["queued_because"] = why
+        save(name, rec)
+        die(f"{name} queued: {why}", QUEUED)
+    d = worktree(rec)
+    session = str(uuid.uuid4())
+    inherit_token(session)
+    p = claude("--bg", "--session-id", session, "-n", name, "--model", model, *FLAGS, brief.read_text(), cwd=d)
+    if p.returncode != 0:
+        die(f"claude --bg failed: {(p.stderr or p.stdout).strip()[-300:]}", 1)
+    short = (p.stdout.strip().split() or [session[:8]])[-1]
+    rec.update({"id": short if SHORT_ID.match(short) else session[:8], "session": session, "dir": str(d),
+                "state": "working", "launched_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+    rec.pop("queued_because", None)
+    save(name, rec)
+    print(f"launched {name} ({rec['id']}) in {d} on {model}")
+    view(name, quiet=True)
+
+
+def adopt(target: str, team: str | None) -> None:
+    rows = agents()
+    row = next((a for a in rows if a.get("name") == target or a.get("id") == target
+                or (a.get("sessionId") or "").startswith(target)), None)
+    if not row:
+        die(f"no session named or with id {target!r} in claude agents")
+    name = row.get("name") if row.get("name") and NAME.match(row["name"]) else \
+        re.sub(r"[^a-z0-9-]+", "-", (row.get("name") or row["id"]).lower()).strip("-")[:41] or row["id"]
+    if record_path(name).exists():
+        die(f"{name} already has a record")
+    save(name, {"name": name, "id": row.get("id"), "session": row.get("sessionId"), "dir": row.get("cwd"),
+                "adopted": True, "team": team, "weight": 0, "state": row.get("state"),
+                "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+    print(f"adopted {row.get('name') or row['id']} as {name} (observation only)")
+
+
+# ------------------------------------------------------------------ view / lifecycle
+
+def _herdr_pane(out: str) -> str | None:
+    m = re.search(r'"pane_id"\s*:\s*"([^"]+)"', out)
+    return m.group(1) if m else None
+
+
+def view(name: str, quiet: bool = False) -> None:
+    rec = load(name)
+    sid = rec.get("id")
+    if not sid or not SHORT_ID.match(sid):
+        die(f"{name} has no session id yet")
+    herdr = subprocess.run(["sh", "-c", "command -v herdr"], capture_output=True, text=True).stdout.strip()
+    if herdr:
+        t = subprocess.run([herdr, "tab", "create", "--label", name, "--cwd", rec.get("dir") or str(HOME)],
+                           capture_output=True, text=True)
+        pane = _herdr_pane(t.stdout)
+        if t.returncode == 0 and pane:
+            subprocess.run([herdr, "pane", "run", pane, f"claude attach {sid}"], capture_output=True, text=True)
+            if not quiet:
+                print(f"{name}: herdr tab opened")
+            return
+    if not quiet:
+        print(f"{name}: claude attach {sid}")
+
+
+def view_all() -> None:
+    live = {a.get("id") for a in agents(False)}
+    for rec in records():
+        if rec.get("id") in live:
+            view(rec["name"])
+
+
+def lifecycle(cmd: str, name: str, model: str | None = None) -> None:
+    rec = load(name)
+    if rec.get("adopted") and cmd in ("stop", "respawn"):
+        die(f"{name} is adopted: Stella never stops or restarts it")
+    sid = rec.get("id") or ""
+    if not SHORT_ID.match(sid):
+        die(f"{name} has no session id")
+    if cmd == "logs":
+        sys.exit(claude("logs", sid, capture=False).returncode)
+    if cmd == "stop":
+        sys.exit(claude("stop", sid, capture=False).returncode)
+    if model:  # continue the same conversation on another model (e.g. escalate to Opus)
+        if not MODEL.match(model):
+            die(f"bad model {model!r}")
+        claude("stop", sid)
+        p = claude("--bg", "--resume", rec["session"], "-n", name, "--model", model, *FLAGS,
+                   f"Continue this task on {model}. Kohen's first mate moved you here because the last question was"
+                   " beyond the previous model; carry on from where you were.", cwd=Path(rec.get("dir") or HOME))
+        rec["model"] = model
+        save(name, rec)
+        sys.exit(p.returncode)
+    sys.exit(claude("respawn", sid, capture=False).returncode)
+
+
+def landed(rec: dict) -> str | None:
+    """None when the crewmate's work is safely somewhere else, else why not."""
+    mode = rec.get("mode") or "ship"
+    if mode == "scout":
+        report = Path(os.path.expanduser(rec.get("report") or ""))
+        return None if rec.get("report") and report.is_file() else "its report is missing"
+    d = Path(rec.get("dir") or "")
+    if not (d / ".git").exists():
+        return None if mode != "ship" else "no worktree to check"
+    git = lambda *a: subprocess.run(["git", "-C", str(d), *a], capture_output=True, text=True)
+    if git("status", "--porcelain").stdout.strip():
+        return "uncommitted changes in its worktree"
+    if git("rev-parse", "--abbrev-ref", "@{u}").returncode != 0:
+        return "its branch was never pushed"
+    if git("rev-list", "--count", "@{u}..HEAD").stdout.strip() not in ("", "0"):
+        return "it has unpushed commits"
+    if mode == "ship":
+        pr = subprocess.run(["gh", "pr", "view", "--json", "state", "-q", ".state"], cwd=d,
+                            capture_output=True, text=True).stdout.strip()
+        if pr != "MERGED":
+            return f"its PR is not merged ({pr or 'no PR'})"
+    return None
+
+
+def rm(name: str) -> None:
+    rec = load(name)
+    if rec.get("adopted"):
+        die(f"{name} is adopted: Stella never removes it (say 'release' to drop the record)")
+    why = landed(rec)
+    if why:
+        die(f"{name} not removed: {why}", 1)
+    if SHORT_ID.match(rec.get("id") or ""):
+        claude("rm", rec["id"])
+    if rec.get("repo") and (HOME / "github" / f"{rec['repo']}-wt" / (rec.get("branch") or name)).is_dir():
+        subprocess.run(["zsh", "-i", "-c", 'wtr "$1" "$2"', "wtr", rec["repo"], rec.get("branch") or name],
+                       input="n\n", capture_output=True, text=True)
+    rec["state"] = "landed"
+    rec["removed_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    save(name, rec)
+    print(f"removed {name}")
+
+
+# ------------------------------------------------------------------ main
+
+def main(argv: list[str]) -> None:
+    cmd, rest = (argv[1] if len(argv) > 1 else "open"), argv[2:]
+    if cmd == "open":
+        os.execvp("claude", ["claude", "attach", start()])
+    elif cmd == "start":
+        print(start())
+    elif cmd == "id":
+        row = stella_row()
+        print(row["id"]) if row else sys.exit(1)
+    elif cmd == "agents" and rest in ([], ["--all"]):
+        print(json.dumps(agents(bool(rest)), indent=1))
+    elif cmd == "launch" and len(rest) == 1:
+        launch(rest[0])
+    elif cmd == "adopt" and len(rest) in (1, 3) and (len(rest) == 1 or rest[1] == "--team"):
+        team = check_name(rest[2]) if len(rest) == 3 else None
+        target = rest[0]
+        if not (NAME.match(target) or SHORT_ID.match(target)):
+            die(f"bad session name or id {target!r}")
+        adopt(target, team)
+    elif cmd == "view" and rest == ["--all"]:
+        view_all()
+    elif cmd == "view" and len(rest) == 1:
+        view(rest[0])
+    elif cmd in ("stop", "logs") and len(rest) == 1:
+        lifecycle(cmd, rest[0])
+    elif cmd == "respawn" and (len(rest) == 1 or (len(rest) == 3 and rest[1] == "--model")):
+        lifecycle(cmd, rest[0], rest[2] if len(rest) == 3 else None)
+    elif cmd == "rm" and len(rest) == 1:
+        rm(rest[0])
+    elif cmd == "live-check" and len(rest) <= 1 and (not rest or rest[0] in ("show", "before", "diff")):
+        os.execv(sys.executable, [sys.executable, str(BIN / "live-check"), *(rest or ["show"])])
+    elif cmd in ("-h", "--help", "help"):
+        print(__doc__.split("\n\n")[1])
+    else:
+        die("usage: stella [open|start|id|agents|launch|adopt|view|stop|respawn|logs|rm|live-check] ...")
+
+
+if __name__ == "__main__":
+    main(sys.argv)
