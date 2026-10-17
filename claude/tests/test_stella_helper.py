@@ -96,6 +96,22 @@ class Helper(unittest.TestCase):
         self.assertIn("--model", bg)
         self.assertEqual(bg[-2:], ["--", "/kc-dev fix the thing\n"])
 
+    def test_launch_turns_the_security_flag_into_the_security_boundary_activity(self):
+        self.crew("fix-flake", security=True, allow=["push"])
+        self.assertEqual(self.run_stella("launch", "fix-flake").returncode, 0)
+        rec = self.rec("fix-flake")
+        self.assertEqual(rec["allow"], ["push", "security-boundary"])
+        self.assertNotIn("security", rec)
+
+    def test_allow_sets_and_clears_the_activities_of_a_record(self):
+        self.crew("fix-flake")
+        self.assertEqual(self.run_stella("allow", "fix-flake", "push").returncode, 0)
+        self.assertEqual(self.rec("fix-flake")["allow"], ["push"])
+        self.assertNotEqual(self.run_stella("allow", "fix-flake", "rm-rf").returncode, 0)
+        self.assertEqual(self.rec("fix-flake")["allow"], ["push"])
+        self.assertEqual(self.run_stella("allow", "fix-flake", "--none").returncode, 0)
+        self.assertEqual(self.rec("fix-flake")["allow"], [])
+
     def test_second_launch_of_a_running_crewmate_is_refused(self):
         self.crew("fix-flake")
         self.assertEqual(self.run_stella("launch", "fix-flake").returncode, 0)

@@ -8,9 +8,14 @@ prompt   A message that starts with "Stella"/"S" (or ends with her name, or says
          ~/.local/share/stella) is exempt: everything typed there is for her.
          In Stella's own session it also blocks the stop once when crew is in flight and her watcher
          (stella-watch) is not running, so she never ends a turn blind.
-pretool  A `git push` into ~/github/environment (or one of its worktrees) asks the owner first. That is
-         the only gated write. KC_OWNER_SAID_PUSH=1 in front of the command skips the ask, for when the
-         owner's own instructions in this session say to push there.
+pretool  A `git push` into ~/github/environment (or one of its worktrees) is gated by what it would
+         publish, not by who pushes: the machine's `push_check` (a command named in
+         ~/.claude/kc-extensions/stella.json) scans every commit the push adds, contents and messages.
+         No hits: allowed, no prompt. Hits: denied, listing them, so the session rewrites them and pushes
+         again. No check configured, or it cannot run: ask the owner, unless the session's record grants
+         the `push` activity.
+         A session whose crew record (~/.local/share/stella/crew/*/record.json, matched by session id)
+         lists `push` in `allow` also has its plain `git push` to any other repo allowed without a prompt.
 
 Standard library only, so it runs under any python3. A hook that fails must never trap a session, so every
 handler swallows its own errors.
@@ -29,7 +34,8 @@ from pathlib import Path
 
 HOME = Path.home()
 STELLA_HOME = HOME / ".local/share/stella"
-PROTECTED = HOME / "github/environment"  # pushes here ask the owner
+PROTECTED = HOME / "github/environment"  # pushes here are leak-checked
+EXTENSION = HOME / ".claude/kc-extensions/stella.json"  # this machine: `push_check`
 
 # ---------------------------------------------------------------- status block
 
@@ -200,17 +206,107 @@ def _dirs(command: str, cwd: Path) -> list[Path]:
     return [p if p.is_absolute() else cwd / p for p in out]
 
 
-def _crewmate(session_id: str) -> bool:
-    """True when this session is a crewmate Stella launched (not one she adopted)."""
-    crew = STELLA_HOME / "crew"
-    for rec in crew.glob("*/record.json"):
+def session_allows(session_id: str, activity: str) -> bool:
+    """True when the crew record of this session lists `activity` in `allow`: the activities the owner
+    (or one of Stella's canon principles) granted for the task."""
+    if not session_id:
+        return False
+    for rec in (STELLA_HOME / "crew").glob("*/record.json"):
         try:
             r = json.loads(rec.read_text())
         except (OSError, ValueError):
             continue
-        if session_id and r.get("session") == session_id and not r.get("adopted"):
+        if r.get("session") == session_id and activity in (r.get("allow") or []):
             return True
     return False
+
+
+_VALUE_OPTS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec", "--signed"}
+_SIMPLE = re.compile(r"^[ \t]*[^;&|$`<>\n()]*$")
+
+
+def _git(d: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(d), *args], capture_output=True, text=True, timeout=10).stdout.strip()
+
+
+def push_spec(command: str, d: Path) -> str:
+    """The rev-list arguments naming exactly what the push in `command` would add to its remote: the pushed
+    refs, minus everything the remote's tracking refs already hold (a force push or a new branch checks all
+    that the remote lacks)."""
+    seg = next((x for x in re.split(r"[;&|\n]+", command) if _PUSH.search(x)), command)
+    try:
+        words = shlex.split(seg, posix=True)
+    except ValueError:
+        words = seg.split()
+    words = words[words.index("push") + 1:] if "push" in words else []
+    pos, tips, skip = [], [], False
+    for w in words:
+        if skip:
+            skip = False
+        elif w in ("--all", "--branches"):
+            tips.append("--branches")
+        elif w == "--tags":
+            tips.append("--tags")
+        elif w == "--mirror":
+            tips.append("--all")
+        elif w in _VALUE_OPTS:
+            skip = True
+        elif not w.startswith("-"):
+            pos.append(w)
+    branch = _git(d, "branch", "--show-current")
+    remote = pos[0] if pos else (_git(d, "config", f"branch.{branch}.pushRemote")
+                                 or _git(d, "config", f"branch.{branch}.remote") or "origin")
+    for ref in pos[1:]:
+        src = ref.lstrip("+").split(":", 1)[0]
+        if src:  # `:dst` deletes a branch: it publishes nothing
+            tips.append(src)
+    if not tips and len(pos) < 2:
+        tips.append("HEAD")
+    return " ".join(shlex.quote(t) for t in tips) + f" --not --remotes={shlex.quote(remote)}"
+
+
+def push_check_argv() -> list[str] | None:
+    try:
+        argv = json.loads(EXTENSION.read_text()).get("push_check")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
+        return None
+    return [os.path.expanduser(a) for a in argv]
+
+
+def _decide(decision: str, reason: str = "") -> None:
+    out = {"hookEventName": "PreToolUse", "permissionDecision": decision}
+    if reason:
+        out["permissionDecisionReason"] = reason
+    print(json.dumps({"hookSpecificOutput": out}))
+
+
+def _env_push(command: str, d: Path, session_id: str) -> None:
+    """A push into the public repo: allowed when what it publishes passes the machine's check."""
+    argv = push_check_argv()
+    if argv is None:
+        if not session_allows(session_id, "push"):
+            _decide("ask", "Push to ~/github/environment (personal, public remote), and no push_check is"
+                           " configured to scan it. Push it?")
+        return
+    try:
+        spec = push_spec(command, d)
+        p = subprocess.run([*argv, "--repo", str(d), "--range", spec], capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        p = None
+    if p is None or p.returncode not in (0, 1):
+        if not session_allows(session_id, "push"):
+            _decide("ask", "Push to ~/github/environment (personal, public remote): the push check could not"
+                           " run. Push it?")
+        return
+    if p.returncode == 1:
+        hits = "\n".join(p.stdout.strip().splitlines()[:40])
+        _decide("deny", "This push would publish work-specific content to the public ~/github/environment"
+                        f" remote:\n{hits}\nRewrite each hit generically, amend or rewrite the commits that"
+                        " hold it (the commit messages too), then push again.")
+    elif _SIMPLE.match(command):
+        _decide("allow", "The push check found nothing work-specific in what this push publishes.")
 
 
 def pretool(data: dict) -> None:
@@ -219,19 +315,14 @@ def pretool(data: dict) -> None:
     command = (data.get("tool_input") or {}).get("command") or ""
     if not _PUSH.search(command):
         return
-    # The owner's say-so skips the ask, but never for a crewmate Stella launched: Kohen does not talk
-    # to it about pushing, so it cannot have his say-so (one pushed with it on 2026-10-17).
-    if re.match(r"^\s*KC_OWNER_SAID_PUSH=1\s", command) and not _crewmate(data.get("session_id") or ""):
-        return
     cwd = Path(data.get("cwd") or os.getcwd())
     protected = PROTECTED.resolve()
-    if not any(_repo_root(d) == protected for d in _dirs(command, cwd) if d.is_dir()):
-        return
-    print(json.dumps({"hookSpecificOutput": {
-        "hookEventName": "PreToolUse",
-        "permissionDecision": "ask",
-        "permissionDecisionReason": "Push to ~/github/environment (personal, public remote). Push it?",
-    }}))
+    sid = data.get("session_id") or ""
+    for d in _dirs(command, cwd):
+        if d.is_dir() and _repo_root(d) == protected:
+            return _env_push(command, d, sid)
+    if _SIMPLE.match(command) and session_allows(sid, "push"):
+        _decide("allow", "This session's task grants the push activity.")
 
 
 HANDLERS = {"stop": stop, "prompt": prompt, "pretool": pretool}

@@ -53,9 +53,10 @@ decline one only with code evidence, or bring a real judgment call to Kohen.
 
 ## 5. Commit and push
 
-Commit with the repo's message conventions. Push the branch: pushes are not gated, except to
-`~/github/environment`, where Claude Code asks Kohen first (put `KC_OWNER_SAID_PUSH=1 ` in front of the
-push only when his instructions in this session say to push there). Never open a PR unless asked.
+Commit with the repo's message conventions. Push the branch: a push to the public
+`~/github/environment` is checked by the machine's leak check and goes through when it finds nothing (on a
+hit it is denied: rewrite the hits generically, amend, push again); other pushes are not gated. Never put a
+bypass on a push, and never open a PR unless asked.
 
 ## 6. Report
 

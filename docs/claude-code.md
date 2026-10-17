@@ -58,7 +58,7 @@ Each skill decides for itself whether the task deserves subagents, and which.
 |---|---|
 | Stop | The turn's final message must end with the status block (rule line, then NEXT FOR YOU (N) with N numbered items, ALL DONE or WORKING). Blocks once with the rule when it is missing or malformed. Skipped for `claude -p`. |
 | UserPromptSubmit | A message starting "Stella" / "S," (or ending with her name, or "ask/tell Stella") is for Stella: the session is told to relay it with the `stella` skill. Not in her own session. |
-| PreToolUse (Bash) | A `git push` into this repo or one of its worktrees asks first. The only gated write. `KC_OWNER_SAID_PUSH=1` in front skips it when the owner's instructions say to push. |
+| PreToolUse (Bash) | A `git push` into this repo or one of its worktrees runs the machine's `push_check` (named in the stella extension) over the commits and messages it would publish: no hits, allowed without a prompt; hits, denied with the list; no check configured, it asks. A session whose crew record lists `push` in `allow` is also not prompted for other pushes. |
 
 ## Stella
 

@@ -55,7 +55,12 @@ is for her; relayed messages arrive prefixed `From …`.
    once that the crewmate never calls `stella` or messages another crewmate: it reports through its status
    block and everything else goes through her.
 2. Write `crew/<name>/record.json` with the row's fields: `name`, `repo` + `branch` or `dir`, `skill`,
-   `model`, `weight`, `mode`, and when they apply `team`, `then`, `report`, `pr`, `watches`. `pr` is the full
+   `model`, `weight`, `mode`, and when they apply `team`, `then`, `report`, `pr`, `watches`, `allow`. `allow`
+   lists the activities the hooks do not prompt Kohen for during this task: `push` (any remote), `security-boundary`
+   (edits to the command sandbox's allowlist and Claude's settings; the old `"security": true` is read as this). Put one there only
+   when Kohen's explicit words for this task grant it, or a canon principle does; never because the task
+   seems to need it. Outward-facing actions (post, comment, review, approve, merge, trigger remote jobs) have
+   no activity: they stay Kohen's yes, every time. `pr` is the full
    PR URL (`https://<host>/<owner>/<repo>/pull/<N>`), never `owner/repo#N`: `launch` refuses the short form,
    and `gh pr view` cannot resolve it on the enterprise host, so no PR event would ever fire.
 3. `~/.local/bin/stella launch <name>`. Exit 75 means queued over a cap (slots, Opus weight, a throttle
@@ -111,6 +116,7 @@ below is the helper `~/.local/bin/stella`.
 | "do X" (work to be done) | writes `brief.md` and `record.json`, then `stella launch <name>` |
 | "track 2428", "watch that PR" | `stella track-pr <full PR URL> [name]` |
 | "stop watching 2428" | `stella untrack <name>` |
+| "X may push", "let X edit the allowlist" (a grant for one task) | `stella allow <name> push` / `security-boundary` (also on an adopted session of his; `--none` clears it) |
 | "adopt X", "keep an eye on my X session" | `stella adopt <name or id> [--team T]` (observation only) |
 | "let me see X", "open X's tab" | `stella view <name>`; all of them: `stella view --all` |
 | "stop X" | `stella stop <name>` |
@@ -157,5 +163,7 @@ After anything worth remembering (a launch, a removal, a decision, a correction)
   she launched is the one standing exception (J-10).
 - Never run `tok`, `claude respawn --all` or anything that restarts every session; switching tokens is
   Kohen's call.
-- Pushes are not gated, except to `~/github/environment`, which asks him through Claude Code's prompt.
+- Gates follow the activity: a push to `~/github/environment` goes through when the leak check finds
+  nothing (a hit is the pushing session's to fix); the activities in a record's `allow` are not prompted.
+  Never write an `allow` on your own judgment, and never a bypass on a push.
 - End every turn with the status block.

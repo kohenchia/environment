@@ -14,6 +14,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  transcript under <name>, then adopt it
     stella track-pr <url> [name] watch a PR with no session: a track record, so a merge, a failing check,
                                  requested changes or a new review wakes her (`untrack <name>` ends it)
+    stella allow <name> <activity>...   grant a session the activities Kohen allowed for its task (a crewmate's
+                                 record or an adopted one's; `--none` clears them): the hooks then skip those prompts
     stella view <name> | --all   open crewmates as terminal tabs (herdr; `--all` opens the missing ones and
                                  closes the tabs of sessions that are gone), or print the attach command
     stella stop <name> | respawn <name> [--model M] | logs <name>
@@ -23,7 +25,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
 
 A record is crew/<name>/record.json in Stella's home. Stella writes `repo`, `branch` (or `dir`), `skill`,
 `model`, `weight`, `mode` (ship|scout|local), `team`, `then` and `report` before launch; this script fills
-`id`, `session`, `dir` and `state`. The brief, crew/<name>/brief.md, is the crewmate's first prompt.
+`id`, `session`, `dir` and `state`. `allow` lists the activities the hooks do not prompt for in that session
+(ACTIVITIES); Stella writes it only from Kohen's explicit words for the task, or a canon principle. The brief, crew/<name>/brief.md, is the crewmate's first prompt.
 
 Caps (W3-D25): at most SLOTS crewmates working or blocked, at most OPUS_UNITS of Opus weight working, no
 Opus-weighted launch while `throttle-until` is in the future, and no launch at all when `quota.json` says
@@ -57,6 +60,7 @@ os.environ["PATH"] = os.environ.get("STELLA_PATH", "/opt/homebrew/bin:/usr/local
 GIT = ["git", "-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null"]
 TIMEOUT = 120
 
+ACTIVITIES = ("push", "security-boundary")  # what a record's `allow` can grant; the hooks read it
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
@@ -273,6 +277,8 @@ def launch(name: str) -> None:
         rec["queued_because"] = why
         save(name, rec)
         die(f"{name} queued: {why}", QUEUED)
+    if rec.pop("security", False):  # the old flag: a task about the sandbox boundary
+        rec["allow"] = sorted({*(rec.get("allow") or []), "security-boundary"})
     d = worktree(rec)
     session = str(uuid.uuid4())
     inherit_token(session)
@@ -287,12 +293,6 @@ def launch(name: str) -> None:
     row = started[-1]
     if row.get("sessionId") and row["sessionId"] != session:
         inherit_token(row["sessionId"])  # the token file is keyed by the real session
-    if rec.get("security") and row.get("sessionId"):
-        # Its job is the sandbox boundary itself: the machine's guard lets it edit that boundary's files.
-        sec = HOME / ".local/state/acc-guard/security-sessions"
-        sec.parent.mkdir(parents=True, exist_ok=True)
-        with sec.open("a") as f:
-            f.write(row["sessionId"] + "\n")
     rec.update({"id": row.get("id"), "session": row.get("sessionId"), "dir": str(d),
                 "state": "working", "launched_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     rec.pop("queued_because", None)
@@ -338,6 +338,18 @@ def adopt_resume(session: str, name: str, team: str | None) -> None:
                 "adopted": True, "team": team, "weight": 0, "state": row.get("state"), "resumed_from": session,
                 "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     print(f"resumed {session[:8]} as {name} ({row.get('id')}) and adopted it (observation only)")
+
+
+def allow(name: str, activities: list[str]) -> None:
+    rec = load(name)
+    if activities == ["--none"]:
+        activities = []
+    bad = [a for a in activities if a not in ACTIVITIES]
+    if bad:
+        die(f"unknown activity {bad[0]!r}; the activities are: {', '.join(ACTIVITIES)}")
+    rec["allow"] = sorted(set(activities))
+    save(name, rec)
+    print(f"{name} may: {', '.join(rec['allow']) or 'nothing extra'}")
 
 
 def adopt(target: str, team: str | None) -> None:
@@ -599,6 +611,8 @@ def main(argv: list[str]) -> None:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}", target):
             die(f"bad session name or id {target!r}")
         adopt(target, team)
+    elif cmd == "allow" and len(rest) >= 2:
+        allow(check_name(rest[0]), rest[1:])
     elif cmd == "track-pr" and len(rest) in (1, 2):
         track_pr(rest[0], rest[1] if len(rest) == 2 else None)
     elif cmd == "untrack" and len(rest) == 1:
@@ -618,7 +632,7 @@ def main(argv: list[str]) -> None:
     elif cmd in ("-h", "--help", "help"):
         print(__doc__.split("\n\n")[1])
     else:
-        die("usage: stella [open|start|restart|id|agents|launch|adopt|track-pr|untrack|view|stop|respawn|logs|rm|live-check] ...")
+        die("usage: stella [open|start|restart|id|agents|launch|adopt|allow|track-pr|untrack|view|stop|respawn|logs|rm|live-check] ...")
 
 
 if __name__ == "__main__":

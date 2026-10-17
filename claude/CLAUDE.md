@@ -52,10 +52,19 @@ items of your last NEXT FOR YOU block.
 
 ## Access
 
-Sessions have all the read and write access I have. Writes and pushes are not gated, with one exception:
-a push to `~/github/environment` (this public repo) asks me first through Claude Code's prompt. Put
-`KC_OWNER_SAID_PUSH=1 ` in front of that push only when my instructions in this session explicitly say to
-push there. If I want no writes, I use plan mode.
+Sessions have all the read and write access I have. Gates follow the kind of activity, never the text of a
+command:
+
+- **Publishing to this public repo** (`~/github/environment`) is gated by a leak check over exactly what the
+  push would publish: commits and their messages. No hits, the push goes through without a prompt. Hits, it
+  is denied and the pushing session rewrites them generically, amends its commits and pushes again. No check
+  configured on the machine: it asks me.
+- **Granted activities.** What I explicitly allow for a task (pushing, editing the sandbox boundary) is
+  recorded on that task's session by Stella as `allow`, and the hooks then do not prompt me for it during the
+  task. Nobody grants an activity for me.
+- **Outward-facing actions** (below) are rules for the session, not hooks.
+
+If I want no writes, I use plan mode.
 
 Still ask before anything outward-facing that cannot be taken back: posting or reacting anywhere, a review,
 approval, merge or comment on someone else's work, triggering remote jobs, deleting anything of mine.

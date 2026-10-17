@@ -17,7 +17,7 @@ description: How Kohen's environment is built - Alacritty and tmux, the shell, C
 | Skills | `~/github/environment/claude/skills/<name>/`, linked into `~/.claude/skills/` | Public. Each reads `~/.claude/kc-extensions/<name>.md` first when it exists |
 | Extensions | `~/.claude/kc-extensions/` → the machine's own repo | Adds constraints to the public skills; never in the public repo |
 | Agents | `~/github/environment/claude/agents/`, linked into `~/.claude/agents/` | `stella` is the main agent of her session |
-| Hooks | the `kc` plugin (`~/github/environment/claude/plugin`, marketplace `kc-local`) running `claude/bin/kc-hook` | Status block (Stop), messages for Stella (UserPromptSubmit), the push prompt for `~/github/environment` (PreToolUse) |
+| Hooks | the `kc` plugin (`~/github/environment/claude/plugin`, marketplace `kc-local`) running `claude/bin/kc-hook` | Status block (Stop), messages for Stella (UserPromptSubmit), the leak-checked push to `~/github/environment` and the `allow` activities of a crew record (PreToolUse) |
 | Stella | her session (`stella`, on Sonnet), her store `~/.local/share/stella/` (`crew/<name>/` records and briefs, `journal.md`, `canon.md`), `claude/bin/stella` linked to `~/.local/bin/stella` | The helper is the one command allowed outside the command sandbox; it validates every argument. After a change to her skill or setup, `stella restart` (not a plain re-attach, which skips her start-of-session steps). `stella --help` |
 | Stella's watcher | `claude/bin/stella-watch` → `~/.local/bin/stella-watch` | A sandboxed background command in her session; exits (waking her) when the crew needs her |
 | Tripwire | `claude/bin/live-check` (`stella live-check before|diff`) | Proves a change restarted, removed or re-tokened no running session |
@@ -44,6 +44,6 @@ tools on top; its own setup script links them.
 5. Anything that runs in every session (kc-hook, the plugin, the helper) changes running sessions the
    moment it lands: build it in a worktree, run `python3 -m unittest discover -s claude/tests`, and run
    `stella live-check before` / `diff` around the merge.
-6. Verify for real (the chord, the hook firing, the layout), then commit. Pushes to `~/github/environment`
-   ask Kohen through Claude Code's prompt; other repos push freely.
+6. Verify for real (the chord, the hook firing, the layout), then commit. A push to `~/github/environment`
+   is leak-checked by the hook (no hits: no prompt); other repos push freely.
 7. Keep `docs/` and this skill true to what changed.
