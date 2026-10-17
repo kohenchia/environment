@@ -637,10 +637,33 @@ for s in json.load(sys.stdin):
     claude attach "${pick%%$'\t'*}"
 }
 
-# tw: attach the `work` session, building its main window the first time.
-# Alacritty starts a plain login shell rather than tmux, so this is the way in,
-# and detaching with C-b d drops you back at that shell.
+# tw: the work window. With herdr installed (Work Env 3.0): start its server if needed, build the `work`
+# workspace the first time (a `stella` tab running Stella's session, then one tab per live crewmate via
+# `stella view --all`), and attach. herdr's sidebar shows every agent's state. Without herdr, tmux (`twt`).
 function tw() {
+    if ! command -v herdr >/dev/null 2>&1; then
+        twt
+        return
+    fi
+    if ! herdr status server >/dev/null 2>&1; then
+        (nohup herdr server >/dev/null 2>&1 &)
+        local i
+        for i in {1..20}; do herdr status server >/dev/null 2>&1 && break; sleep 0.25; done
+    fi
+    if ! herdr workspace list 2>/dev/null | grep -q '"label": *"work"'; then
+        local pane
+        pane=$(herdr workspace create --cwd "$HOME/github" --label work --focus 2>/dev/null \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])') \
+            && herdr pane run "$pane" "stella" >/dev/null
+        stella view --all >/dev/null 2>&1
+    fi
+    herdr
+}
+
+# twt: the Work Env 2.0 tmux window, kept as the fallback: attach the `work` session, building its main
+# window the first time (the agents view left, your session right). Alacritty starts a plain login shell
+# rather than tmux, so this is the way in, and detaching with C-b d drops you back at that shell.
+function twt() {
     if ! tmux has-session -t work 2>/dev/null; then
         tmux new-session -d -s work -n main -c "$HOME/github" || return 1
         tmux split-window -h -l 62% -t work:1 -c "$HOME/github"

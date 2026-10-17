@@ -396,6 +396,12 @@ LINKS=(
     # and launches sessions. See docs/claude-code.md.
     "claude/CLAUDE.md|$HOME/.claude/CLAUDE.md"
     "claude/bin/stella|$HOME/.local/bin/stella"
+    # Stella's watcher (she runs it as a background command) and the tripwire that proves a change
+    # disturbed no running session.
+    "claude/bin/stella-watch|$HOME/.local/bin/stella-watch"
+    "claude/bin/live-check|$HOME/.local/bin/live-check"
+    # herdr, the terminal multiplexer for the work window (`tw`); tmux stays as `twt`.
+    "local/herdr.toml|$HOME/.config/herdr/config.toml"
 )
 
 # Every public skill and agent, so a new one only needs a re-run of this script.

@@ -9,9 +9,10 @@ description: Stella's view of every Claude Code session on the machine - what ea
 
 ## Look
 
-1. `claude agents --json --all` lists every session: interactive and background, with `id`, `name`,
-   `cwd`, `kind`, `status` (busy/idle) and `state` (working/blocked/done/…). Run it through
-   `bash -c '…'` if the shell sandbox refuses it.
+1. `~/.local/bin/stella agents --all` lists every session (the same JSON as `claude agents --json --all`,
+   through the one command allowed outside the sandbox): `id`, `name`, `cwd`, `kind`, `status`
+   (busy/idle) and `state` (working/blocked/done/…). Her crew are the sessions with a record in
+   `~/.local/share/stella/crew/`; adopted ones carry `"adopted": true`.
 2. For each background session, `~/.claude/jobs/<id>/state.json` holds what it was asked (`intent`), its
    state and what it needs (`needs`, `detail`). For more, read the tail of its transcript
    (`~/.claude/projects/*/<sessionId>.jsonl`), or `claude logs <id>`.
@@ -24,12 +25,16 @@ description: Stella's view of every Claude Code session on the machine - what ea
 | Stuck | Blocked on an error (rate limit, budget, crash) or no progress for hours |
 | Finished | Done, last turn ALL DONE |
 
-Report one line per session, grouped, waiting-on-Kohen first: name, folder, and what it needs from him in
-his words (the NEXT FOR YOU items). Keep it to a screen.
+Report as four sections: **Needs you** (waiting on Kohen, with what he needs to do in the session's own
+words), **Landed** (finished since the last digest, with the PR or report), **Underway** (working; a team
+as one line, `team · D/N done · W working`), **Queued** (over a cap, with why). Keep it to a screen.
 
 ## Tidy
 
-Only for **Finished** sessions, and only when nothing is left open from them: their repo
+Crewmates Stella launched: `~/.local/bin/stella rm <name>` for each finished one; it removes the session
+and its worktree only when the work has landed, and says what is missing otherwise. Never adopted ones.
+
+Other sessions: only **Finished** ones, and only when nothing is left open from them: their repo
 (`git -C <cwd> status --short` and `git -C <cwd> log @{u}..` when there is an upstream) has nothing the
 session left uncommitted or unpushed, and their last message asks nothing of Kohen. For each:
 `claude rm <id>` (the transcript stays, so `claude --resume` still finds it). Never remove a session that

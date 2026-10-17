@@ -6,10 +6,9 @@ they win).
 
 ## How I work
 
-- **One terminal, one tmux server.** The main window has the Claude agents view on the left and the
-  session I am working in on the right. Every session is an ordinary interactive session: I start it
-  (`cy`), it can go to the background and come back, and the agents view is where I see which ones need
-  me.
+- **One terminal, one herdr server.** `tw` opens the work window: Stella's session in the first tab, one
+  tab per crewmate, and herdr's sidebar showing every agent's state (tmux stays as the fallback, `twt`).
+  Every session is an ordinary Claude Code session that can go to the background and come back.
 - **Skills, not teams.** Work starts from a skill, and the skill decides whether a task deserves
   subagents and which ones:
 
@@ -23,10 +22,11 @@ they win).
 | `/kc-log` | The daily log in the vault |
 | `/stella` | A message for Stella (also: start a message with "Stella" or "S,") |
 
-- **Stella** is my personal assistant: a session of her own (`stella` in a terminal), with her skills
-  (`stella-agents`, `stella-audit`, `stella-priorities`, `stella-setup`). She keeps track of my priorities
-  and all ongoing work, tidies finished sessions, audits the knowledge base and writes the daily log. She
-  is not a gateway: anything she launches is a normal session I can attach to.
+- **Stella** is my first mate: a session of her own (`stella` in a terminal), with her skills
+  (`stella-agents`, `stella-audit`, `stella-priorities`, `stella-setup`). I talk to her; she turns a request
+  into a brief, launches it as an ordinary background session in its own worktree, watches it, steers it,
+  and brings back outcomes and decisions. She is the way in, not the only way: anything she launches is a
+  normal session I can attach to, and I can still start sessions myself.
 - **Every skill reads its extension first**: `~/.claude/kc-extensions/<skill>.md`, when it exists, adds
   this machine's constraints.
 

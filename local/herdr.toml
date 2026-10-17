@@ -1,0 +1,56 @@
+# herdr: the terminal multiplexer for the work window (Work Env 3.0). Linked by setup.sh to
+# ~/.config/herdr/config.toml. tmux stays configured (local/.tmux.conf, `twt`) as the fallback.
+#
+# Keys: Alacritty turns Cmd chords into ESC byte strings (local/alacritty.toml, unchanged), and herdr
+# decodes them as alt+... chords, so the Cmd keys from tmux carry over as direct (prefix-free) bindings.
+# Three tmux chords have no herdr action: Cmd+0 (last tab), Cmd+Shift+Space (next layout) and
+# Cmd+Shift+B (the off-switch for a nested tmux over ssh).
+
+onboarding = false
+
+[update]
+# No background calls home: upgrades are deliberate (from the package manager).
+version_check = false
+manifest_check = false
+
+[keys]
+prefix = "ctrl+b"
+detach = ["prefix+q", "prefix+d"]
+
+# Tabs (Cmd+1..9, Cmd+Shift+{ }, Cmd+Ctrl+Shift+arrows, Cmd+T, Cmd+Shift+R, Cmd+Shift+W)
+switch_tab        = "alt+1..9"
+previous_tab      = "alt+shift+left"
+next_tab          = "alt+shift+right"
+move_tab_previous = "ctrl+alt+shift+left"
+move_tab_next     = "ctrl+alt+shift+right"
+new_tab           = "alt+t"
+rename_tab        = "alt+shift+r"
+close_tab         = "alt+shift+w"
+
+# Panes (Cmd+D / Cmd+Shift+D, Cmd+Shift+arrows focus, Cmd+Opt+arrows swap, Cmd+Ctrl+arrows resize,
+# Cmd+Shift+Enter zoom, Cmd+W close, Cmd+R rename, Cmd+K clear, Cmd+F search)
+split_vertical    = "alt+d"
+split_horizontal  = "alt+shift+d"
+focus_pane_left   = ["prefix+h", "alt+left"]
+focus_pane_down   = ["prefix+j", "alt+down"]
+focus_pane_up     = ["prefix+k", "alt+up"]
+focus_pane_right  = ["prefix+l", "alt+right"]
+swap_pane_left    = ["prefix+shift+h", "ctrl+shift+left"]
+swap_pane_down    = ["prefix+shift+j", "ctrl+shift+down"]
+swap_pane_up      = ["prefix+shift+k", "ctrl+shift+up"]
+swap_pane_right   = ["prefix+shift+l", "ctrl+shift+right"]
+resize_pane_left  = "ctrl+alt+left"
+resize_pane_down  = "ctrl+alt+down"
+resize_pane_up    = "ctrl+alt+up"
+resize_pane_right = "ctrl+alt+right"
+zoom              = ["prefix+z", "alt+z"]
+close_pane        = ["prefix+x", "alt+w"]
+rename_pane       = "alt+r"
+clear_pane        = "alt+k"
+copy_mode         = ["prefix+[", "alt+/"]
+
+[ui]
+tab_bar_position = "top"
+sidebar_start_collapsed = false   # the sidebar is the live view of every agent's state
+prompt_new_tab_name = false
+mouse_capture = true
