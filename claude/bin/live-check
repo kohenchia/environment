@@ -3,8 +3,9 @@
 
     live-check before        record every live Claude process (pid, start time, terminal, session, state,
                              token mode) as the baseline
-    live-check diff          compare the live processes with the baseline; exit 1 if any process is gone,
-                             was restarted (same pid, new start time) or changed token mode
+    live-check diff          compare the live processes with the baseline; exit 1 if a session host was
+                             removed, restarted (same pid, new start time) or changed token mode; a host
+                             the daemon reaped for being idle (its job record remains) is only noted
     live-check show          print what is live now
 
 A session lives in the Claude daemon as a `--bg-pty-host` process, plus any number of terminal clients
@@ -96,20 +97,26 @@ def describe(p: dict) -> str:
     return f"{p['kind']:11} pid {p['pid']:>6} {p['tty']:8} {who} [{p.get('state') or '-'}, {p.get('token') or '-'}]"
 
 
-def diff(base: dict, now: dict) -> list[str]:
+def diff(base: dict, now: dict) -> tuple[list[str], list[str]]:
+    """(disturbances, notes). A host that is gone while its job record remains was reaped by the daemon
+    for being idle: it resumes from its transcript on attach or message, so that is a note, not a fault."""
     cur = {p["pid"]: p for p in now["processes"]}
-    problems = []
+    live_jobs = jobs()
+    problems, notes = [], []
     for p in base["processes"]:
         if p["kind"] != "host":  # a terminal client coming and going (attach, detach) disturbs nothing
             continue
         q = cur.get(p["pid"])
         if q is None:
-            problems.append(f"gone:      {describe(p)}")
+            if p.get("sid") and p["sid"] in live_jobs:
+                notes.append(f"reaped:    {describe(p)} (idle; resumes from its transcript)")
+            else:
+                problems.append(f"removed:   {describe(p)}")
         elif q["start"] != p["start"]:
             problems.append(f"restarted: {describe(p)} (started {p['start']}, now {q['start']})")
         elif p.get("token") and q.get("token") and p["token"] != q["token"]:
             problems.append(f"token:     {describe(p)} ({p['token']} -> {q['token']})")
-    return problems
+    return problems, notes
 
 
 def main(argv: list[str]) -> int:
@@ -130,9 +137,9 @@ def main(argv: list[str]) -> int:
             return 2
         base = json.loads(BASELINE.read_text())
         now = snapshot()
-        problems = diff(base, now)
+        problems, notes = diff(base, now)
         new = {p["pid"] for p in now["processes"]} - {p["pid"] for p in base["processes"]}
-        for line in problems:
+        for line in problems + notes:
             print(line)
         for p in now["processes"]:
             if p["pid"] in new:
