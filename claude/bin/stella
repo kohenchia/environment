@@ -435,7 +435,8 @@ def close_tab(rec: dict) -> bool:
     return bool(ids)
 
 
-EXITED_TEXT = "session exited"  # what a tab shows after its `claude attach` died with the process
+# What a tab shows after its `claude attach` died with the process: "Session 3479a9f0 has exited."
+EXITED_RE = re.compile(r"session [0-9a-f]{8} has exited|session exited", re.I)
 FOLLOW_GRACE = float(os.environ.get("STELLA_FOLLOW_GRACE", "4"))  # seconds to tell a restart from a detach
 FOLLOW_WAIT = float(os.environ.get("STELLA_FOLLOW_WAIT", "90"))  # seconds a restart may take to come back
 
@@ -501,12 +502,21 @@ def _attach_cmd(sid: str) -> str:
     return f"{BIN / 'stella'} tab {sid}"
 
 
+VERBOSE = bool(os.environ.get("STELLA_VERBOSE"))
+
+
 def repair_tab(herdr: str, tab: str, sid: str) -> None:
     """A tab left showing 'session exited' (opened before tabs followed their session): attach it again."""
-    for pane in _tab_panes(herdr, tab):
-        out = subprocess.run([herdr, "pane", "read", pane, "--lines", "10"], capture_output=True, text=True,
-                             timeout=30).stdout
-        if EXITED_TEXT in out.lower():
+    panes = _tab_panes(herdr, tab)
+    if VERBOSE:
+        print(f"  tab {tab} ({sid}): panes {panes}")
+    for pane in panes:
+        r = subprocess.run([herdr, "pane", "read", pane, "--lines", "10"], capture_output=True, text=True,
+                           timeout=30)
+        out = r.stdout
+        if VERBOSE:
+            print(f"    pane {pane} rc={r.returncode} read={out[-300:]!r} err={r.stderr[-200:]!r}")
+        if EXITED_RE.search(out):
             subprocess.run([herdr, "pane", "run", pane, _attach_cmd(sid)], capture_output=True, text=True,
                            timeout=30)
 
@@ -541,11 +551,15 @@ def view_all() -> None:
     known = {a.get("id") for a in listed}
     herdr = _herdr()
     tabs = _herdr_tabs(herdr) if herdr else {}
+    if VERBOSE:
+        print(f"tabs: {tabs}\nlive: {sorted(live)}")
     for rec in records():
         sid = rec.get("id")
         if not sid or rec.get("mode") == "track":
             continue
         has_tab = (rec.get("tab") in tabs) or rec.get("name") in tabs.values()
+        if VERBOSE:
+            print(f"{rec['name']}: sid={sid} live={sid in live} has_tab={has_tab} state={rec.get('state')}")
         if sid in live and not has_tab:
             view(rec["name"])
         elif sid in live and has_tab and herdr:
@@ -708,6 +722,10 @@ def main(argv: list[str]) -> None:
         track_pr(rest[0], rest[1] if len(rest) == 2 else None)
     elif cmd == "untrack" and len(rest) == 1:
         untrack(rest[0])
+    elif cmd == "view" and rest == ["--all", "--verbose"]:
+        global VERBOSE
+        VERBOSE = True
+        view_all()
     elif cmd == "view" and rest == ["--all"]:
         view_all()
     elif cmd == "view" and len(rest) == 1:

@@ -444,7 +444,7 @@ class Helper(unittest.TestCase):
         self.crew("exited-one", id="00000001")
         self.crew("fine-one", id="00000002")
         self.herdr_tabs.write_text(json.dumps({"w1:t1": "exited-one", "w1:t2": "fine-one"}))
-        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w1:t1:p1": "...\nSession exited\n$ ", "w1:t2:p1": "working"})}
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w1:t1:p1": "...\nSession 00000001 has exited.\n\n~/github on main\n❯\n", "w1:t2:p1": "working"})}
         self.assertEqual(self.run_stella("view", "--all").returncode, 0)
         runs = [c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "run"]]
         self.assertEqual([r[2] for r in runs], ["w1:t1:p1"])
