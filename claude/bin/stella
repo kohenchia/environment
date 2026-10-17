@@ -4,6 +4,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
 
     stella                       open Stella's session in this terminal (starting it if needed)
     stella start | id            start her in the background / print her id
+    stella restart               stop her and resume her conversation with the start-of-session prompt
+                                 (after a setup change: she reloads her skill and re-arms her watcher)
     stella agents [--all]        `claude agents --json`
     stella launch <name>         launch the crewmate whose brief and record Stella wrote in crew/<name>/
                                  (only from her own session); exit 75 and mark it queued when over a cap
@@ -89,8 +91,8 @@ def start() -> str:
     if row:
         return row["id"]
     STELLA_HOME.mkdir(parents=True, exist_ok=True)
-    claude("--bg", "-n", "stella", "--agent", "stella", "--model", "sonnet", *FLAGS,
-           "Session start: load the stella skill and do its start-of-session steps.", cwd=STELLA_HOME)
+    claude("--bg", "-n", "stella", "--agent", "stella", "--model", "sonnet", *FLAGS, "--", START_PROMPT,
+           cwd=STELLA_HOME)
     for _ in range(10):
         row = stella_row()
         if row:
@@ -98,6 +100,25 @@ def start() -> str:
         time.sleep(1)
     die("started, but the session did not show up in 'claude agents' yet", 1)
     return ""
+
+
+START_PROMPT = "Session start: load the stella skill and do its start-of-session steps."
+
+
+def restart() -> str:
+    """Stop Stella and resume the same conversation with the start-of-session prompt, so she reloads her
+    skill, reconciles the crew and re-arms her watcher (a plain re-attach would skip all of that)."""
+    row = next((a for a in agents() if a.get("name") == "stella" and a.get("kind") == "background"), None)
+    if not row:
+        return start()
+    if row.get("state") in ("working", "blocked") or row.get("pid"):
+        if claude("stop", row["id"]).returncode != 0:
+            die(f"could not stop Stella ({row['id']})", 1)
+    p = claude("--bg", "--resume", row["sessionId"], "-n", "stella", "--agent", "stella", "--model", "sonnet",
+               *FLAGS, "--", START_PROMPT, cwd=STELLA_HOME)
+    if p.returncode != 0:
+        die(f"could not resume Stella: {(p.stderr or p.stdout).strip()[-200:]}", 1)
+    return row["id"]
 
 
 # ------------------------------------------------------------------ records
@@ -381,6 +402,8 @@ def main(argv: list[str]) -> None:
         os.execvp("claude", ["claude", "attach", start()])
     elif cmd == "start":
         print(start())
+    elif cmd == "restart" and not rest:
+        print(restart())
     elif cmd == "id":
         row = stella_row()
         print(row["id"]) if row else sys.exit(1)
@@ -409,7 +432,7 @@ def main(argv: list[str]) -> None:
     elif cmd in ("-h", "--help", "help"):
         print(__doc__.split("\n\n")[1])
     else:
-        die("usage: stella [open|start|id|agents|launch|adopt|view|stop|respawn|logs|rm|live-check] ...")
+        die("usage: stella [open|start|restart|id|agents|launch|adopt|view|stop|respawn|logs|rm|live-check] ...")
 
 
 if __name__ == "__main__":

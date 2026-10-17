@@ -183,6 +183,32 @@ class Helper(unittest.TestCase):
         self.assertEqual(self.run_stella("rm", "investigate").returncode, 0)
         self.assertIn(["rm", "dddddddd"], self.calls())
 
+    def test_restart_stops_then_resumes_with_the_start_prompt(self):
+        self.set_agents([{"id": "aaaaaaaa", "name": "stella", "kind": "background", "state": "working", "pid": 42,
+                          "sessionId": "aaaaaaaa-0000-0000-0000-000000000000"}])
+        p = self.run_stella("restart")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        calls = [c for c in self.calls() if c[:1] != ["agents"]]
+        self.assertEqual(calls[0], ["stop", "aaaaaaaa"])
+        resume = calls[1]
+        self.assertEqual(resume[resume.index("--resume") + 1], "aaaaaaaa-0000-0000-0000-000000000000")
+        self.assertIn("--agent", resume)
+        self.assertEqual(resume[-2], "--")
+        self.assertIn("start-of-session", resume[-1])
+
+    def test_restart_of_a_stopped_stella_only_resumes(self):
+        self.set_agents([{"id": "aaaaaaaa", "name": "stella", "kind": "background", "state": "done",
+                          "sessionId": "aaaaaaaa-0000-0000-0000-000000000000"}])
+        self.assertEqual(self.run_stella("restart").returncode, 0)
+        calls = [c for c in self.calls() if c[:1] != ["agents"]]
+        self.assertFalse(any(c[:1] == ["stop"] for c in calls))
+        self.assertTrue(any("--resume" in c for c in calls))
+
+    def test_restart_with_no_stella_starts_her(self):
+        self.set_agents([])
+        self.run_stella("restart")
+        self.assertTrue(any("--bg" in c and "--resume" not in c and "stella" in c for c in self.calls()))
+
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)
         self.assertEqual(self.run_stella("frobnicate").returncode, 2)
