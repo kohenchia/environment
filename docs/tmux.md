@@ -151,6 +151,9 @@ Both rely on Alacritty's **default** hint, which `local/alacritty.toml` delibera
 Declaring a `[hints]` table replaces that default outright, URL regex included, so anything added there
 has to re-state the regex or link clicking silently stops working.
 
+A machine can add link schemes through `general.import` in `local/alacritty.toml` (a missing file is
+ignored): that file's `[[hints.enabled]]` restates the default regex with the extra scheme.
+
 One limitation: **a URL that wraps across rows only matches as far as the row end.** tmux redraws each
 row independently, so Alacritty sees a hard line break rather than a wrapped line and the hint stops
 there. Widen or zoom the pane (`Cmd+Shift+Enter`) before clicking a long URL.
