@@ -391,7 +391,7 @@ def main(argv: list[str]) -> None:
     elif cmd == "adopt" and len(rest) in (1, 3) and (len(rest) == 1 or rest[1] == "--team"):
         team = check_name(rest[2]) if len(rest) == 3 else None
         target = rest[0]
-        if not (NAME.match(target) or SHORT_ID.match(target)):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}", target):
             die(f"bad session name or id {target!r}")
         adopt(target, team)
     elif cmd == "view" and rest == ["--all"]:

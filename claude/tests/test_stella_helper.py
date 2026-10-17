@@ -85,6 +85,15 @@ class Helper(unittest.TestCase):
         self.assertNotEqual(self.run_stella("launch", "fix-flake").returncode, 0)
         self.assertEqual(len([c for c in self.calls() if "--bg" in c]), 1)
 
+    def test_adopt_by_a_name_with_a_dot_or_spaces(self):
+        self.set_agents([{"id": "cccccccc", "name": "workenv-3.0", "kind": "background", "state": "blocked",
+                          "sessionId": "cccccccc-1"},
+                         {"id": "dddddddd", "name": "stella cli retirement", "kind": "background", "state": "done",
+                          "sessionId": "dddddddd-1"}])
+        self.assertEqual(self.run_stella("adopt", "workenv-3.0").returncode, 0)
+        self.assertEqual(self.run_stella("adopt", "stella cli retirement").returncode, 0)
+        self.assertEqual(self.run_stella("adopt", "a;b").returncode, 2)
+
     def test_adopt_never_takes_stella_or_a_prefix(self):
         self.assertNotEqual(self.run_stella("adopt", "stella").returncode, 0)
         self.assertNotEqual(self.run_stella("adopt", "aaaaaa").returncode, 0)
