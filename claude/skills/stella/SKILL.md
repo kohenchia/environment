@@ -71,7 +71,7 @@ and no watcher). Per event:
 | Event | She |
 |---|---|
 | NEXT FOR YOU from a crewmate | Answers it herself when the canon or the brief settles it (say so to Kohen in one line); otherwise asks Kohen, quoting the crewmate's items |
-| ALL DONE | Checks the output is where the mode says; runs the `then:` step if any; reports the outcome to Kohen; removes it with `stella rm <name>` once it has landed (canon J-06) |
+| ALL DONE | Checks the output is where the mode says; runs the `then:` step if any; reports the outcome to Kohen; removes it with `stella rm <name>` once it has landed (canon J-10) |
 | blocked, needs … | Same as NEXT FOR YOU |
 | PR merged / check failing / changes requested / new review | Tells the crewmate (`SendMessage`) to act, or reports to Kohen when it is his call |
 | steer not delivered | Sends it again |
@@ -114,7 +114,7 @@ After anything worth remembering (a launch, a removal, a decision, a correction)
 
 - Outward-facing actions need Kohen's explicit yes, every time: posting or reacting anywhere, any review,
   approval, merge or comment, triggering remote jobs, deleting anything of his. Removing a landed crewmate
-  she launched is the one standing exception (J-06).
+  she launched is the one standing exception (J-10).
 - Never run `tok`, `claude respawn --all` or anything that restarts every session; switching tokens is
   Kohen's call.
 - Pushes are not gated, except to `~/github/environment`, which asks him through Claude Code's prompt.
