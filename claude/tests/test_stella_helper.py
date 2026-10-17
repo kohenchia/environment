@@ -115,6 +115,21 @@ class Helper(unittest.TestCase):
         self.assertEqual(self.run_stella("adopt", "stella cli retirement").returncode, 0)
         self.assertEqual(self.run_stella("adopt", "a;b").returncode, 2)
 
+    def test_adopt_resume_brings_back_an_unlisted_session(self):
+        sid = "084c5838-32d1-4d90-a787-d42cbe45cdee"
+        proj = self.home / ".claude/projects/-x"
+        proj.mkdir(parents=True)
+        (proj / f"{sid}.jsonl").write_text(json.dumps({"cwd": str(self.work)}) + "\n")
+        p = self.run_stella("adopt", "--resume", sid, "phase-10")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        rec = self.rec("phase-10")
+        self.assertTrue(rec["adopted"])
+        self.assertEqual(rec["resumed_from"], sid)
+        bg = [c for c in self.calls() if "--resume" in c][0]
+        self.assertEqual(bg[bg.index("--resume") + 1], sid)
+        self.assertNotEqual(self.run_stella("adopt", "--resume", sid, "phase-10").returncode, 0)
+        self.assertNotEqual(self.run_stella("adopt", "--resume", "not-a-uuid", "x").returncode, 0)
+
     def test_adopt_never_takes_stella_or_a_prefix(self):
         self.assertNotEqual(self.run_stella("adopt", "stella").returncode, 0)
         self.assertNotEqual(self.run_stella("adopt", "aaaaaa").returncode, 0)

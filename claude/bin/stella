@@ -10,6 +10,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella launch <name>         launch the crewmate whose brief and record Stella wrote in crew/<name>/
                                  (only from her own session); exit 75 and mark it queued when over a cap
     stella adopt <name|id> [--team T]   record a session she did not launch (observation only)
+    stella adopt --resume <session-uuid> <name> [--team T]   bring back an unlisted session from its
+                                 transcript under <name>, then adopt it
     stella track-pr <url> [name] watch a PR with no session: a track record, so a merge, a failing check,
                                  requested changes or a new review wakes her (`untrack <name>` ends it)
     stella view <name> | --all   open crewmates as terminal tabs (herdr; `--all` opens the missing ones and
@@ -299,6 +301,45 @@ def launch(name: str) -> None:
     view(name, quiet=True)
 
 
+ADOPT_PROMPT = ("Stella has adopted this session so Kohen can see it in the agents list while its work is open. "
+                "Nothing to do now: reply with one line on the state of its open PRs, then wait.")
+UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+
+
+def adopt_resume(session: str, name: str, team: str | None) -> None:
+    """Bring back a session that is no longer in `claude agents` (removed or never backgrounded) from its
+    transcript, under `name`, then adopt it. Observation only, like adopt."""
+    if not UUID.match(session):
+        die(f"bad session id {session!r} (the full uuid of its transcript)")
+    if record_path(name).exists():
+        die(f"{name} already has a record")
+    if any(a.get("sessionId") == session for a in agents()):
+        die(f"{session[:8]} is already listed; use `stella adopt {session[:8]}`")
+    found = sorted((HOME / ".claude/projects").glob(f"*/{session}.jsonl"))
+    if not found:
+        die(f"no transcript for {session}")
+    cwd = HOME
+    for line in found[0].open(errors="ignore"):
+        try:
+            c = json.loads(line).get("cwd")
+        except ValueError:
+            continue
+        if c and Path(c).is_dir():
+            cwd = Path(c)
+            break
+    p = claude("--bg", "--resume", session, "-n", name, *FLAGS, "--", ADOPT_PROMPT, cwd=cwd)
+    if p.returncode != 0:
+        die(f"claude --bg --resume failed: {(p.stderr or p.stdout).strip()[-300:]}", 1)
+    rows = sorted((a for a in agents() if a.get("name") == name), key=lambda a: a.get("startedAt") or 0)
+    if not rows:
+        die(f"resumed {name}, but no session by that name is listed; run `stella agents --all`", 1)
+    row = rows[-1]
+    save(name, {"name": name, "id": row.get("id"), "session": row.get("sessionId"), "dir": str(cwd),
+                "adopted": True, "team": team, "weight": 0, "state": row.get("state"), "resumed_from": session,
+                "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+    print(f"resumed {session[:8]} as {name} ({row.get('id')}) and adopted it (observation only)")
+
+
 def adopt(target: str, team: str | None) -> None:
     rows = agents()
     if target == "stella":
@@ -550,6 +591,8 @@ def main(argv: list[str]) -> None:
         print(json.dumps(agents(bool(rest)), indent=1))
     elif cmd == "launch" and len(rest) == 1:
         launch(rest[0])
+    elif cmd == "adopt" and rest[:1] == ["--resume"] and len(rest) in (3, 5) and (len(rest) == 3 or rest[3] == "--team"):
+        adopt_resume(rest[1], check_name(rest[2]), check_name(rest[4]) if len(rest) == 5 else None)
     elif cmd == "adopt" and len(rest) in (1, 3) and (len(rest) == 1 or rest[1] == "--team"):
         team = check_name(rest[2]) if len(rest) == 3 else None
         target = rest[0]
