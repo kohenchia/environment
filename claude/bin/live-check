@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """live-check: prove that a step disturbed no running Claude Code session.
 
     live-check before        record every live Claude process (pid, start time, terminal, session, state,
@@ -9,7 +9,8 @@
 
 A session lives in the Claude daemon as a `--bg-pty-host` process, plus any number of terminal clients
 attached to it. Restarting a session (respawn, a token switch, a crash) replaces its pty host, so a
-missing pid or a changed start time is exactly what "disturbed" means.
+missing host pid or a changed start time is exactly what "disturbed" means. Clients (terminal windows
+attached to a session, agents views) may come and go: they are listed, never counted as disturbance.
 
 The process table comes from `ps`, so this must run where `ps` may run (outside the machine's command
 sandbox, e.g. through the stella helper). Session state comes from ~/.claude/jobs/<id>/state.json and token
@@ -99,6 +100,8 @@ def diff(base: dict, now: dict) -> list[str]:
     cur = {p["pid"]: p for p in now["processes"]}
     problems = []
     for p in base["processes"]:
+        if p["kind"] != "host":  # a terminal client coming and going (attach, detach) disturbs nothing
+            continue
         q = cur.get(p["pid"])
         if q is None:
             problems.append(f"gone:      {describe(p)}")

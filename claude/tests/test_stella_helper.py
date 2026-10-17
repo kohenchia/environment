@@ -44,7 +44,7 @@ class Helper(unittest.TestCase):
         self.agents.write_text(json.dumps(rows))
 
     def run_stella(self, *args, cwd=None):
-        env = {"HOME": str(self.home), "PATH": f"{self.bin}:/usr/bin:/bin", "FAKE_CLAUDE_LOG": str(self.log),
+        env = {"HOME": str(self.home), "STELLA_PATH": f"{self.bin}:/usr/bin:/bin", "FAKE_CLAUDE_LOG": str(self.log),
                "FAKE_CLAUDE_AGENTS": str(self.agents)}
         return subprocess.run(["python3", str(STELLA), *args], cwd=cwd or self.sh, env=env,
                               capture_output=True, text=True, timeout=30)
@@ -73,7 +73,22 @@ class Helper(unittest.TestCase):
         bg = [c for c in self.calls() if "--bg" in c][0]
         self.assertEqual(bg[bg.index("--session-id") + 1], rec["session"])
         self.assertIn("--model", bg)
-        self.assertEqual(bg[-1], "/kc-dev fix the thing\n")
+        self.assertEqual(bg[-2:], ["--", "/kc-dev fix the thing\n"])
+
+    def test_second_launch_of_a_running_crewmate_is_refused(self):
+        self.crew("fix-flake")
+        self.assertEqual(self.run_stella("launch", "fix-flake").returncode, 0)
+        sid = self.rec("fix-flake")["id"]
+        self.set_agents([{"id": "aaaaaaaa", "name": "stella", "kind": "background", "state": "working",
+                          "sessionId": "aaaaaaaa-0000-0000-0000-000000000000"},
+                         {"id": sid, "name": "fix-flake", "kind": "background", "state": "working"}])
+        self.assertNotEqual(self.run_stella("launch", "fix-flake").returncode, 0)
+        self.assertEqual(len([c for c in self.calls() if "--bg" in c]), 1)
+
+    def test_adopt_never_takes_stella_or_a_prefix(self):
+        self.assertNotEqual(self.run_stella("adopt", "stella").returncode, 0)
+        self.assertNotEqual(self.run_stella("adopt", "aaaaaa").returncode, 0)
+        self.assertNotEqual(self.run_stella("adopt", "aaaaaaaa").returncode, 0)
 
     def test_launch_only_from_stellas_home(self):
         self.crew("fix-flake")
@@ -135,6 +150,12 @@ class Helper(unittest.TestCase):
         for cmd in ("stop", "respawn", "rm"):
             self.assertNotEqual(self.run_stella(cmd, "pr-2332-include-consistency").returncode, 0)
         self.assertEqual([c for c in self.calls() if c[:1] != ["agents"]], [])
+
+    def test_rm_refuses_a_directory_that_is_not_a_checkout(self):
+        self.crew("loose", id="eeeeeeee", mode="local")
+        p = self.run_stella("rm", "loose")
+        self.assertEqual(p.returncode, 1)
+        self.assertIn("not a git checkout", p.stderr)
 
     def test_rm_refuses_unlanded_work(self):
         subprocess.run(["git", "init", "-q", str(self.work)], check=True)

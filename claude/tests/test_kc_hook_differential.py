@@ -2,7 +2,7 @@
 session except Stella's own (cwd ~/.local/share/stella), because kc-hook runs in every Claude session on
 the machine the moment it is merged.
 
-The old script is `origin/main:claude/bin/kc-hook` of this repo, or $KC_HOOK_OLD. Run:
+The old script is kc-hook as of BASELINE (the commit before Work Env 3.0), or $KC_HOOK_OLD. Run:
 
     python3 -m unittest discover -s claude/tests
 """
@@ -20,6 +20,7 @@ REPO = Path(__file__).resolve().parents[2]
 NEW = REPO / "claude/bin/kc-hook"
 HOME = Path.home()
 STELLA_HOME = HOME / ".local/share/stella"
+BASELINE = "e58bf30"  # kc-hook before Work Env 3.0; pinned so the test still compares after the merge
 
 RULE = "━" * 40
 GOOD = f"Done.\n\n{RULE}\n\U0001f7e9 **ALL DONE** — nothing left for you."
@@ -30,7 +31,7 @@ BAD = "Here is the answer, with no status block."
 def old_script(tmp: Path) -> Path:
     if os.environ.get("KC_HOOK_OLD"):
         return Path(os.environ["KC_HOOK_OLD"])
-    src = subprocess.run(["git", "-C", str(REPO), "show", "origin/main:claude/bin/kc-hook"],
+    src = subprocess.run(["git", "-C", str(REPO), "show", f"{BASELINE}:claude/bin/kc-hook"],
                          capture_output=True, text=True, check=True).stdout
     path = tmp / "kc-hook-old"
     path.write_text(src)
@@ -112,7 +113,11 @@ class TurnEndGuard(unittest.TestCase):
     def test_quiet_with_live_watcher(self):
         import time
         self.record()
-        (self.sh / "watch.pid").write_text(json.dumps({"pid": 1, "beat": time.time()}))
+        (self.sh / "watch.pid").write_text(json.dumps({"pid": os.getpid(), "beat": time.time()}))
+        self.assertEqual(self.stop()[1], "")
+        (self.sh / "watch.pid").write_text(json.dumps({"pid": 999999, "beat": time.time()}))
+        self.assertIn("stella-watch is not running", self.stop()[1])
+        (self.sh / "watch.pid").write_text(json.dumps({"pid": os.getpid(), "beat": time.time()}))
         self.assertEqual(self.stop()[1], "")
 
     def test_quiet_when_already_blocked_once_or_no_crew_or_adopted(self):

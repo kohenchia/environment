@@ -93,12 +93,56 @@ class Watch(unittest.TestCase):
 
     def test_throttle_writes_pause(self):
         self.crew("review", "c1")
-        err = {"type": "system", "subtype": "api_error", "timestamp": "2026-10-17T10:00:00Z",
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        err = {"type": "system", "subtype": "api_error", "timestamp": now,
                "error": {"message": "429 account rate limit exceeded for quota 'x': 160 requests in 4m0s"}}
         self.say("c1", "WORKING", extra=[err])
         self.once()
         until = json.loads((self.sh / "throttle-until").read_text())["until"]
         self.assertGreater(until, time.time() + 200)
+
+    def test_old_throttle_does_not_pause(self):
+        self.crew("review", "c2")
+        err = {"type": "system", "subtype": "api_error", "timestamp": "2026-01-01T10:00:00Z",
+               "error": {"message": "429 account rate limit exceeded for quota 'x': 160 requests in 4m0s"}}
+        self.say("c2", "WORKING", extra=[err])
+        self.once()
+        self.assertFalse((self.sh / "throttle-until").exists())
+
+    def test_blocked_detail_when_job_has_no_needs(self):
+        self.crew("merge-it", "b2")
+        self.say("b2", "WORKING")
+        (self.home / ".claude/jobs/b2").mkdir()
+        (self.home / ".claude/jobs/b2/state.json").write_text(json.dumps({"state": "blocked", "detail": "awaiting approval"}))
+        self.assertIn("merge-it: blocked, needs: awaiting approval", self.once())
+
+    def test_relaunch_under_the_same_name_reports_again(self):
+        self.crew("pr-12", "h1")
+        self.say("h1", "DONE")
+        self.assertIn("pr-12: ALL DONE", self.once())
+        self.crew("pr-12", "h2")
+        self.say("h2", "DONE")
+        self.assertIn("pr-12: ALL DONE", self.once())
+
+    def test_held_team_completion_rides_along_with_another_wake(self):
+        for i, sid in enumerate(("k1", "k2")):
+            self.crew(f"mig-{i}", sid, team="mig")
+            self.say(sid, "WORKING")
+        self.crew("other", "k3")
+        self.say("k3", "WORKING")
+        self.once()
+        self.say("k1", "DONE")
+        self.assertEqual(self.once().strip(), "nothing to report")
+        self.say("k3", "NEXT")
+        out = self.once()
+        self.assertIn("other: NEXT FOR YOU", out)
+        self.assertIn("mig-0: ALL DONE", out)
+
+    def test_failing_watch_reports_once_and_does_not_crash(self):
+        self.crew("train", "w1", watches=[{"name": "job", "command": ["/nonexistent/px", "bolt"]}])
+        self.say("w1", "WORKING")
+        self.assertIn("watch failed", self.once())
+        self.assertEqual(self.once().strip(), "nothing to report")
 
     def test_undelivered_steer(self):
         self.crew("fix", "d1", steers=[{"at": time.time() - 700, "text": "also cover the timeout case"}])
@@ -152,9 +196,9 @@ class Watch(unittest.TestCase):
         out.write_text("FINISHED")
         self.assertIn("train: job 7: changed", self.once())
 
-    def test_writes_pidfile_and_wake(self):
+    def test_writes_wake_and_clears_its_pidfile_on_exit(self):
         self.once()
-        self.assertIn("beat", json.loads((self.sh / "watch.pid").read_text()))
+        self.assertFalse((self.sh / "watch.pid").exists())
         self.assertIn("events", json.loads((self.sh / "wake.json").read_text()))
 
 

@@ -34,8 +34,9 @@ is for her; relayed messages arrive prefixed `From …`.
 1. Read her store: `priorities.md`, `canon.md`, `journal.md`, and every `crew/*/record.json`.
 2. Reconcile: `~/.local/bin/stella agents --all` against the records. A record whose session is gone and
    not landed: say so. A live session Kohen started that she should track: `stella adopt <name>`.
-3. Start the watcher as a background command (Bash with `run_in_background`): `~/github/environment/claude/bin/stella-watch`
-   (linked as `~/.local/bin/stella-watch`). It exits when something needs her; its output is the wake.
+3. Start the watcher as a background command (Bash with `run_in_background`): `stella-watch`, exactly
+   that (it is on PATH; a path spelling of it would run outside the sandbox and be refused). It exits when
+   something needs her; its output is the wake.
 4. Recreate her recurring duties with `CronList` / `CronCreate` (they live only as long as her session):
    the daily log at 00:10 (`/kc-log day`), the agents tidy at 08:30 (`/stella-agents tidy`), the knowledge
    audit on Mondays at 09:00 (`/stella-audit`), plus any duty the extension adds.

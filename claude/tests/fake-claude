@@ -14,8 +14,7 @@ args = sys.argv[1:]
 log = os.environ.get("FAKE_CLAUDE_LOG")
 if log:
     with open(log, "a") as f:
-        f.write(json.dumps({"argv": args, "cwd": os.getcwd(),
-                            "project_token": bool(os.environ.get("FLOODGATE_PROJECT_TOKEN"))}) + "\n")
+        f.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
 
 if args[:1] == ["agents"] and "--json" in args:
     path = os.environ.get("FAKE_CLAUDE_AGENTS")

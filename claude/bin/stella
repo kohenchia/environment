@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """stella: start, find and open Stella's session, and run her crew. The one command on this machine that
 runs outside the command sandbox, so every argument is validated and nothing is passed through a shell.
 
@@ -42,6 +42,12 @@ BIN = Path(__file__).resolve().parent
 FLAGS = ["--dangerously-skip-permissions"]
 SLOTS, OPUS_UNITS, QUOTA_STOP = 6, 4.0, 0.85
 QUEUED = 75
+# This script runs outside the command sandbox, so it trusts nothing agents can write: an isolated
+# interpreter (-I above), a fixed PATH, no shell rc files, and git with hooks and fsmonitor disabled.
+# (STELLA_PATH is for the tests; acc-guard refuses a helper call with an environment prefix.)
+os.environ["PATH"] = os.environ.get("STELLA_PATH", "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
+GIT = ["git", "-c", "core.fsmonitor=", "-c", "core.hooksPath=/dev/null"]
+TIMEOUT = 120
 
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
 REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
@@ -56,15 +62,20 @@ def die(msg: str, code: int = 2) -> None:
 
 
 def claude(*args: str, cwd: Path | None = None, capture: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(["claude", *args], cwd=cwd, capture_output=capture, text=True)
+    return subprocess.run(["claude", *args], cwd=cwd, capture_output=capture, text=True, timeout=TIMEOUT)
+
+
+def git(d: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([*GIT, "-C", str(d), *args], capture_output=True, text=True, timeout=TIMEOUT)
 
 
 def agents(all_: bool = True) -> list[dict]:
     p = claude("agents", "--json", *(["--all"] if all_ else []))
     try:
-        return json.loads(p.stdout or "[]")
+        rows = json.loads(p.stdout)
     except ValueError:
-        return []
+        die(f"claude agents --json failed: {(p.stderr or p.stdout).strip()[-200:]}", 1)
+    return rows
 
 
 def stella_row() -> dict | None:
@@ -141,9 +152,11 @@ def read_json(path: Path) -> dict:
 
 
 def over_cap(rec: dict) -> str | None:
-    rows = {a.get("id", ""): a for a in agents()}
-    rows.update({(a.get("sessionId") or "")[:8]: a for a in agents()})
-    busy = [r for r in records() if r.get("name") != rec.get("name") and live_state(r, rows) in ("working", "blocked")]
+    listed = agents()
+    rows = {a.get("id", ""): a for a in listed}
+    rows.update({(a.get("sessionId") or "")[:8]: a for a in listed})
+    busy = [r for r in records() if r.get("name") != rec.get("name") and not r.get("adopted")
+            and live_state(r, rows) in ("working", "blocked")]
     working = [r for r in busy if live_state(r, rows) == "working"]
     weight = float(rec.get("weight") or 0)
     if len(busy) >= SLOTS:
@@ -153,7 +166,9 @@ def over_cap(rec: dict) -> str | None:
     until = read_json(STELLA_HOME / "throttle-until").get("until", 0)
     if weight and until > time.time():
         return f"Opus throttled; no Opus launch for {int(until - time.time())} s more"
-    frac = read_json(STELLA_HOME / "quota.json").get("fraction")
+    quota = STELLA_HOME / "quota.json"
+    fresh = quota.exists() and time.time() - quota.stat().st_mtime < 1800
+    frac = read_json(quota).get("fraction") if fresh else None
     if isinstance(frac, (int, float)) and frac >= QUOTA_STOP:
         return f"budget gate: {frac:.0%} of today's budget is spent"
     return None
@@ -177,12 +192,19 @@ def worktree(rec: dict) -> Path:
             die(f"bad repo or branch: {repo} {branch}")
         if not (HOME / "github" / repo).is_dir():
             die(f"no repo at ~/github/{repo}")
+        main = HOME / "github" / repo
         wt = HOME / "github" / f"{repo}-wt" / branch
-        if not wt.is_dir():
-            p = subprocess.run(["zsh", "-i", "-c", 'wta "$1" "$2"', "wta", repo, branch],
-                               capture_output=True, text=True)
+        if not wt.is_dir():  # the same layout and semantics as the `wta` helper, without a shell rc file
+            git(main, "fetch", "--quiet", "origin")
+            exists = git(main, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}").returncode == 0
+            remote = git(main, "show-ref", "--verify", "--quiet", f"refs/remotes/origin/{branch}").returncode == 0
+            wt.parent.mkdir(parents=True, exist_ok=True)
+            if exists or remote:
+                p = git(main, "worktree", "add", str(wt), branch)
+            else:
+                p = git(main, "worktree", "add", "-b", branch, str(wt), rec.get("base") or "origin/HEAD")
             if not wt.is_dir():
-                die(f"wta {repo} {branch} failed: {p.stderr.strip()[-300:]}", 1)
+                die(f"could not make the worktree {wt}: {p.stderr.strip()[-300:]}", 1)
         return wt
     d = Path(os.path.expanduser(rec.get("dir") or "")).resolve()
     extra = [Path(os.path.expanduser(r)) for r in read_json(EXTENSION).get("start_roots", [])]
@@ -196,6 +218,11 @@ def launch(name: str) -> None:
     if Path.cwd().resolve() != STELLA_HOME.resolve():
         die("launch runs only from Stella's own session")
     rec = load(name)
+    if rec.get("adopted"):
+        die(f"{name} is adopted: it was not launched by Stella")
+    if rec.get("id") and any(a.get("id") == rec["id"] and a.get("state") in ("working", "blocked")
+                             for a in agents()):
+        die(f"{name} is already running ({rec['id']})")
     brief = (CREW / name / "brief.md")
     if not brief.is_file() or not brief.read_text().strip():
         die(f"no brief at {brief}")
@@ -211,7 +238,7 @@ def launch(name: str) -> None:
     d = worktree(rec)
     session = str(uuid.uuid4())
     inherit_token(session)
-    p = claude("--bg", "--session-id", session, "-n", name, "--model", model, *FLAGS, brief.read_text(), cwd=d)
+    p = claude("--bg", "--session-id", session, "-n", name, "--model", model, *FLAGS, "--", brief.read_text(), cwd=d)
     if p.returncode != 0:
         die(f"claude --bg failed: {(p.stderr or p.stdout).strip()[-300:]}", 1)
     short = (p.stdout.strip().split() or [session[:8]])[-1]
@@ -225,9 +252,10 @@ def launch(name: str) -> None:
 
 def adopt(target: str, team: str | None) -> None:
     rows = agents()
-    row = next((a for a in rows if a.get("name") == target or a.get("id") == target
-                or (a.get("sessionId") or "").startswith(target)), None)
-    if not row:
+    if target == "stella":
+        die("Stella does not adopt herself")
+    row = next((a for a in rows if target in (a.get("name"), a.get("id"), a.get("sessionId"))), None)
+    if not row or row.get("name") == "stella":
         die(f"no session named or with id {target!r} in claude agents")
     name = row.get("name") if row.get("name") and NAME.match(row["name"]) else \
         re.sub(r"[^a-z0-9-]+", "-", (row.get("name") or row["id"]).lower()).strip("-")[:41] or row["id"]
@@ -254,10 +282,11 @@ def view(name: str, quiet: bool = False) -> None:
     herdr = subprocess.run(["sh", "-c", "command -v herdr"], capture_output=True, text=True).stdout.strip()
     if herdr:
         t = subprocess.run([herdr, "tab", "create", "--label", name, "--cwd", rec.get("dir") or str(HOME)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, timeout=30)
         pane = _herdr_pane(t.stdout)
         if t.returncode == 0 and pane:
-            subprocess.run([herdr, "pane", "run", pane, f"claude attach {sid}"], capture_output=True, text=True)
+            subprocess.run([herdr, "pane", "run", pane, f"claude attach {sid}"], capture_output=True, text=True,
+                           timeout=30)
             if not quiet:
                 print(f"{name}: herdr tab opened")
             return
@@ -286,11 +315,13 @@ def lifecycle(cmd: str, name: str, model: str | None = None) -> None:
     if model:  # continue the same conversation on another model (e.g. escalate to Opus)
         if not MODEL.match(model):
             die(f"bad model {model!r}")
-        claude("stop", sid)
-        p = claude("--bg", "--resume", rec["session"], "-n", name, "--model", model, *FLAGS,
+        if claude("stop", sid).returncode != 0:
+            die(f"could not stop {name} ({sid}) before moving it to {model}", 1)
+        p = claude("--bg", "--resume", rec["session"], "-n", name, "--model", model, *FLAGS, "--",
                    f"Continue this task on {model}. Kohen's first mate moved you here because the last question was"
                    " beyond the previous model; carry on from where you were.", cwd=Path(rec.get("dir") or HOME))
-        rec["model"] = model
+        short = (p.stdout.strip().split() or [""])[-1]
+        rec.update({"model": model, **({"id": short} if SHORT_ID.match(short) else {})})
         save(name, rec)
         sys.exit(p.returncode)
     sys.exit(claude("respawn", sid, capture=False).returncode)
@@ -304,19 +335,17 @@ def landed(rec: dict) -> str | None:
         return None if rec.get("report") and report.is_file() else "its report is missing"
     d = Path(rec.get("dir") or "")
     if not (d / ".git").exists():
-        return None if mode != "ship" else "no worktree to check"
-    git = lambda *a: subprocess.run(["git", "-C", str(d), *a], capture_output=True, text=True)
-    if git("status", "--porcelain").stdout.strip():
+        return "its directory is not a git checkout, so nothing proves the work landed"
+    if git(d, "status", "--porcelain").stdout.strip():
         return "uncommitted changes in its worktree"
-    if git("rev-parse", "--abbrev-ref", "@{u}").returncode != 0:
-        return "its branch was never pushed"
-    if git("rev-list", "--count", "@{u}..HEAD").stdout.strip() not in ("", "0"):
-        return "it has unpushed commits"
-    if mode == "ship":
+    if mode == "ship":  # a squash-merged PR whose remote branch is gone has landed even without an upstream
         pr = subprocess.run(["gh", "pr", "view", "--json", "state", "-q", ".state"], cwd=d,
-                            capture_output=True, text=True).stdout.strip()
-        if pr != "MERGED":
-            return f"its PR is not merged ({pr or 'no PR'})"
+                            capture_output=True, text=True, timeout=TIMEOUT).stdout.strip()
+        return None if pr == "MERGED" else f"its PR is not merged ({pr or 'no PR'})"
+    if git(d, "rev-parse", "--abbrev-ref", "@{u}").returncode != 0:
+        return "its branch was never pushed"
+    if git(d, "rev-list", "--count", "@{u}..HEAD").stdout.strip() not in ("", "0"):
+        return "it has unpushed commits"
     return None
 
 
@@ -329,9 +358,15 @@ def rm(name: str) -> None:
         die(f"{name} not removed: {why}", 1)
     if SHORT_ID.match(rec.get("id") or ""):
         claude("rm", rec["id"])
-    if rec.get("repo") and (HOME / "github" / f"{rec['repo']}-wt" / (rec.get("branch") or name)).is_dir():
-        subprocess.run(["zsh", "-i", "-c", 'wtr "$1" "$2"', "wtr", rec["repo"], rec.get("branch") or name],
-                       input="n\n", capture_output=True, text=True)
+    wt = HOME / "github" / f"{rec.get('repo')}-wt" / (rec.get("branch") or name)
+    if rec.get("repo") and REPO.match(rec["repo"]) and wt.is_dir():  # as `wtr` does; the branch is kept
+        p = git(HOME / "github" / rec["repo"], "worktree", "remove", str(wt))
+        if p.returncode != 0:
+            die(f"session removed, but the worktree was not: {p.stderr.strip()[-200:]}", 1)
+        try:
+            wt.parent.rmdir()
+        except OSError:
+            pass
     rec["state"] = "landed"
     rec["removed_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     save(name, rec)

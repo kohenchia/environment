@@ -111,6 +111,16 @@ def stop(data: dict) -> None:
 
 # ---------------------------------------------------------------- Stella's turn-end guard
 
+
+def _alive(pid) -> bool:
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except (TypeError, ValueError, ProcessLookupError):
+        return False
+    except PermissionError:
+        return True
+
 WATCH_STALE = 120  # seconds: the watcher beats every 20 s
 
 
@@ -126,9 +136,9 @@ def unwatched_crew(data: dict) -> str | None:
                 in_flight.append(rec.get("name"))
         if not in_flight:
             return None
-        beat = json.loads((STELLA_HOME / "watch.pid").read_text()).get("beat", 0) \
-            if (STELLA_HOME / "watch.pid").exists() else 0
-        if time.time() - beat < WATCH_STALE:
+        pidfile = STELLA_HOME / "watch.pid"
+        watch = json.loads(pidfile.read_text()) if pidfile.exists() else {}
+        if time.time() - watch.get("beat", 0) < WATCH_STALE and _alive(watch.get("pid")):
             return None
         return (f"Crew in flight ({', '.join(sorted(in_flight)[:6])}) and stella-watch is not running. Start it as a"
                 " background command (`stella-watch`, run_in_background) before ending the turn.")

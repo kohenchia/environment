@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """stella-watch: sleep until Stella's crew needs her, then exit. Stella runs it as a background command;
 its exit wakes her session, she handles what it printed, and she starts it again.
 
@@ -21,6 +21,7 @@ A rate-limit error in a crewmate's transcript writes `throttle-until` (4 minutes
 
 from __future__ import annotations
 
+import calendar
 import hashlib
 import json
 import os
@@ -119,6 +120,30 @@ def pr_state(url: str) -> dict:
             "reviews": len(d.get("reviews") or [])}
 
 
+def _recent(stamp: str, seconds: int) -> bool:
+    try:
+        t = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))  # transcript stamps are UTC
+    except ValueError:
+        return False
+    return time.time() - t < seconds
+
+
+def _launch_window_open(seen: dict) -> bool:
+    """True once when a throttle pause has ended or the budget fell back under the gate, so queued
+    launches may go."""
+    opened = False
+    until = read_json(STELLA_HOME / "throttle-until", {}).get("until", 0)
+    if until and until <= time.time() and seen.get("throttle_window") != until:
+        seen["throttle_window"] = until
+        opened = True
+    frac = read_json(STELLA_HOME / "quota.json", {}).get("fraction")
+    over = isinstance(frac, (int, float)) and frac >= 0.85
+    if seen.get("budget_over") and not over:
+        opened = True
+    seen["budget_over"] = over
+    return opened
+
+
 def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
     events, now = [], time.time()
     recs = records()
@@ -127,19 +152,21 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
         if r.get("team"):
             teams.setdefault(r["team"], []).append(r)
     finished_any = False
+    held = []
     for r in recs:
         name, session = r.get("name"), r.get("session") or ""
         if r.get("state") in ("landed", "queued") or not session:
             continue
-        prev = seen.get(name, {})
+        prev = seen.get(session, {})  # keyed by session, so a relaunch under the same name starts fresh
         cur = dict(prev)
         job = read_json(JOBS / str(r.get("id")) / "state.json", {})
-        cur["job"], cur["needs"] = job.get("state"), job.get("needs")
+        need = job.get("needs") or (job.get("detail") if job.get("state") == "blocked" else None)
+        cur["job"], cur["needs"] = job.get("state"), need
         path = transcript(session)
         evs = tail_events(path) if path else []
         cur["block"], block = status_block(evs)
         hit = throttled_at(evs)
-        if hit and hit != prev.get("throttle"):
+        if hit and hit != prev.get("throttle") and _recent(hit, THROTTLE_PAUSE):
             cur["throttle"] = hit
             write_json(STELLA_HOME / "throttle-until", {"until": now + THROTTLE_PAUSE, "because": name})
         if cur["block"] == "NEXT" and (prev.get("block") != "NEXT" or block != prev.get("block_text")):
@@ -147,11 +174,14 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
         elif cur["block"] == "DONE" and prev.get("block") != "DONE":
             finished_any = True
             mates = teams.get(r.get("team") or "", [])
-            held = r.get("team") and not r.get("then") and any(
-                seen.get(m["name"], {}).get("block") != "DONE" for m in mates if m["name"] != name)
-            if not held:
-                events.append(f"{name}: ALL DONE{' (team ' + r['team'] + ' complete)' if r.get('team') else ''}"
-                              f"{'; then: ' + r['then'] if r.get('then') else ''}")
+            hold = r.get("team") and not r.get("then") and any(
+                seen.get(m.get("session") or "", {}).get("block") != "DONE" for m in mates if m["name"] != name)
+            line = (f"{name}: ALL DONE{' (team ' + r['team'] + ' complete)' if r.get('team') and not hold else ''}"
+                    f"{'; then: ' + r['then'] if r.get('then') else ''}")
+            if hold:
+                cur["held"] = line
+            else:
+                events.append(line)
         elif cur["job"] == "blocked" and cur["needs"] and cur["needs"] != prev.get("needs") and cur["block"] != "NEXT":
             events.append(f"{name}: blocked, needs: {cur['needs']}")
         cur["block_text"] = block
@@ -163,7 +193,11 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
                 events.append(f"{name}: steer not delivered after {int(age // 60)} min: {s.get('text', '')[:120]}")
                 cur[key] = True
         if remote and r.get("pr"):
-            pr = pr_state(r["pr"])
+            try:
+                pr = pr_state(r["pr"])
+            except Exception as e:  # noqa: BLE001 - one bad PR must not blind the watcher
+                pr = {}
+                cur["pr_error"] = f"{type(e).__name__}"
             old = prev.get("pr") or {}
             if pr:
                 if pr.get("state") == "MERGED" and old.get("state") != "MERGED":
@@ -176,9 +210,16 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
                 elif pr.get("reviews", 0) > old.get("reviews", pr.get("reviews", 0)):
                     events.append(f"{name}: new review on {r['pr']}")
                 cur["pr"] = pr
-        seen[name] = cur
-    if finished_any and any(r.get("state") == "queued" for r in recs):
-        events.append("a crewmate finished and launches are queued: a slot may be free")
+        if cur.get("held"):
+            held.append(cur)
+        seen[session] = cur
+    queued = [r.get("name") for r in recs if r.get("state") == "queued"]
+    window = _launch_window_open(seen)
+    if queued and (finished_any or window):
+        events.append(f"launches are queued ({', '.join(queued)}) and room may have freed")
+    if events:  # anything else wakes Stella: deliver held team completions with it
+        for cur in held:
+            events.append(cur.pop("held") + " (held for its team)")
     events += check_watches(seen, remote, read_json(EXTENSION, {}).get("watches", []), "")
     for r in recs:
         if r.get("state") not in ("landed",) and r.get("watches"):
@@ -192,23 +233,36 @@ def check_watches(seen: dict, remote: bool, watches: list[dict], who: str) -> li
     for w in watches:
         name = who + (w.get("name") or "watch")
         key = f"watch:{name}"
-        if "file" in w:
-            p = Path(os.path.expanduser(w["file"]))
-            stamp = p.stat().st_mtime if p.exists() else None
-            if key in seen and stamp != seen[key]:
-                events.append(f"{name}: {w['file']} changed")
-            seen[key] = stamp
-        elif "command" in w and remote:
-            argv = [os.path.expanduser(a) for a in w["command"]]
-            p = subprocess.run(argv, capture_output=True, text=True, timeout=60)
-            out = p.stdout.strip()
-            if w.get("writes"):
-                (STELLA_HOME / w["writes"]).write_text(out + "\n")
-                continue
-            digest = hashlib.sha256(out.encode()).hexdigest()
-            if key in seen and digest != seen[key]:
-                events.append(f"{name}: changed\n{out[:400]}")
-            seen[key] = digest
+        try:
+            events += _one_watch(seen, remote, w, name, key)
+        except Exception as e:  # noqa: BLE001 - a failing watch reports once, never kills the watcher
+            if seen.get(key + ":error") != type(e).__name__:
+                events.append(f"{name}: watch failed ({type(e).__name__}: {str(e)[:120]})")
+            seen[key + ":error"] = type(e).__name__
+    return events
+
+
+def _one_watch(seen: dict, remote: bool, w: dict, name: str, key: str) -> list[str]:
+    events = []
+    if "file" in w:
+        p = Path(os.path.expanduser(w["file"]))
+        stamp = p.stat().st_mtime if p.exists() else None
+        if key in seen and stamp != seen[key]:
+            events.append(f"{name}: {w['file']} changed")
+        seen[key] = stamp
+    elif "command" in w and remote:
+        argv = [os.path.expanduser(a) for a in w["command"]]
+        p = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+        out = p.stdout.strip()
+        if w.get("writes"):
+            if not re.fullmatch(r"[a-z0-9-]+\.json", w["writes"]):
+                raise ValueError(f"writes must be a plain .json name, not {w['writes']!r}")
+            (STELLA_HOME / w["writes"]).write_text(out + "\n")
+            return events
+        digest = hashlib.sha256(out.encode()).hexdigest()
+        if key in seen and digest != seen[key]:
+            events.append(f"{name}: changed\n{out[:400]}")
+        seen[key] = digest
     return events
 
 
@@ -216,6 +270,7 @@ def main(argv: list[str]) -> int:
     once = "--once" in argv
     seen = read_json(SEEN, {})
     start, last_remote = time.time(), 0.0
+    write_json(PIDFILE, {"pid": os.getpid(), "beat": time.time()})
     while True:
         remote = time.time() - last_remote >= REMOTE_EVERY
         events, seen = check(seen, remote)
@@ -230,6 +285,7 @@ def main(argv: list[str]) -> int:
             events = events or ([] if once else ["heartbeat: nothing happened for 8 hours; re-arm the watcher"])
             write_json(SEEN, seen)
             write_json(WAKE, {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "events": events})
+            PIDFILE.unlink(missing_ok=True)  # exiting: the turn-end guard must see no watcher until re-armed
             print("\n\n".join(events) if events else "nothing to report")
             return 0
         time.sleep(LOCAL_EVERY)
