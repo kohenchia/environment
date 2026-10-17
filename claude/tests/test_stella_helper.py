@@ -71,7 +71,11 @@ class Helper(unittest.TestCase):
         self.assertEqual(rec["state"], "working")
         self.assertEqual((self.tokens / rec["session"]).read_text(), "personal\n")
         bg = [c for c in self.calls() if "--bg" in c][0]
-        self.assertEqual(bg[bg.index("--session-id") + 1], rec["session"])
+        # the daemon ignores --session-id: the record holds the session it really started
+        self.assertNotEqual(bg[bg.index("--session-id") + 1], rec["session"])
+        listed = {a["name"]: a for a in json.loads(self.agents.read_text())}
+        self.assertEqual(rec["session"], listed["fix-flake"]["sessionId"])
+        self.assertEqual(rec["id"], listed["fix-flake"]["id"])
         self.assertIn("--model", bg)
         self.assertEqual(bg[-2:], ["--", "/kc-dev fix the thing\n"])
 

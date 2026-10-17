@@ -262,8 +262,15 @@ def launch(name: str) -> None:
     p = claude("--bg", "--session-id", session, "-n", name, "--model", model, *FLAGS, "--", brief.read_text(), cwd=d)
     if p.returncode != 0:
         die(f"claude --bg failed: {(p.stderr or p.stdout).strip()[-300:]}", 1)
-    short = (p.stdout.strip().split() or [session[:8]])[-1]
-    rec.update({"id": short if SHORT_ID.match(short) else session[:8], "session": session, "dir": str(d),
+    # `claude --bg` ignores --session-id and the daemon assigns its own, so the uuid above is not the
+    # session: find the one just started under this name (newest first) and record its real ids.
+    started = sorted((a for a in agents() if a.get("name") == name), key=lambda a: a.get("startedAt") or 0)
+    if not started:
+        die(f"launched {name}, but no session by that name is listed; run `stella agents --all`", 1)
+    row = started[-1]
+    if row.get("sessionId") and row["sessionId"] != session:
+        inherit_token(row["sessionId"])  # the token file is keyed by the real session
+    rec.update({"id": row.get("id"), "session": row.get("sessionId"), "dir": str(d),
                 "state": "working", "launched_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     rec.pop("queued_because", None)
     save(name, rec)

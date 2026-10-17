@@ -3,7 +3,9 @@
 
 Put its directory first on PATH under the name `claude` (the tests do this with a symlink). Every call is
 appended as one JSON line to $FAKE_CLAUDE_LOG. `claude agents --json` prints $FAKE_CLAUDE_AGENTS (a JSON
-file, default `[]`). `claude --bg ...` prints a fake short id. Anything else exits 0 silently.
+file, default `[]`). `claude --bg ...` acts like the
+daemon: it ignores --session-id, assigns its own ids, adds the session to $FAKE_CLAUDE_AGENTS (when set)
+and prints the short id. Anything else exits 0 silently.
 """
 
 import json
@@ -20,6 +22,15 @@ if args[:1] == ["agents"] and "--json" in args:
     path = os.environ.get("FAKE_CLAUDE_AGENTS")
     print(open(path).read() if path and os.path.exists(path) else "[]")
 elif "--bg" in args:
-    sid = args[args.index("--session-id") + 1] if "--session-id" in args else "00000000"
+    import hashlib, time
+    name = args[args.index("-n") + 1] if "-n" in args else ""
+    sid = hashlib.sha1(f"{name}{time.time_ns()}".encode()).hexdigest()
+    session = f"{sid[:8]}-{sid[8:12]}-{sid[12:16]}-{sid[16:20]}-{sid[20:32]}"
+    path = os.environ.get("FAKE_CLAUDE_AGENTS")
+    if path:
+        rows = json.load(open(path)) if os.path.exists(path) else []
+        rows.append({"id": sid[:8], "name": name, "kind": "background", "state": "working",
+                     "sessionId": session, "startedAt": time.time_ns() // 1_000_000})
+        json.dump(rows, open(path, "w"))
     print(sid[:8])
 sys.exit(int(os.environ.get("FAKE_CLAUDE_EXIT", "0")))
