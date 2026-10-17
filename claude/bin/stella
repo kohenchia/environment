@@ -201,7 +201,14 @@ def over_cap(rec: dict) -> str | None:
         return f"Opus throttled; no Opus launch for {int(until - time.time())} s more"
     quota = STELLA_HOME / "quota.json"
     fresh = quota.exists() and time.time() - quota.stat().st_mtime < 1800
-    frac = read_json(quota).get("fraction") if fresh else None
+    q = read_json(quota) if fresh else {}
+    frac = q.get("fraction")
+    # The quota measures one token (e.g. the personal daily budget). A crewmate bills the token Stella runs
+    # on, so the gate applies only when that is the token the quota measures.
+    row = stella_row()
+    mine = (TOKENS / row["sessionId"]).read_text().strip() if row and (TOKENS / row.get("sessionId", "")).is_file() else None
+    if q.get("token") and mine and q["token"] != mine:
+        frac = None
     if isinstance(frac, (int, float)) and frac >= QUOTA_STOP:
         return f"budget gate: {frac:.0%} of today's budget is spent"
     return None

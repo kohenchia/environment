@@ -198,6 +198,14 @@ class Helper(unittest.TestCase):
         self.crew("any-job", weight=0)
         self.assertEqual(self.run_stella("launch", "any-job").returncode, 75)
 
+    def test_budget_gate_applies_only_to_the_token_it_measures(self):
+        (self.sh / "quota.json").write_text(json.dumps({"fraction": 0.96, "token": "personal"}))
+        self.crew("on-personal", weight=0)
+        self.assertEqual(self.run_stella("launch", "on-personal").returncode, 75)
+        (self.tokens / "aaaaaaaa-0000-0000-0000-000000000000").write_text("project\n")
+        self.crew("on-project", weight=0)
+        self.assertEqual(self.run_stella("launch", "on-project").returncode, 0)
+
     # -------------------------------------------------------------- adopt / lifecycle
 
     def test_adopt_is_observation_only(self):
