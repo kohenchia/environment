@@ -82,5 +82,52 @@ class KcHookDifferential(unittest.TestCase):
         self.assertEqual(handlers, {"stop", "prompt", "pretool"})
 
 
+class TurnEndGuard(unittest.TestCase):
+    """The one behaviour allowed to differ: in Stella's home, crew in flight with no live watcher blocks once."""
+
+    def setUp(self):
+        self.t = tempfile.TemporaryDirectory()
+        self.home = Path(self.t.name)
+        self.sh = self.home / ".local/share/stella"
+        (self.sh / "crew/fix").mkdir(parents=True)
+        self.env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin"}
+
+    def tearDown(self):
+        self.t.cleanup()
+
+    def stop(self, **extra):
+        data = {"cwd": str(self.sh), "last_assistant_message": GOOD, **extra}
+        return run(NEW, "stop", data, self.env)
+
+    def record(self, **rec):
+        (self.sh / "crew/fix/record.json").write_text(json.dumps({"name": "fix", "state": "working", **rec}))
+
+    def test_blocks_when_crew_in_flight_and_no_watcher(self):
+        self.record()
+        code, out, err = self.stop()
+        self.assertEqual(code, 0)
+        self.assertIn('"decision": "block"', out)
+        self.assertIn("stella-watch is not running", out)
+
+    def test_quiet_with_live_watcher(self):
+        import time
+        self.record()
+        (self.sh / "watch.pid").write_text(json.dumps({"pid": 1, "beat": time.time()}))
+        self.assertEqual(self.stop()[1], "")
+
+    def test_quiet_when_already_blocked_once_or_no_crew_or_adopted(self):
+        self.record()
+        self.assertEqual(self.stop(stop_hook_active=True)[1], "")
+        self.record(adopted=True)
+        self.assertEqual(self.stop()[1], "")
+        self.record(state="landed")
+        self.assertEqual(self.stop()[1], "")
+
+    def test_never_outside_stellas_home(self):
+        self.record()
+        data = {"cwd": str(self.home), "last_assistant_message": GOOD}
+        self.assertEqual(run(NEW, "stop", data, self.env)[1], "")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6,6 +6,8 @@ stop     The final message of a turn must end with the status block (below). Whe
 prompt   A message that starts with "Stella"/"S" (or ends with her name, or says "ask/tell Stella") is
          for Stella: tell the session to relay it with the `stella` skill. Her own session (cwd
          ~/.local/share/stella) is exempt: everything typed there is for her.
+         In Stella's own session it also blocks the stop once when crew is in flight and her watcher
+         (stella-watch) is not running, so she never ends a turn blind.
 pretool  A `git push` into ~/github/environment (or one of its worktrees) asks the owner first. That is
          the only gated write. KC_OWNER_SAID_PUSH=1 in front of the command skips the ask, for when the
          owner's own instructions in this session say to push there.
@@ -22,6 +24,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HOME = Path.home()
@@ -100,6 +103,37 @@ def stop(data: dict) -> None:
     bad = check_block(final_message(data))
     if bad:
         print(json.dumps({"decision": "block", "reason": f"{bad} Rewrite the end of your final message: {FORMAT}"}))
+        return
+    blind = unwatched_crew(data)
+    if blind:
+        print(json.dumps({"decision": "block", "reason": blind}))
+
+
+# ---------------------------------------------------------------- Stella's turn-end guard
+
+WATCH_STALE = 120  # seconds: the watcher beats every 20 s
+
+
+def unwatched_crew(data: dict) -> str | None:
+    """In Stella's own session only: crew in flight and no live watcher means she would end her turn blind."""
+    try:
+        if Path(data.get("cwd") or "").resolve() != STELLA_HOME.resolve():
+            return None
+        in_flight = []
+        for p in (STELLA_HOME / "crew").glob("*/record.json"):
+            rec = json.loads(p.read_text())
+            if rec.get("state") in ("working", "queued") and not rec.get("adopted"):
+                in_flight.append(rec.get("name"))
+        if not in_flight:
+            return None
+        beat = json.loads((STELLA_HOME / "watch.pid").read_text()).get("beat", 0) \
+            if (STELLA_HOME / "watch.pid").exists() else 0
+        if time.time() - beat < WATCH_STALE:
+            return None
+        return (f"Crew in flight ({', '.join(sorted(in_flight)[:6])}) and stella-watch is not running. Start it as a"
+                " background command (`stella-watch`, run_in_background) before ending the turn.")
+    except Exception:  # noqa: BLE001 - outside Stella's home, or a missing file: never trap the session
+        return None
 
 
 # ---------------------------------------------------------------- addressing Stella

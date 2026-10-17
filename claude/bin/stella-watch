@@ -1,0 +1,234 @@
+#!/usr/bin/env python3
+"""stella-watch: sleep until Stella's crew needs her, then exit. Stella runs it as a background command;
+its exit wakes her session, she handles what it printed, and she starts it again.
+
+    stella-watch            watch; print the events and exit when something is actionable (or after 8 h)
+    stella-watch --once     check once, print what would wake her, exit 0 either way (for tests)
+
+It runs inside the machine's command sandbox: it only reads files and calls `gh`, plus any command watch
+the machine's extension declares. It never calls `claude`.
+
+What wakes Stella, per crewmate record in crew/<name>/record.json:
+  - its last status block becomes NEXT FOR YOU or ALL DONE, or its job state becomes blocked with a need
+    (an ALL DONE from a team member without `then` is held until the rest of the team is done);
+  - its PR (record `pr`) is merged, gets a failing check, gets changes requested, or a new review;
+  - a steer (record `steers`) has not shown up in its transcript after 10 minutes;
+  - a queued launch while something finished, so a slot may have freed;
+  - a command or file watch from ~/.claude/kc-extensions/stella.json changes;
+  - nothing for 8 hours ("heartbeat").
+A rate-limit error in a crewmate's transcript writes `throttle-until` (4 minutes) for the launch caps.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+STELLA_HOME = Path(os.environ.get("STELLA_HOME", HOME / ".local/share/stella"))
+CREW = STELLA_HOME / "crew"
+JOBS = HOME / ".claude/jobs"
+PROJECTS = HOME / ".claude/projects"
+EXTENSION = HOME / ".claude/kc-extensions/stella.json"
+SEEN = STELLA_HOME / "watch-state.json"
+WAKE = STELLA_HOME / "wake.json"
+PIDFILE = STELLA_HOME / "watch.pid"
+LOCAL_EVERY, REMOTE_EVERY, DEBOUNCE = 20, 300, 30
+HEARTBEAT, STEER_GRACE, THROTTLE_PAUSE = 8 * 3600, 600, 240
+RULE = "━" * 40
+
+
+def read_json(p: Path, default):
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return default
+
+
+def write_json(p: Path, data) -> None:
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    tmp.replace(p)
+
+
+def records() -> list[dict]:
+    return [r for r in (read_json(p, None) for p in sorted(CREW.glob("*/record.json"))) if r]
+
+
+def transcript(session: str) -> Path | None:
+    hits = list(PROJECTS.glob(f"*/{session}.jsonl")) if session else []
+    return hits[0] if hits else None
+
+
+def tail_events(path: Path, size: int = 400_000) -> list[dict]:
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - size))
+        raw = f.read().decode("utf-8", "replace").splitlines()
+    out = []
+    for line in raw:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
+
+
+def text_of(ev: dict) -> str:
+    c = (ev.get("message") or {}).get("content")
+    return c if isinstance(c, str) else "\n".join(
+        b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+
+
+def status_block(events: list[dict]) -> tuple[str | None, str]:
+    """(NEXT|DONE|WORKING|None, the status lines) from the last assistant message."""
+    for ev in reversed(events):
+        if ev.get("type") != "assistant" or not text_of(ev).strip():
+            continue
+        text = text_of(ev)
+        if RULE not in text:
+            return None, ""
+        block = text.rsplit(RULE, 1)[1].strip()
+        kind = "NEXT" if "NEXT FOR YOU" in block else "DONE" if "ALL DONE" in block else \
+            "WORKING" if "WORKING" in block else None
+        return kind, block[:600]
+    return None, ""
+
+
+def throttled_at(events: list[dict]) -> str | None:
+    hits = [ev.get("timestamp") for ev in events if ev.get("subtype") == "api_error"
+            and "rate limit exceeded" in json.dumps(ev.get("error") or {})]
+    return max(hits) if hits else None
+
+
+def pr_state(url: str) -> dict:
+    p = subprocess.run(["gh", "pr", "view", url, "--json", "state,reviewDecision,statusCheckRollup,reviews"],
+                       capture_output=True, text=True, timeout=60)
+    if p.returncode != 0:
+        return {}
+    d = json.loads(p.stdout)
+    failing = sorted({c.get("name") or c.get("context") or "?" for c in d.get("statusCheckRollup") or []
+                      if (c.get("conclusion") or c.get("state") or "").upper() in ("FAILURE", "ERROR", "TIMED_OUT")})
+    return {"state": d.get("state"), "decision": d.get("reviewDecision"), "failing": failing,
+            "reviews": len(d.get("reviews") or [])}
+
+
+def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
+    events, now = [], time.time()
+    recs = records()
+    teams: dict[str, list[dict]] = {}
+    for r in recs:
+        if r.get("team"):
+            teams.setdefault(r["team"], []).append(r)
+    finished_any = False
+    for r in recs:
+        name, session = r.get("name"), r.get("session") or ""
+        if r.get("state") in ("landed", "queued") or not session:
+            continue
+        prev = seen.get(name, {})
+        cur = dict(prev)
+        job = read_json(JOBS / str(r.get("id")) / "state.json", {})
+        cur["job"], cur["needs"] = job.get("state"), job.get("needs")
+        path = transcript(session)
+        evs = tail_events(path) if path else []
+        cur["block"], block = status_block(evs)
+        hit = throttled_at(evs)
+        if hit and hit != prev.get("throttle"):
+            cur["throttle"] = hit
+            write_json(STELLA_HOME / "throttle-until", {"until": now + THROTTLE_PAUSE, "because": name})
+        if cur["block"] == "NEXT" and (prev.get("block") != "NEXT" or block != prev.get("block_text")):
+            events.append(f"{name}: NEXT FOR YOU\n{block}")
+        elif cur["block"] == "DONE" and prev.get("block") != "DONE":
+            finished_any = True
+            mates = teams.get(r.get("team") or "", [])
+            held = r.get("team") and not r.get("then") and any(
+                seen.get(m["name"], {}).get("block") != "DONE" for m in mates if m["name"] != name)
+            if not held:
+                events.append(f"{name}: ALL DONE{' (team ' + r['team'] + ' complete)' if r.get('team') else ''}"
+                              f"{'; then: ' + r['then'] if r.get('then') else ''}")
+        elif cur["job"] == "blocked" and cur["needs"] and cur["needs"] != prev.get("needs") and cur["block"] != "NEXT":
+            events.append(f"{name}: blocked, needs: {cur['needs']}")
+        cur["block_text"] = block
+        for s in r.get("steers") or []:
+            age = now - s.get("at", now)
+            delivered = any(ev.get("type") == "user" and s.get("text", "")[:80] in text_of(ev) for ev in evs)
+            key = f"steer:{s.get('at')}"
+            if not delivered and age > STEER_GRACE and not prev.get(key):
+                events.append(f"{name}: steer not delivered after {int(age // 60)} min: {s.get('text', '')[:120]}")
+                cur[key] = True
+        if remote and r.get("pr"):
+            pr = pr_state(r["pr"])
+            old = prev.get("pr") or {}
+            if pr:
+                if pr.get("state") == "MERGED" and old.get("state") != "MERGED":
+                    events.append(f"{name}: PR merged {r['pr']}")
+                new_fail = set(pr.get("failing", [])) - set(old.get("failing", []))
+                if new_fail:
+                    events.append(f"{name}: PR check failing: {', '.join(sorted(new_fail))} {r['pr']}")
+                if pr.get("decision") == "CHANGES_REQUESTED" and old.get("decision") != "CHANGES_REQUESTED":
+                    events.append(f"{name}: changes requested on {r['pr']}")
+                elif pr.get("reviews", 0) > old.get("reviews", pr.get("reviews", 0)):
+                    events.append(f"{name}: new review on {r['pr']}")
+                cur["pr"] = pr
+        seen[name] = cur
+    if finished_any and any(r.get("state") == "queued" for r in recs):
+        events.append("a crewmate finished and launches are queued: a slot may be free")
+    events += check_watches(seen, remote)
+    return events, seen
+
+
+def check_watches(seen: dict, remote: bool) -> list[str]:
+    events = []
+    for w in read_json(EXTENSION, {}).get("watches", []):
+        name = w.get("name") or "watch"
+        key = f"watch:{name}"
+        if "file" in w:
+            p = Path(os.path.expanduser(w["file"]))
+            stamp = p.stat().st_mtime if p.exists() else None
+            if key in seen and stamp != seen[key]:
+                events.append(f"{name}: {w['file']} changed")
+            seen[key] = stamp
+        elif "command" in w and remote:
+            p = subprocess.run(w["command"], capture_output=True, text=True, timeout=60)
+            out = p.stdout.strip()
+            if w.get("writes"):
+                (STELLA_HOME / w["writes"]).write_text(out + "\n")
+                continue
+            digest = hashlib.sha256(out.encode()).hexdigest()
+            if key in seen and digest != seen[key]:
+                events.append(f"{name}: changed\n{out[:400]}")
+            seen[key] = digest
+    return events
+
+
+def main(argv: list[str]) -> int:
+    once = "--once" in argv
+    seen = read_json(SEEN, {})
+    start, last_remote = time.time(), 0.0
+    while True:
+        remote = time.time() - last_remote >= REMOTE_EVERY
+        events, seen = check(seen, remote)
+        if remote:
+            last_remote = time.time()
+        write_json(PIDFILE, {"pid": os.getpid(), "beat": time.time()})
+        if events and not once:
+            time.sleep(DEBOUNCE)
+            more, seen = check(seen, False)
+            events += more
+        if events or once or time.time() - start >= HEARTBEAT:
+            events = events or ([] if once else ["heartbeat: nothing happened for 8 hours; re-arm the watcher"])
+            write_json(SEEN, seen)
+            write_json(WAKE, {"at": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "events": events})
+            print("\n\n".join(events) if events else "nothing to report")
+            return 0
+        time.sleep(LOCAL_EVERY)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
