@@ -44,6 +44,8 @@ class Helper(unittest.TestCase):
         self.herdr_tabs = self.home / "herdr-tabs.json"
         self.herdr_log = self.home / "herdr.jsonl"
 
+    extra_env: dict = {}
+
     def with_herdr(self):
         (self.bin / "herdr").symlink_to(FAKE_HERDR)
 
@@ -62,7 +64,8 @@ class Helper(unittest.TestCase):
     def run_stella(self, *args, cwd=None):
         env = {"HOME": str(self.home), "STELLA_PATH": f"{self.bin}:/usr/bin:/bin", "FAKE_CLAUDE_LOG": str(self.log),
                "FAKE_CLAUDE_AGENTS": str(self.agents), "FAKE_HERDR_LOG": str(self.herdr_log),
-               "FAKE_HERDR_TABS": str(self.herdr_tabs)}
+               "FAKE_HERDR_TABS": str(self.herdr_tabs), "STELLA_FOLLOW_GRACE": "0.2",
+               "STELLA_FOLLOW_WAIT": "3", **self.extra_env}
         return subprocess.run(["python3", str(STELLA), *args], cwd=cwd or self.sh, env=env,
                               capture_output=True, text=True, timeout=30)
 
@@ -382,6 +385,71 @@ class Helper(unittest.TestCase):
         self.herdr_tabs.write_text(json.dumps({"w1:t1": "alive", "w1:t2": "gone", "w1:t3": "landed-one"}))
         self.run_stella("view", "--all")
         self.assertEqual(sorted(self.tabs().values()), ["alive"])
+
+    # -------------------------------------------------------------- tabs follow their session
+
+    def running(self, pid=100, **row):
+        self.set_agents([{"id": "00000001", "name": "built", "kind": "background", "state": "working",
+                          "sessionId": "00000001-s", "pid": pid, "startedAt": 1000, **row}])
+
+    def attaches(self):
+        return [c for c in self.calls() if c[:1] == ["attach"]]
+
+    def test_tab_attaches_again_after_the_process_restarts(self):
+        self.running()
+        self.extra_env = {"FAKE_CLAUDE_ATTACH": json.dumps(["restart", "detach"])}
+        p = self.run_stella("tab", "00000001")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.attaches(), [["attach", "00000001"]] * 2)
+
+    def test_tab_survives_several_restarts_in_a_row(self):
+        self.running()
+        self.extra_env = {"FAKE_CLAUDE_ATTACH": json.dumps(["restart", "restart", "restart"])}
+        self.run_stella("tab", "00000001")
+        self.assertEqual(len(self.attaches()), 4)
+
+    def test_tab_ends_on_a_detach(self):
+        self.running()
+        self.assertEqual(self.run_stella("tab", "00000001").returncode, 0)
+        self.assertEqual(len(self.attaches()), 1)
+
+    def test_tab_ends_when_the_session_is_gone(self):
+        self.running()
+        self.extra_env = {"FAKE_CLAUDE_ATTACH": json.dumps(["gone"])}
+        p = self.run_stella("tab", "00000001")
+        self.assertEqual(p.returncode, 0)
+        self.assertIn("gone", p.stdout)
+        self.assertEqual(len(self.attaches()), 1)
+
+    def test_tab_does_not_attach_to_a_session_that_is_not_listed(self):
+        self.set_agents([])
+        self.assertEqual(self.run_stella("tab", "00000001").returncode, 0)
+        self.assertEqual(self.attaches(), [])
+
+    def test_tab_rejects_a_bad_id(self):
+        self.assertNotEqual(self.run_stella("tab", "../x").returncode, 0)
+
+    def test_tabs_run_the_follow_command(self):
+        self.with_herdr()
+        self.live("built")
+        self.crew("built", id="00000001")
+        self.run_stella("view", "built")
+        runs = [c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "run"]]
+        self.assertEqual(len(runs), 1)
+        self.assertTrue(runs[0][3].endswith("stella tab 00000001"), runs[0])
+
+    def test_view_all_attaches_again_in_a_tab_that_shows_session_exited(self):
+        self.with_herdr()
+        self.live("exited-one", "fine-one")
+        self.crew("exited-one", id="00000001")
+        self.crew("fine-one", id="00000002")
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "exited-one", "w1:t2": "fine-one"}))
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w1:t1:p1": "...\nSession exited\n$ ", "w1:t2:p1": "working"})}
+        self.assertEqual(self.run_stella("view", "--all").returncode, 0)
+        runs = [c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "run"]]
+        self.assertEqual([r[2] for r in runs], ["w1:t1:p1"])
+        self.assertTrue(runs[0][3].endswith("stella tab 00000001"))
+        self.assertEqual(len(self.tabs()), 2)  # the tabs and their order are untouched
 
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)

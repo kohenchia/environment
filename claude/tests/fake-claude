@@ -18,7 +18,21 @@ if log:
     with open(log, "a") as f:
         f.write(json.dumps({"argv": args, "cwd": os.getcwd()}) + "\n")
 
-if args[:1] == ["agents"] and "--json" in args:
+if args[:1] == ["attach"]:
+    # $FAKE_CLAUDE_ATTACH is a JSON list, one entry per attach call: "restart" (the process is replaced while
+    # attached), "gone" (the session is removed), anything else (a detach: nothing changes)
+    path = os.environ.get("FAKE_CLAUDE_AGENTS")
+    script = json.loads(os.environ.get("FAKE_CLAUDE_ATTACH", "[]"))
+    n = sum(1 for l in open(log) if json.loads(l)["argv"][:1] == ["attach"]) if log else 1
+    step = script[n - 1] if n <= len(script) else "detach"
+    rows = json.load(open(path))
+    for r in rows:
+        if r["id"] == args[1] and step == "restart":
+            r["pid"], r["startedAt"] = r.get("pid", 100) + 1, r.get("startedAt", 0) + 1000
+    if step == "gone":
+        rows = [r for r in rows if r["id"] != args[1]]
+    json.dump(rows, open(path, "w"))
+elif args[:1] == ["agents"] and "--json" in args:
     path = os.environ.get("FAKE_CLAUDE_AGENTS")
     print(open(path).read() if path and os.path.exists(path) else "[]")
 elif "--bg" in args:

@@ -18,6 +18,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  record or an adopted one's; `--none` clears them): the hooks then skip those prompts
     stella view <name> | --all   open crewmates as terminal tabs (herdr; `--all` opens the missing ones and
                                  closes the tabs of sessions that are gone), or print the attach command
+    stella tab [<id>]            what a herdr tab runs: attach to the session (Stella's by default) and attach
+                                 again whenever its process is restarted (`tok`, respawn), until it is gone
     stella stop <name> | respawn <name> [--model M] | logs <name>
     stella rm <name>             remove a finished crewmate, its worktree and its tab, only once its work has
                                  landed (an open PR keeps it); a track record goes once its PR is closed
@@ -433,6 +435,82 @@ def close_tab(rec: dict) -> bool:
     return bool(ids)
 
 
+EXITED_TEXT = "session exited"  # what a tab shows after its `claude attach` died with the process
+FOLLOW_GRACE = float(os.environ.get("STELLA_FOLLOW_GRACE", "4"))  # seconds to tell a restart from a detach
+FOLLOW_WAIT = float(os.environ.get("STELLA_FOLLOW_WAIT", "90"))  # seconds a restart may take to come back
+
+
+def _process(sid: str) -> tuple[bool, object]:
+    """(listed, identity of the running process) of a session; the identity changes when it restarts."""
+    row = next((a for a in agents(True) if a.get("id") == sid), None)
+    if row is None:
+        return False, None
+    return True, (row.get("pid"), row.get("startedAt")) if row.get("pid") else None
+
+
+def follow(sid: str) -> int:
+    """`claude attach` that survives a restart of the session: when attach returns because the process was
+    replaced (same session id, new process), wait for the new one and attach again. A detach, or a session
+    that is gone from `claude agents --all`, ends it."""
+    while True:
+        listed, ident = _process(sid)
+        if not listed:
+            print(f"session {sid} is gone")
+            return 0
+        rc = subprocess.run(["claude", "attach", sid]).returncode
+        deadline, first = time.time() + FOLLOW_WAIT, time.time()
+        while True:
+            listed, now = _process(sid)
+            if not listed:
+                print(f"session {sid} is gone")
+                return 0
+            if now is not None and now != ident:
+                print(f"session {sid} restarted; attaching again")
+                break
+            if now is not None and time.time() - first >= FOLLOW_GRACE:
+                return rc  # the same process is still running: the attach ended on purpose
+            if time.time() >= deadline:
+                print(f"session {sid} did not come back", file=sys.stderr)
+                return 1
+            time.sleep(min(1.0, max(FOLLOW_GRACE / 4, 0.05)))
+
+
+def _tab_panes(herdr: str, tab: str) -> list[str]:
+    """Pane ids of a tab, from `herdr pane list` (any nesting; a pane has a pane_id and a tab_id)."""
+    p = subprocess.run([herdr, "pane", "list"], capture_output=True, text=True, timeout=30)
+    found: list[str] = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            if x.get("tab_id") == tab and isinstance(x.get("pane_id"), str):
+                found.append(x["pane_id"])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    try:
+        walk(json.loads(p.stdout))
+    except ValueError:
+        pass
+    return found
+
+
+def _attach_cmd(sid: str) -> str:
+    return f"{BIN / 'stella'} tab {sid}"
+
+
+def repair_tab(herdr: str, tab: str, sid: str) -> None:
+    """A tab left showing 'session exited' (opened before tabs followed their session): attach it again."""
+    for pane in _tab_panes(herdr, tab):
+        out = subprocess.run([herdr, "pane", "read", pane, "--lines", "10"], capture_output=True, text=True,
+                             timeout=30).stdout
+        if EXITED_TEXT in out.lower():
+            subprocess.run([herdr, "pane", "run", pane, _attach_cmd(sid)], capture_output=True, text=True,
+                           timeout=30)
+
+
 def view(name: str, quiet: bool = False) -> None:
     rec = load(name)
     sid = rec.get("id")
@@ -444,8 +522,7 @@ def view(name: str, quiet: bool = False) -> None:
                            capture_output=True, text=True, timeout=30)
         pane = _herdr_pane(t.stdout)
         if t.returncode == 0 and pane:
-            subprocess.run([herdr, "pane", "run", pane, f"claude attach {sid}"], capture_output=True, text=True,
-                           timeout=30)
+            subprocess.run([herdr, "pane", "run", pane, _attach_cmd(sid)], capture_output=True, text=True, timeout=30)
             tab = _tab_id(t.stdout)
             if tab:
                 save(name, {**load(name), "tab": tab})
@@ -471,6 +548,9 @@ def view_all() -> None:
         has_tab = (rec.get("tab") in tabs) or rec.get("name") in tabs.values()
         if sid in live and not has_tab:
             view(rec["name"])
+        elif sid in live and has_tab and herdr:
+            tab = rec.get("tab") if rec.get("tab") in tabs else next(t for t, n in tabs.items() if n == rec["name"])
+            repair_tab(herdr, tab, sid)
         elif has_tab and sid not in live and (rec.get("state") == "landed" or sid not in known):
             close_tab(rec)
             save(rec["name"], {k: v for k, v in load(rec["name"]).items() if k != "tab"})
@@ -599,6 +679,10 @@ def main(argv: list[str]) -> None:
     cmd, rest = (argv[1] if len(argv) > 1 else "open"), argv[2:]
     if cmd == "open":
         os.execvp("claude", ["claude", "attach", start()])
+    elif cmd == "tab" and len(rest) <= 1:
+        if rest and not SHORT_ID.match(rest[0]):
+            die(f"bad session id {rest[0]!r}")
+        sys.exit(follow(rest[0] if rest else start()))
     elif cmd == "start":
         print(start())
     elif cmd == "restart" and not rest:
@@ -639,7 +723,7 @@ def main(argv: list[str]) -> None:
     elif cmd in ("-h", "--help", "help"):
         print(__doc__.split("\n\n")[1])
     else:
-        die("usage: stella [open|start|restart|id|agents|launch|adopt|allow|track-pr|untrack|view|stop|respawn|logs|rm|live-check] ...")
+        die("usage: stella [open|start|restart|id|agents|launch|adopt|allow|track-pr|untrack|view|tab|stop|respawn|logs|rm|live-check] ...")
 
 
 if __name__ == "__main__":

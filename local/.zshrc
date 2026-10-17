@@ -638,7 +638,7 @@ for s in json.load(sys.stdin):
 }
 
 # tw: the work window. With herdr installed (Work Env 3.0): start its server if needed, build the `work`
-# workspace the first time (a `stella` tab running Stella's session), sync the crew's tabs with
+# workspace the first time (a `stella` tab following Stella's session), sync the crew's tabs with
 # `stella view --all` on every attach, and attach. herdr's sidebar shows every agent's state.
 # Without herdr, tmux (`twt`).
 function tw() {
@@ -655,7 +655,7 @@ function tw() {
         local pane
         pane=$(herdr workspace create --cwd "$HOME/github" --label work --focus 2>/dev/null \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])') \
-            && herdr pane run "$pane" "stella" >/dev/null
+            && herdr pane run "$pane" "stella tab" >/dev/null
     fi
     # every attach: a tab for each live crewmate that has none (adopted ones too), and no tab for a
     # session that has exited; `view --all` skips the crewmates that already have one
