@@ -229,6 +229,16 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
             age = now - s.get("at", now)
             delivered = any(ev.get("type") == "user" and s.get("text", "")[:80] in text_of(ev) for ev in evs)
             key = f"steer:{s.get('at')}"
+            if not delivered and age > STEER_GRACE and not prev.get(key) and path:
+                # A busy session pushes the steer out of the tail read above: look through the whole
+                # transcript before calling it lost (JSON-escaped, as the line stores it).
+                needle = json.dumps(s.get("text", "")[:80])[1:-1]
+                try:
+                    with open(path, errors="ignore") as f:
+                        delivered = any(needle in line and '"type": "user"' in line.replace('"type":"user"', '"type": "user"')
+                                        for line in f)
+                except OSError:
+                    pass
             if not delivered and age > STEER_GRACE and not prev.get(key):
                 events.append(f"{name}: steer not delivered after {int(age // 60)} min: {s.get('text', '')[:120]}")
                 cur[key] = True

@@ -154,6 +154,13 @@ class Watch(unittest.TestCase):
         self.say("e1", "WORKING", extra=[{"type": "user", "message": {"content": "also cover the timeout case"}}])
         self.assertEqual(self.once().strip(), "nothing to report")
 
+    def test_steer_beyond_the_tail_window_is_still_delivered(self):
+        self.crew("fix", "f1", steers=[{"at": time.time() - 700, "text": "Kohen's order: queue what's approved"}])
+        filler = [{"type": "assistant", "message": {"content": "x" * 5000}}] * 120  # ~600 KB after the steer
+        steer = {"type": "user", "message": {"content": "Another Claude session sent a message:\nKohen's order: queue what's approved"}}
+        self.say("f1", "WORKING", extra=[steer] + filler)
+        self.assertEqual(self.once().strip(), "nothing to report")
+
     def test_file_watch_from_extension(self):
         note = self.home / "plan.md"
         note.write_text("v1")
