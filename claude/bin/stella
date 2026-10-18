@@ -638,8 +638,7 @@ def _label_pane(herdr: str, pane: str, rec: dict) -> None:
     if AGENT_NAME.match(rec["name"]):
         _herdr_run(herdr, "agent", "rename", pane, rec["name"])
     _herdr_run(herdr, "pane", "report-metadata", pane, "--source", "stella",
-               "--token", f"project={_token(rec.get('project') or '-')}", "--token", f"note={_token(note)}",
-               "--ttl-ms", str(6 * 3600 * 1000))
+               "--token", f"project={_token(rec.get('project') or '-')}", "--token", f"note={_token(note)}")
 
 
 def sync_sidebar() -> None:
@@ -672,6 +671,8 @@ def sync_sidebar() -> None:
                     ws = ws or _crew_ws(herdr)
                     tabs[tab] = name
                     save(name, {**load(name), "crew_tab": tab})
+                    for pane in _tab_panes(herdr, tab)[:1]:
+                        _label_pane(herdr, pane, rec)
                     print(f"{name}: in the sidebar")
                 continue
             repair_tab(herdr, tab, sid)

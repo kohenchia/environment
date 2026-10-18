@@ -61,3 +61,8 @@ mouse_capture = true
 # `$project` and `$note` are tokens reported with `herdr pane report-metadata --source stella`.
 [ui.sidebar.agents]
 rows = [["state_icon", "tab", "$project"], ["$note"]]
+
+# A herdr server restart must not resume the crew tabs' Claude panes into their own conversation: the sessions
+# belong to the Claude daemon, and `stella crew sync` (run by `tw`) re-attaches them instead.
+[session]
+resume_agents_on_restore = false
