@@ -85,6 +85,12 @@ state against Claude's, the reporter, the agent view and the parity line; it is 
 `C-b q` or `C-b d`, or close the window: everything keeps running. `twt` is the tmux window from before, kept as
 the fallback.
 
+Text is typed into a pane only when `herdr pane process-info` shows a shell in the foreground (a new window's own
+shell, or a window showing 'session exited' at a prompt): never into a Claude that is attached there, and never
+into a pane whose processes cannot be read. A finished session's attached window is closed and a dormant one
+opened instead of changing the command in place. `stella crew doctor` flags a window whose foreground Claude is
+attached to another session than the window's.
+
 ## What is not used
 
 - herdr's Claude integration hook (`herdr integration install claude`): the Claude daemon already resumes

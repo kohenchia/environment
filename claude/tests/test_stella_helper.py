@@ -1145,24 +1145,73 @@ class Helper(unittest.TestCase):
         cmds = {sid: next(c for c in runs if f"listed {sid}" in c) for sid in ("00000001", "00000002")}
         self.assertIn("claude logs 00000001", cmds["00000001"])
         self.assertIn("dormant 00000001", cmds["00000001"])
-        self.assertTrue(self.rec("finished-one")["dormant"])
+        self.assertTrue(self.rec("finished-one")["dormant_ok"])
         self.assertTrue(cmds["00000002"].startswith("while "))  # a live session is attached at once
         self.assertNotIn("dormant", self.rec("busy-one"))
         self.assertEqual(self.run_stella("dormant", "00000001").returncode, 0)
         self.assertEqual(self.run_stella("dormant", "00000002").returncode, 1)
 
-    def test_an_attached_window_of_a_session_that_finished_is_swapped_once(self):
+    def test_the_attached_window_of_a_session_that_finished_is_closed_and_a_dormant_one_opened_once(self):
         self.herdr_start()
         self.live("built")
         self.crew("built", id="00000001", project="mlc")
         self.job("00000001", state="working")
         self.run_stella("crew", "sync")
+        old_tab = self.rec("built")["tab"]
         self.job("00000001", state="done")
         self.run_stella("crew", "sync")
-        self.assertEqual(len(self.herdr_calls("pane", "send-keys")), 1)
+        self.assertEqual(self.herdr_calls("pane", "send-keys"), [])  # nothing is ever typed into the attached Claude
+        self.assertEqual([c[2] for c in self.herdr_calls("tab", "close")], [old_tab])  # the viewer window closed
+        self.assertEqual(self.space_tabs()["mlc"], ["mlc", "built"])
         self.assertIn("claude logs 00000001", self.herdr_calls("pane", "run")[-1][3])
+        self.assertTrue(self.rec("built")["dormant_ok"])
+        n = len(self.herdr_calls("pane", "run"))
         self.run_stella("crew", "sync")
-        self.assertEqual(len(self.herdr_calls("pane", "send-keys")), 1)  # once only
+        self.assertEqual(len(self.herdr_calls("pane", "run")), n)  # once only
+
+    def test_text_is_never_typed_into_a_pane_that_runs_claude_even_one_that_mentions_session_exited(self):
+        self.herdr_start()
+        self.live("built")
+        self.crew("built", id="00000001", project="mlc")
+        self.run_stella("crew", "sync")
+        tab = self.rec("built")["tab"]
+        n = len(self.herdr_calls("pane", "run"))
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({tab + ":p1": "we saw: Session 00000001 has exited.\n❯ "}),
+                          "FAKE_HERDR_PROCS": json.dumps({tab + ":p1": "claude:00000001"})}
+        self.run_stella("crew", "sync")
+        self.assertEqual(len(self.herdr_calls("pane", "run")), n)
+        self.assertEqual(self.herdr_calls("pane", "send-keys"), [])
+        self.extra_env["FAKE_HERDR_PROCS"] = "{}"  # the same screen at a shell prompt: attach again
+        self.run_stella("crew", "sync")
+        self.assertEqual(len(self.herdr_calls("pane", "run")), n + 1)
+
+    def test_a_pane_whose_processes_cannot_be_read_is_not_a_shell(self):
+        self.herdr_start()
+        self.live("built")
+        self.crew("built", id="00000001")
+        self.run_stella("crew", "sync")
+        tab = self.rec("built")["tab"]
+        n = len(self.herdr_calls("pane", "run"))
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({tab + ":p1": "Session 00000001 has exited.\n"}),
+                          "FAKE_HERDR_PROCS": json.dumps({tab + ":p1": "mystery"})}
+        self.run_stella("crew", "sync")
+        self.assertEqual(len(self.herdr_calls("pane", "run")), n)
+
+    def test_doctor_flags_a_window_whose_foreground_claude_is_attached_to_another_session(self):
+        self.herdr_start()
+        self.live("built", "other")
+        self.crew("built", id="00000001", project="mlc")
+        self.crew("other", id="00000002", project="mlc")
+        self.run_stella("crew", "sync")
+        tab = self.rec("built")["tab"]
+        self.extra_env = {"FAKE_HERDR_PROCS": json.dumps({tab + ":p1": "claude:00000002"})}
+        d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
+        built = next(c for c in d["checks"] if c.get("crewmate") == "built")
+        self.assertTrue(built["attached_other"])
+        self.assertFalse(built["ok"])
+        self.extra_env = {"FAKE_HERDR_PROCS": json.dumps({tab + ":p1": "claude:00000001"})}
+        d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
+        self.assertFalse(next(c for c in d["checks"] if c.get("crewmate") == "built")["attached_other"])
 
     def test_a_session_named_like_its_project_has_its_own_window_and_the_verbs_mean_that_one(self):
         self.herdr_start()
@@ -1199,7 +1248,7 @@ class Helper(unittest.TestCase):
         (self.sh / "view.json").write_text(json.dumps(v))
         self.herdr_log.unlink()
         mlc, beta = v["firsts"]["mlc"] + ":p1", v["firsts"]["beta"] + ":p1"
-        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({mlc: "~/github on main\n❯ ", beta: "claude\nworking\n"})}
+        self.extra_env = {"FAKE_HERDR_PROCS": json.dumps({beta: "claude:00000002"})}
         self.assertEqual(self.run_stella("project", "main", "--all").returncode, 0)
         self.assertEqual([r[2] for r in self.herdr_calls("pane", "run")], [mlc])
         self.run_stella("project", "main", "--all")

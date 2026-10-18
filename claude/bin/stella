@@ -579,8 +579,49 @@ def _attach_cmd(sid: str, dormant: bool = False) -> str:
 VERBOSE = bool(os.environ.get("STELLA_VERBOSE"))
 
 
+SHELLS = {"zsh", "bash", "sh", "fish", "dash", "ksh", "tcsh"}
+
+
+def _strings(x, key: str = ""):
+    """(key, string) pairs of every string in a JSON value, at any depth (list items carry their list's key)."""
+    if isinstance(x, str):
+        yield key, x
+    elif isinstance(x, dict):
+        for k, v in x.items():
+            yield from _strings(v, k)
+    elif isinstance(x, list):
+        for v in x:
+            yield from _strings(v, key)
+
+
+def pane_foreground(herdr: str, pane: str) -> list[str] | None:
+    """The names of the processes `herdr pane process-info` reports in a pane (the foreground job's when it says
+    which), lowercase; None when it cannot be read or holds no process name at all."""
+    p = _herdr_run(herdr, "pane", "process-info", pane)
+    try:
+        info = json.loads(p.stdout)
+    except ValueError:
+        return None
+    found = []
+    for k, v in _strings(info.get("result", info)):
+        if re.search(r"name|comm|command|cmd|exe|argv|process|title", k, re.I) and not re.search(r"cwd|path|dir", k, re.I):
+            first = v.strip().split(" ")[0] if v.strip() else ""
+            if first:
+                found.append(os.path.basename(first).lstrip("-").lower())
+                found += [w.lower() for w in re.findall(r"[A-Za-z][\w.-]*", v)][:6]
+    return found or None
+
+
+def pane_is_shell(herdr: str, pane: str) -> bool:
+    """True only when a shell is what the pane runs in the foreground: never text into a Claude (or anything
+    unknown) that is already there. A pane whose processes cannot be read is not a shell."""
+    names = pane_foreground(herdr, pane)
+    return bool(names) and any(n in SHELLS for n in names) and not any(n in ("claude", "node") for n in names)
+
+
 def repair_tab(herdr: str, tab: str, sid: str) -> None:
-    """A tab left showing 'session exited' (opened before tabs followed their session): attach it again."""
+    """A tab left showing 'session exited' (opened before tabs followed their session): attach it again, but only
+    when the pane is at a shell: a Claude on screen that mentions 'session exited' in its chat is left alone."""
     panes = _tab_panes(herdr, tab)
     if VERBOSE:
         print(f"  tab {tab} ({sid}): panes {panes}")
@@ -590,9 +631,9 @@ def repair_tab(herdr: str, tab: str, sid: str) -> None:
         out = r.stdout
         if VERBOSE:
             print(f"    pane {pane} rc={r.returncode} read={out[-300:]!r} err={r.stderr[-200:]!r}")
-        if EXITED_RE.search(out):
-            subprocess.run([herdr, "pane", "run", pane, _attach_cmd(sid)], capture_output=True, text=True,
-                           timeout=30)
+        if EXITED_RE.search(out) and pane_is_shell(herdr, pane):
+            subprocess.run([herdr, "pane", "run", pane, _attach_cmd(sid, _is_finished(sid))], capture_output=True,
+                           text=True, timeout=30)
 
 
 def _herdr_run(herdr: str, *args: str) -> subprocess.CompletedProcess:
@@ -1093,8 +1134,7 @@ def start_main_sessions() -> None:
         panes = _tab_panes(herdr, tab)
         if slug in done or not panes:
             continue
-        screen = [l for l in _herdr_run(herdr, "pane", "read", panes[0], "--lines", "8").stdout.splitlines() if l.strip()]
-        if screen and re.search(r"[❯$%#>]\s*$", screen[-1]) and "claude" not in " ".join(screen).lower():
+        if pane_is_shell(herdr, panes[0]):
             _herdr_run(herdr, "pane", "run", panes[0], MAIN_CMD)
             print(f"{slug}: main session started")
         done.append(slug)
@@ -1226,7 +1266,7 @@ def ensure_window(herdr: str, ctx: dict, want: dict, space: str) -> None:
     made = _new_window(herdr, space, want, hold.get("dir") or (want["row"] or {}).get("cwd") or str(HOME))
     if made:
         _remember(want, space=space, tab=made[0], label=want["name"], attach=ATTACH_VERSION,
-                  dormant=True if _is_finished(want["sid"]) else None)
+                  dormant_ok=True if _is_finished(want["sid"]) else None)
         tabs[made[0]] = (want["name"], space)
         print(f"{want['name']}: window opened")
 
@@ -1331,16 +1371,20 @@ def sync_sidebar(restart_follower: bool = True) -> None:
         if sid not in known:
             _close_window(herdr, w.get("tab"))
             _forget(sid)
-    # a window attached to a session that has finished: swap its command for the dormant one, once (no host process)
+    # a window still attached to a session that has finished: close it and open a dormant one (a fresh shell, so
+    # nothing is ever typed into the Claude that is attached there; the viewer going away stops nothing)
     for want in wants:
         hold = _holder(want)
         tab = hold.get("tab")
-        if tab and tab in ctx["tabs"] and _is_finished(want["sid"]) and not hold.get("dormant"):
-            for pane in _tab_panes(herdr, tab)[:1]:
-                _herdr_run(herdr, "pane", "send-keys", pane, "ctrl+c")
-                _herdr_run(herdr, "pane", "run", pane, _attach_cmd(want["sid"], True))
-            _remember(want, dormant=True)
-            print(f"{want['name']}: finished, its window no longer holds a host process")
+        if tab and tab in ctx["tabs"] and _is_finished(want["sid"]) and not hold.get("dormant_ok"):
+            _close_window(herdr, tab)
+            ctx["tabs"].pop(tab, None)
+            space = hold.get("space") or (spaces.get(want["project"]) if want["project"] else parent)
+            made = _new_window(herdr, space, want, hold.get("dir") or str(HOME)) if space else None
+            if made:
+                _remember(want, tab=made[0], space=space, label=want["name"], dormant=None, dormant_ok=True)
+                ctx["tabs"][made[0]] = (want["name"], space)
+                print(f"{want['name']}: finished, its window no longer holds a host process")
     # a window of an earlier layout still showing 'session exited' is attached again; every crew window is checked
     for want in wants:
         tab = _holder(want).get("tab")
@@ -1554,7 +1598,15 @@ def doctor(as_json: bool) -> None:
                    "space_ok": bool(where) and where[1] == want_space,
                    "state_ok": actual == expected or (expected == "idle" and actual in ("done", "idle")),
                    "legacy_workspace": hold.get("crew_ws")}
-            chk["ok"] = chk["space_ok"] and chk["state_ok"] and not chk["legacy_workspace"]
+            if pane:  # a Claude in the foreground that is attached to another session than the window's
+                try:
+                    info = json.loads(_herdr_run(herdr, "pane", "process-info", pane).stdout)
+                except ValueError:
+                    info = {}
+                ids = set(re.findall(r"attach\s+([0-9a-f]{8})", " ".join(v for _, v in _strings(info))))
+                chk["attached_other"] = bool(ids) and w["sid"] not in ids
+            chk["ok"] = (chk["space_ok"] and chk["state_ok"] and not chk["legacy_workspace"]
+                         and not chk.get("attached_other"))
             checks.append(chk)
         checks.append({"check": "no `└` space is left", "left": [l for l in wss.values() if l.startswith(CHILD)],
                        "ok": not any(l.startswith(CHILD) for l in wss.values())})

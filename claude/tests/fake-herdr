@@ -10,7 +10,7 @@ move <pane> --new-tab --workspace W --label L` takes a pane to a new tab of W (a
 and the pane keeps its id and its process, as herdr's does; $FAKE_HERDR_MOVE_FAIL makes it fail). `agent list`
 reports every pane as a Claude agent unless $FAKE_HERDR_AGENTS (a JSON list of pane ids) says which are, with
 the `agent_status` that $FAKE_HERDR_STATUS ({pane: status}) gives, else `idle`. Report, release and focus
-calls are only logged.
+calls are only logged. `pane process-info` reports the shell, or the claude attach, that $FAKE_HERDR_PROCS says.
 """
 
 import json
@@ -115,6 +115,10 @@ elif args[:2] == ["pane", "move"]:
         tabs.pop(src, None)
     save()
     print(json.dumps({"result": {"tab": {"tab_id": tid}}}))
+elif args[:2] == ["pane", "process-info"]:  # $FAKE_HERDR_PROCS maps pane id -> "zsh" (default) or "claude:<session id>"
+    what = json.loads(os.environ.get("FAKE_HERDR_PROCS", "{}")).get(args[2], "zsh")
+    argv = ["claude", "attach", what.split(":")[1]] if what.startswith("claude") else [what]
+    print(json.dumps({"result": {"process_info": {"foreground": {"name": argv[0], "argv": argv, "pid": 4242}}}}))
 elif args[:2] == ["pane", "read"]:  # $FAKE_HERDR_SCREEN maps pane id -> text
     print(json.loads(os.environ.get("FAKE_HERDR_SCREEN", "{}")).get(args[2], ""))
 elif args[:2] == ["tab", "close"]:
