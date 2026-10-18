@@ -187,19 +187,19 @@ class Helper(unittest.TestCase):
         self.crew("outside", dir="/etc")
         self.assertEqual(self.run_stella("launch", "outside").returncode, 2)
 
-    def test_slot_cap_queues(self):
+    def test_there_is_no_cap_on_the_number_of_busy_crewmates(self):
         rows = [{"id": "aaaaaaaa", "name": "stella", "kind": "background", "state": "working",
                  "sessionId": "aaaaaaaa-0000-0000-0000-000000000000"}]
-        for i in range(6):
+        for i in range(10):
             sid = f"{i:08x}"
             self.crew(f"busy-{i}", id=sid, session=sid + "-x", state="working")
             rows.append({"id": sid, "name": f"busy-{i}", "kind": "background", "state": "working",
                          "sessionId": sid + "-x"})
         self.set_agents(rows)
-        self.crew("seventh")
-        p = self.run_stella("launch", "seventh")
-        self.assertEqual(p.returncode, 75, p.stderr)
-        self.assertEqual(self.rec("seventh")["state"], "queued")
+        self.crew("eleventh")
+        p = self.run_stella("launch", "eleventh")
+        self.assertEqual(p.returncode, 0, p.stderr)  # ten are busy and it still starts: only Opus weight, throttle and budget gate
+        self.assertEqual(self.rec("eleventh")["state"], "working")
 
     def test_opus_weight_cap_and_throttle_and_budget(self):
         rows = [{"id": "aaaaaaaa", "name": "stella", "kind": "background", "state": "working",
@@ -872,14 +872,14 @@ class Helper(unittest.TestCase):
         self.job("00000003", state="working")
         self.transcript("s3", "x\n" + "\u2501" * 40 + "\n\U0001F7E9 **ALL DONE** \u2014 nothing left for you.")
         self.job("00000004", state="blocked", needs="a decision on X")
-        self.crew("q", state="queued", queued_because="slot cap")
+        self.crew("q", state="queued", queued_because="Opus weight cap")
         self.crew("gone", state="landed")
         out = self.run_stella("crew").stdout
         self.assertRegex(out, r"w +working")
         self.assertRegex(out, r"b +blocked: rate limit")
         self.assertRegex(out, r"d +done")
         self.assertRegex(out, r"n +needs you: a decision on X")
-        self.assertRegex(out, r"q +queued: slot cap")
+        self.assertRegex(out, r"q +queued: Opus weight cap")
         self.assertNotIn("gone", out)
 
     def test_crew_watch_redraws_the_list_in_frames(self):

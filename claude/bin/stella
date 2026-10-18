@@ -49,7 +49,8 @@ A record is crew/<name>/record.json in Stella's home. Stella writes `repo`, `bra
 `id`, `session`, `dir` and `state`. `allow` lists the activities the hooks do not prompt for in that session
 (ACTIVITIES); Stella writes it only from Kohen's explicit words for the task, or a canon principle. The brief, crew/<name>/brief.md, is the crewmate's first prompt.
 
-Caps (W3-D25): at most SLOTS crewmates working or blocked, at most OPUS_UNITS of Opus weight working, no
+Caps (W3-D25, no cap on the number of crewmates or projects: Kohen, 2026-10-18): at most OPUS_UNITS of Opus weight
+working, no
 Opus-weighted launch while `throttle-until` is in the future, and no launch at all when `quota.json` says
 QUOTA_STOP of the day's budget is spent. Both files are written by stella-watch.
 """
@@ -72,7 +73,7 @@ TOKENS = Path(os.environ.get("CLAUDE_TOKEN_STATE", HOME / ".local/state/claude-t
 EXTENSION = HOME / ".claude/kc-extensions/stella.json"  # this machine's additions: start_roots, watches
 BIN = Path(__file__).resolve().parent
 FLAGS = ["--dangerously-skip-permissions"]
-SLOTS, OPUS_UNITS, QUOTA_STOP = 6, 4.0, 0.85
+OPUS_UNITS, QUOTA_STOP = 4.0, 0.85
 QUEUED = 75
 # This script runs outside the command sandbox, so it trusts nothing agents can write: an isolated
 # interpreter (-I above), a fixed PATH, no shell rc files, and git with hooks and fsmonitor disabled.
@@ -226,8 +227,6 @@ def over_cap(rec: dict) -> str | None:
             and live_state(r, rows) in ("working", "blocked")]
     working = [r for r in busy if live_state(r, rows) == "working"]
     weight = float(rec.get("weight") or 0)
-    if len(busy) >= SLOTS:
-        return f"slot cap: {len(busy)} of {SLOTS} crewmates are working or blocked"
     if weight and sum(float(r.get("weight") or 0) for r in working) + weight > OPUS_UNITS:
         return f"Opus weight cap: {OPUS_UNITS} units in use would be exceeded"
     until = read_json(STELLA_HOME / "throttle-until").get("until", 0)

@@ -13,7 +13,7 @@ What wakes Stella, per crewmate record in crew/<name>/record.json:
     (an ALL DONE from a team member without `then` is held until the rest of the team is done);
   - its PR (record `pr`) is merged, gets a failing check, gets changes requested, or a new review;
   - a steer (record `steers`) has not shown up in its transcript after 10 minutes;
-  - a queued launch while something finished, so a slot may have freed;
+  - a queued launch while something finished, so a cap (Opus weight, throttle, budget) may have freed;
   - a command or file watch changes: from ~/.claude/kc-extensions/stella.json, or a record's `watches`;
   - nothing for 8 hours ("heartbeat").
 A rate-limit error in a crewmate's transcript writes `throttle-until` (4 minutes) for the launch caps.
