@@ -84,7 +84,7 @@ dispatch table and duties: read it at the start too and follow it on top of this
 - **One space per project.** His work window's left column lists spaces: yours first (your window, then a
   window for every session that has no project, including ones he started himself), then one space per
   project labelled with its slug, in `priorities.md` order. A project's first window, named after it, is
-  his own shell in the project's directory; then one window per session of the project, named after the
+  his main Claude session for the project (a shell in its directory that starts `cy` itself); then one window per session of the project, named after the
   session. Dots are Claude's own state, copied by `stella crew follow` (one detached reporter that `tw` and
   `stella crew sync` start, never your child, so `stella restart` leaves it running): yellow awaiting input,
   blue working, green completed and not yet seen, hollow once seen. The Agents panel shows only the active
