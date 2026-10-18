@@ -80,6 +80,15 @@ class Hook(unittest.TestCase):
         out = self.run_hook("git -C ~/github/environment config core.hooksPath /dev/null", "/tmp")
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
 
+    def test_reading_the_hooks_path_passes(self):
+        for cmd in ("git -C ~/github/environment config core.hooksPath",
+                    "git -C ~/github/environment config --get core.hooksPath"):
+            self.assertIsNone(self.run_hook(cmd, "/tmp"))
+
+    def test_unsetting_the_hooks_path_is_denied(self):
+        out = self.run_hook("git -C ~/github/environment config --unset core.hooksPath", "/tmp")
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
     def test_plain_push_and_other_repos_pass(self):
         home = Path.home()
         self.assertIsNone(self.run_hook("git push origin HEAD", str(home / "github/environment")))

@@ -18,9 +18,28 @@ from pathlib import Path
 
 HOME = Path.home()
 PROTECTED = (HOME / "github/environment", HOME / "github/environment-wt")
-BYPASS = re.compile(r"git\b[^|;&\n]*\bpush\b[^|;&\n]*(--no-verify|\s-n\b)|hooksPath")
+SKIP_PUSH_HOOK = re.compile(r"git\b[^|;&\n]*\bpush\b[^|;&\n]*(--no-verify|\s-n\b)")
+HOOKS_C = re.compile(r"-c\s*core\.hookspath", re.I)
+GIT_CONFIG = re.compile(r"git\b[^|;&\n]*\bconfig\b([^|;&\n]*)", re.I)
 MESSAGE = ("Pushes from ~/github/environment run a leak check (githooks/pre-push). Do not bypass it: rewrite "
            "what it reports generically, amend, and push again.")
+
+
+def changes_hooks_path(cmd: str) -> bool:
+    """True for a command that sets or unsets the hooks path; reading it is fine."""
+    if HOOKS_C.search(cmd):
+        return True
+    for m in GIT_CONFIG.finditer(cmd):
+        args = m.group(1)
+        if "hookspath" not in args.lower():
+            continue
+        if "--unset" in args:
+            return True
+        words = [w for w in args.split() if not w.startswith("-")]
+        key = next(i for i, w in enumerate(words) if "hookspath" in w.lower())
+        if "--get" not in args and key + 1 < len(words):
+            return True
+    return False
 
 
 def touches_protected(cmd: str, cwd: str) -> bool:
@@ -30,7 +49,7 @@ def touches_protected(cmd: str, cwd: str) -> bool:
 
 def pretool(data: dict) -> None:
     cmd = (data.get("tool_input") or {}).get("command") or ""
-    if BYPASS.search(cmd) and touches_protected(cmd, data.get("cwd") or ""):
+    if (SKIP_PUSH_HOOK.search(cmd) or changes_hooks_path(cmd)) and touches_protected(cmd, data.get("cwd") or ""):
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                                    "permissionDecisionReason": MESSAGE}}))
 
