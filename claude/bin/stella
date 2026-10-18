@@ -22,6 +22,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  launch, adopt, rm, `tw` and `tok` run it, and Stella after a wake
     stella crew doctor [--json]  what herdr holds now (workspaces in order, tabs, panes, agents) next to what the
                                  crew records expect; read-only, for debugging the sidebar
+    stella crew doctor --spike [<session-id>]   the Workspace 4.0 spike in a throwaway herdr session `ws4-spike`
+                                 (never the default one); prints every raw reply and a verdict per question
     stella crew --unpane         close the crew-list pane an earlier version put in Stella's tab
     stella track-pr <url> [name] watch a PR with no session: a track record, so a merge, a failing check,
                                  requested changes or a new review wakes her (`untrack <name>` ends it)
@@ -1348,6 +1350,8 @@ def main(argv: list[str]) -> None:
         crew(bool(rest))
     elif cmd == "crew" and rest == ["sync"]:
         sync_sidebar()
+    elif cmd == "crew" and rest[:2] == ["doctor", "--spike"] and len(rest) <= 3 and (len(rest) == 2 or SHORT_ID.match(rest[2])):
+        os.execv(sys.executable, [sys.executable, "-I", str(BIN / "stella-spike"), *rest[2:]])
     elif cmd == "crew" and rest in (["doctor"], ["doctor", "--json"]):
         doctor(rest[-1] == "--json")
     elif cmd == "crew" and rest == ["--unpane"]:

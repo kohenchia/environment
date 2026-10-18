@@ -1,0 +1,201 @@
+#!/usr/bin/python3 -I
+"""stella-spike: the Workspace 4.0 spike, run by `stella crew doctor --spike` from Kohen's terminal (outside the
+command sandbox). It answers, in a throwaway herdr session (`ws4-spike`, never the default one):
+
+  1. does a `pane report-agent` state win over herdr's own screen detection of a `claude attach` pane?
+  2. does a space's icon follow its most urgent agent?
+  3. does `agent.view.set` with workspace_id = current_workspace_id accept, and is it listed back?
+  4. does `pane.move` into a window of another space keep the `claude attach` process (same pid)?
+  5. which `claude agents` call lists exactly what Claude's agent view counts?
+
+It prints every raw reply (so nothing depends on a guess about herdr's JSON) and a short verdict per question,
+writes the same to ~/.local/share/stella/spike-ws4.json, and removes the throwaway session at the end. It reads
+`claude agents` and attaches one viewer to a finished session; it starts, stops and restarts no session.
+
+    stella crew doctor --spike [<session-id>]   <session-id>: a finished or idle session to attach to
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+OUT = HOME / ".local/share/stella/spike-ws4.json"
+SESSION = "ws4-spike"
+SOURCE = "stella-spike"
+os.environ["PATH"] = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+REPORT: dict = {"session": SESSION, "steps": [], "verdicts": {}}
+
+
+def sh(*argv: str, env: dict | None = None, timeout: int = 30) -> subprocess.CompletedProcess:
+    return subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout, env={**os.environ, **(env or {})})
+
+
+def note(step: str, data) -> None:
+    REPORT["steps"].append({"step": step, "data": data})
+    shown = data if isinstance(data, str) else json.dumps(data, indent=1)
+    print(f"--- {step}\n{shown[-1500:]}")
+
+
+def verdict(question: str, answer: str) -> None:
+    REPORT["verdicts"][question] = answer
+    print(f"VERDICT {question}: {answer}")
+
+
+def rpc(path: str, method: str, params: dict) -> dict:
+    req = {"id": "spike", "method": method, "params": params}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+        c.settimeout(5)
+        c.connect(path)
+        c.sendall((json.dumps(req) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = c.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    return json.loads(buf.split(b"\n", 1)[0])
+
+
+def find(x, key: str):
+    """Every value stored under `key`, at any depth."""
+    if isinstance(x, dict):
+        for k, v in x.items():
+            if k == key:
+                yield v
+            yield from find(v, key)
+    elif isinstance(x, list):
+        for v in x:
+            yield from find(v, key)
+
+
+def main(sid: str | None) -> int:
+    herdr = sh("sh", "-c", "command -v herdr").stdout.strip()
+    if not herdr:
+        print("herdr is not installed")
+        return 1
+    # 1. a throwaway server of its own, detached
+    subprocess.Popen([herdr, "--session", SESSION, "server"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
+    sock = None
+    for _ in range(40):
+        p = sh(herdr, "session", "list", "--json")
+        try:
+            sock = next((s["socket_path"] for s in json.loads(p.stdout)["sessions"] if s.get("name") == SESSION), None)
+        except (ValueError, KeyError, TypeError):
+            sock = None
+        if sock and os.path.exists(sock):
+            break
+        time.sleep(0.25)
+    note("session list", p.stdout[-600:])
+    if not sock:
+        print(f"the {SESSION} server did not start; nothing else was touched")
+        return 1
+    env = {"HERDR_SOCKET_PATH": sock}
+    h = lambda *a: sh(herdr, *a, env=env)  # noqa: E731
+    ws0 = h("workspace", "list")
+    note("workspace list (must hold no workspace of the real session)", ws0.stdout[-600:])
+    if re.search(r'"label"\s*:\s*"(stella|work)"', ws0.stdout):
+        print("this is the real session's server, not the throwaway one: stopped before touching anything")
+        return 1
+    try:
+        run(herdr, sock, env, h, sid)
+    finally:
+        sh(herdr, "session", "stop", SESSION)
+        time.sleep(1)
+        sh(herdr, "session", "delete", SESSION)
+        OUT.parent.mkdir(parents=True, exist_ok=True)
+        OUT.write_text(json.dumps(REPORT, indent=1))
+        print(f"\nraw results: {OUT}")
+    return 0
+
+
+def run(herdr: str, sock: str, env: dict, h, sid: str | None) -> None:
+    # 5. which `claude agents` call matches Claude's agent view
+    for label, args in (("agents --json", ["agents", "--json"]), ("agents --json --all", ["agents", "--json", "--all"])):
+        p = sh("claude", *args)
+        try:
+            rows = json.loads(p.stdout)
+            counts: dict[str, int] = {}
+            for r in rows:
+                key = f"{r.get('kind')}/{r.get('state')}"
+                counts[key] = counts.get(key, 0) + 1
+            note(f"claude {label}: rows by kind/state", {"total": len(rows), "counts": counts})
+            if label == "agents --json --all" and sid is None:
+                sid = next((r["id"] for r in rows if r.get("state") == "done" and r.get("id")), None)
+        except ValueError:
+            note(f"claude {label}", p.stderr[-300:] or p.stdout[-300:])
+    verdict("5 which call lists Claude's view", "compare the counts above with the header of `claude agents` "
+            "(awaiting input / working / completed): the call whose counts match is the one to use")
+    if not sid:
+        print("no finished session to attach to; pass one: stella crew doctor --spike <session-id>")
+        return
+    note("attaching a viewer to the finished session", sid)
+    # two workspaces, each with a pane running `claude attach <sid>`
+    made = {}
+    for label in ("spike-a", "spike-b"):
+        r = h("workspace", "create", "--label", label, "--cwd", str(HOME), "--no-focus")
+        note(f"workspace create {label}", r.stdout[-700:])
+        made[label] = json.loads(r.stdout)["result"]
+    pane_a = next(find(made["spike-a"], "pane_id"))
+    ws_a = next(find(made["spike-a"]["workspace"], "workspace_id"))
+    ws_b = next(find(made["spike-b"]["workspace"], "workspace_id"))
+    tab_a = next(find(made["spike-a"]["tab"], "tab_id"))
+    h("pane", "run", pane_a, f"claude attach {sid}")
+    time.sleep(6)
+    note("agent list after attach (native detection)", h("agent", "list").stdout[-900:])
+
+    # 1. does a report win over the screen?
+    for state in ("blocked", "working", "idle"):
+        h("pane", "report-agent", pane_a, "--source", SOURCE, "--agent", "claude", "--state", state,
+          "--message", f"spike says {state}")
+        seen = []
+        for _ in range(8):
+            time.sleep(1)
+            out = h("agent", "list").stdout
+            seen.append([s for s in re.findall(r'"(?:agent_)?(?:status|state)"\s*:\s*"([a-z]+)"', out)])
+        note(f"reported {state}: states `agent list` showed each second for 8 s", seen)
+    verdict("1 report vs screen", "the states above: if the last reading before each change equals the reported state "
+            "for the whole 8 s, the report wins; if it falls back to idle within seconds, the screen wins "
+            "(then the window needs the wrapper, work item 2)")
+
+    # 2. does a space's icon follow its most urgent agent?
+    h("pane", "report-agent", pane_a, "--source", SOURCE, "--agent", "claude", "--state", "blocked", "--message", "x")
+    time.sleep(2)
+    note("workspace list while its only agent is blocked", h("workspace", "list").stdout[-900:])
+    snap = h("api", "snapshot")
+    note("api snapshot (workspace aggregate state)", snap.stdout[-1500:])
+    verdict("2 space icon follows its agent", "see the workspace entry in the snapshot: an aggregate state of "
+            "`blocked` for spike-a while spike-b has none means it does")
+
+    # 3. agent.view.set
+    reply = rpc(sock, "agent.view.set", {"source": SOURCE, "label": "spike",
+                                          "filter": {"field": "workspace_id", "op": "eq", "value": {"context": "current_workspace_id"}},
+                                          "sort": []})
+    note("agent.view.set (filter workspace_id eq current_workspace_id)", reply)
+    verdict("3 agent.view.set accepted", "ok" if "error" not in reply or reply.get("error") is None else f"refused: {reply['error']}")
+
+    # 4. pane move keeps the process
+    before = h("pane", "process-info", pane_a).stdout
+    reply = h("pane", "move", pane_a, "--new-tab", "--workspace", ws_b, "--tab-label", "moved", "--no-focus")
+    note("pane move into a new window of spike-b", (reply.stdout + reply.stderr)[-600:])
+    time.sleep(1)
+    after = h("pane", "process-info", pane_a).stdout
+    note("process-info before the move", before[-500:])
+    note("process-info after the move", after[-500:])
+    pids = lambda s: sorted(set(re.findall(r'"pid"\s*:\s*(\d+)', s)))  # noqa: E731
+    verdict("4 pane move keeps the attach process", "yes (same pids)" if pids(before) and pids(before) == pids(after)
+            else f"NO or unclear: before {pids(before)} after {pids(after)}; the fallback is open-new-window then close-old")
+    note("tabs of spike-b after the move", h("tab", "list", "--workspace", ws_b).stdout[-500:])
+    _ = ws_a, tab_a
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else None))
