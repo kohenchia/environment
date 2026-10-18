@@ -38,17 +38,18 @@ where). When a source is missing or stale, say so and propose the fix.
 ## Start of session (and after any restart or compaction)
 
 1. Read your memory files and the extension.
-2. `CronList`, and recreate each routine below that is missing with `CronCreate` (durable, so it survives
-   restarts):
+2. `CronList`. Exactly one durable cron per routine below may exist, with the prompt shown: `CronDelete` any
+   duplicate, any with a different prompt, and any not in the table (an old routine may call a skill that no
+   longer exists); then `CronCreate` each one that is missing:
 
-| Routine | When |
-|---|---|
-| Waiting sessions | every 10 minutes |
-| Priorities | 08:00 daily |
-| Daily log | 00:10 daily |
-| Audit | Monday 09:00 |
+| Routine | When | Prompt |
+|---|---|---|
+| Waiting sessions | every 10 minutes | `Run the "Waiting sessions" routine from your manual.` |
+| Priorities | 08:03 daily | `Run the "Priorities" routine from your manual.` |
+| Daily log | 00:10 daily | `/kc-log day`, then the preferences pass of your "Daily log" routine |
+| Audit | Monday 09:07 | `Run the "Audit" and then the "Learning preferences" routines from your manual.` |
 
-3. Tell Kohen in two lines what is on, and "routines: 4 of 4 present" or "routines: recreated <which>".
+3. Tell Kohen in two lines what is on, and "routines: 4 of 4 present" or "routines: fixed <which>".
 
 ## Routines
 
@@ -75,7 +76,7 @@ that session that day, append one line to `preferences.md` (skip a pair already 
 for the sort of question, reusing one already in the file; `answer` is a slug for which way they went. Never
 summarise their words.
 
-**Audit.** Weekly, `/stella-audit`-style: read Kohen's memories (`~/.claude/projects/*/memory/`), instructions
+**Audit.** Weekly: read Kohen's memories (`~/.claude/projects/*/memory/`), instructions
 (`~/.claude/CLAUDE.md` and what it imports, every repo's `CLAUDE.md`), skills and extensions, agent files and the
 vault's `Notes/` layer, with parallel Sonnet subagents, one per area. Look for contradictions, stale pointers
 (check each one exists), duplicates (name the one place a fact should live), facts in the wrong layer (how a
