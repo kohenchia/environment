@@ -460,7 +460,7 @@ class Helper(unittest.TestCase):
         self.addCleanup(lambda: os.kill(pid, 15) if _alive(pid) else None)
         self.assertTrue(_alive(pid), first.stdout + first.stderr)
         self.assertIn(f"({pid})", self.run_stella("crew", "follow", "--ensure").stdout)
-        self.assertEqual(int((self.sh / "follow.pid").read_text()), pid)
+        self.assertEqual(int((self.sh / "follow.pid").read_text().split()[0]), pid)
 
     def test_follow_ensure_replaces_a_stale_pidfile(self):
         self.with_window()
@@ -663,7 +663,7 @@ class Helper(unittest.TestCase):
         creates = self.herdr_calls("workspace", "create")
         self.assertEqual(len(creates), 2)
         self.assertIn("--no-focus", creates[0])
-        loops = sorted(r[3].split("claude attach ")[1].split(";")[0] for r in self.herdr_calls("pane", "run"))
+        loops = sorted(r[3].split("claude attach ")[1].split(";")[0] for r in self.herdr_calls("pane", "run") if r[3] != "cy")
         self.assertEqual(loops, ["00000001", "00000002", "00000003", "00000004"])
         self.run_stella("crew", "sync")  # a second run opens nothing new
         self.assertEqual(len(self.herdr_calls("workspace", "create")), 2)
@@ -708,7 +708,7 @@ class Helper(unittest.TestCase):
         self.assertEqual(self.space_tabs(), {"stella": ["stella"], "mlc": ["mlc", "built"]})
         self.assertNotIn("crew_ws", self.rec("built"))
         self.assertEqual(self.herdr_calls("pane", "move")[0][2:4], ["w10:t1:p1", "--new-tab"])
-        self.assertEqual(self.herdr_calls("pane", "run"), [])  # the same process: no new attach loop was typed
+        self.assertEqual([r for r in self.herdr_calls("pane", "run") if r[3] != "cy"], [])  # the same process: no new attach loop was typed
         self.assertEqual(self.herdr_calls("pane", "send-keys"), [])
         self.assertEqual([c for c in self.calls() if c[:1] != ["agents"]], [])  # no session was started, stopped or touched
         self.run_stella("crew", "sync")  # idempotent
@@ -734,7 +734,7 @@ class Helper(unittest.TestCase):
         self.run_stella("crew", "sync")
         self.assertEqual(self.space_tabs()["beta"], ["beta", "built"])
         self.assertEqual(self.space_tabs()["mlc"], ["mlc"])
-        self.assertEqual(len(self.herdr_calls("pane", "run")), 1)  # attached once, then moved
+        self.assertEqual(len([r for r in self.herdr_calls("pane", "run") if r[3] != "cy"]), 1)  # attached once, then moved
 
     def test_a_window_kohen_renamed_keeps_his_name(self):
         self.herdr_start()
@@ -1176,6 +1176,64 @@ class Helper(unittest.TestCase):
         self.assertNotEqual(self.run_stella("window", "close", "phase-10", "phase-10").returncode, 0)  # the first window
         d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
         self.assertTrue(next(c for c in d["checks"] if c.get("check") == "space phase-10")["ok"])
+
+    def test_a_projects_first_window_starts_the_main_claude_session_once(self):
+        self.herdr_start()
+        self.live("built")
+        self.crew("built", id="00000001", project="mlc")
+        self.run_stella("crew", "sync")
+        first = json.loads((self.sh / "view.json").read_text())["firsts"]["mlc"]
+        runs = [r for r in self.herdr_calls("pane", "run") if r[3] == "cy"]
+        self.assertEqual([r[2] for r in runs], [first + ":p1"])
+        self.run_stella("crew", "sync")
+        self.assertEqual(len([r for r in self.herdr_calls("pane", "run") if r[3] == "cy"]), 1)
+
+    def test_project_main_all_starts_claude_only_in_first_windows_that_sit_at_a_prompt(self):
+        self.herdr_start()
+        self.live("built", "other")
+        self.crew("built", id="00000001", project="mlc")
+        self.crew("other", id="00000002", project="beta")
+        self.run_stella("crew", "sync")
+        v = json.loads((self.sh / "view.json").read_text())
+        v["main_started"] = []  # spaces made before the first window ran Claude
+        (self.sh / "view.json").write_text(json.dumps(v))
+        self.herdr_log.unlink()
+        mlc, beta = v["firsts"]["mlc"] + ":p1", v["firsts"]["beta"] + ":p1"
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({mlc: "~/github on main\n❯ ", beta: "claude\nworking\n"})}
+        self.assertEqual(self.run_stella("project", "main", "--all").returncode, 0)
+        self.assertEqual([r[2] for r in self.herdr_calls("pane", "run")], [mlc])
+        self.run_stella("project", "main", "--all")
+        self.assertEqual(len(self.herdr_calls("pane", "run")), 1)  # once
+
+    def test_follow_reports_again_when_herdr_shows_the_pane_differently(self):
+        self.with_window()
+        self.job("00000001", state="blocked", needs="x")
+        env = dict(os.environ, HOME=str(self.home), STELLA_PATH=f"{self.bin}:/usr/bin:/bin",
+                   FAKE_CLAUDE_LOG=str(self.log), FAKE_CLAUDE_AGENTS=str(self.agents),
+                   FAKE_HERDR_LOG=str(self.herdr_log), FAKE_HERDR_TABS=str(self.herdr_tabs),
+                   FAKE_HERDR_STATUS=json.dumps({"w10:t1:p1": "idle"}),  # herdr dropped the report
+                   STELLA_FOLLOW_EVERY="0.2", STELLA_FOLLOW_CYCLES="4", STELLA_REFIX_EVERY="0", STELLA_NO_FOLLOWER="1")
+        subprocess.run(["python3", str(STELLA), "crew", "follow"], cwd=self.sh, env=env, capture_output=True, timeout=30)
+        self.assertEqual(len(self.herdr_calls("pane", "report-agent")), 4)  # every cycle, until herdr agrees
+        self.herdr_log.unlink()
+        env["FAKE_HERDR_STATUS"] = json.dumps({"w10:t1:p1": "blocked"})
+        subprocess.run(["python3", str(STELLA), "crew", "follow"], cwd=self.sh, env=env, capture_output=True, timeout=30)
+        self.assertEqual(len(self.herdr_calls("pane", "report-agent")), 1)  # it agrees: reported once
+
+    def test_ensure_replaces_a_reporter_that_runs_older_code(self):
+        self.with_window()
+        self.extra_env = {"STELLA_FOLLOW_EVERY": "0.1", "STELLA_NO_FOLLOWER": ""}
+        old = int(self.run_stella("crew", "follow", "--ensure").stdout.split("(")[1].split(")")[0])
+        self.addCleanup(lambda: os.kill(old, 15) if _alive(old) else None)
+        (self.sh / "follow.pid").write_text(f"{old} 0\n")  # as if started by an earlier version
+        new = int(self.run_stella("crew", "follow", "--ensure").stdout.split("(")[1].split(")")[0])
+        self.addCleanup(lambda: os.kill(new, 15) if _alive(new) else None)
+        self.assertNotEqual(new, old)
+        for _ in range(30):
+            if not _alive(old):
+                break
+            time.sleep(0.1)
+        self.assertFalse(_alive(old))
 
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)

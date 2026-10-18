@@ -16,6 +16,7 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  (was `stella project <name> <slug>`, still accepted for two weeks)
     stella project new <slug>|--ask      register a project and open its space (`--ask`: prompt for the name, the
                                  Cmd+Shift+N popup); `project rename <old> <new>`; `project close <slug>` closes the space
+    stella project main --all    start the main Claude session in the first window of each project that has none
     stella window new <project> [<name>] | rename <project> <a> <b> | close <project> <a>   windows of a space
     stella prefs scan [YYYY-MM-DD]   Kohen's answers to crewmates since a date (question and his words), one JSON line each
     stella prefs propose         patterns in preferences.md: 3 or more same answers to a kind of question, none against
@@ -725,6 +726,8 @@ def _retire_old_crew_workspace(herdr: str, wss: dict[str, str], names: set[str])
 FOLLOW_EVERY = float(os.environ.get("STELLA_FOLLOW_EVERY", "2"))  # seconds between two reads of the job states
 FOLLOW_SYNC = float(os.environ.get("STELLA_FOLLOW_SYNC", "30"))  # at most this often: sync, when the sessions changed
 VIEW_EVERY = float(os.environ.get("STELLA_VIEW_EVERY", "60"))  # the agent view is transient: set it again this often
+FOLLOW_VERSION = 2  # bump when the reporter changes: `crew sync` and `follow --ensure` replace one running an older version
+REFIX_EVERY = float(os.environ.get("STELLA_REFIX_EVERY", "10"))  # a pane herdr shows differently is reported again, at most this often
 FOLLOW_PID = STELLA_HOME / "follow.pid"
 FOLLOW_LOG = STELLA_HOME / "follow.log"
 VIEW_MARK = STELLA_HOME / "view-applied.json"  # when the reporter last set the agent view (doctor reads it)
@@ -829,6 +832,7 @@ def follow_once(herdr: str, last: dict, rows: dict[str, dict] | None = None) -> 
     calls = 0
     need_by_space: dict[str, int] = {}
     seen: set[str] = set()
+    shown = _agent_states(herdr)  # what herdr shows now: a report is dropped when the pane's process changes
     for w in session_windows(herdr, wss):
         state = dot_of(claude_state(w["sid"], rows))
         if state is None or not w["panes"]:
@@ -839,8 +843,10 @@ def follow_once(herdr: str, last: dict, rows: dict[str, dict] | None = None) -> 
         if state == "blocked":
             need_by_space[w["space"]] = need_by_space.get(w["space"], 0) + 1
         key = (state, text)
-        if last.get(pane) == key:
+        agrees = shown.get(pane) == state or (state == "idle" and shown.get(pane) in ("idle", "done"))
+        if last.get(pane) == key and (agrees or time.time() - last.get(("fix", pane), 0) < REFIX_EVERY):
             continue
+        last[("fix", pane)] = time.time()
         seq = str(time.time_ns() // 1000)
         _herdr_run(herdr, "pane", "report-agent", pane, "--source", REPORT_SOURCE, "--agent", "claude",
                    "--state", state, "--message", text or state, "--seq", seq)
@@ -881,20 +887,36 @@ def follower_pid() -> int | None:
     return pid if _alive(pid) else None
 
 
+def follower_version() -> int:
+    try:
+        return int(FOLLOW_PID.read_text().split()[1])
+    except (OSError, ValueError, IndexError):
+        return 0
+
+
 def ensure_follower() -> int | None:
     """Start the reporter when none runs. It is detached (a session of its own, no controlling terminal), so
     stopping Stella's process tree cannot stop it; running it again while one lives starts nothing."""
     pid = follower_pid()
-    if pid:
-        return pid
     herdr = _herdr()
     if not herdr or os.environ.get("STELLA_NO_FOLLOWER"):  # (the tests start none of their own accord)
-        return None
+        return pid
+    if pid and follower_version() == FOLLOW_VERSION:
+        return pid
+    if pid:  # it runs older code: replace it (only the reporter; no session is touched)
+        try:
+            os.kill(pid, 15)
+        except OSError:
+            pass
+        for _ in range(30):
+            if not _alive(pid):
+                break
+            time.sleep(0.1)
     STELLA_HOME.mkdir(parents=True, exist_ok=True)
     log = open(FOLLOW_LOG, "ab")
     p = subprocess.Popen([sys.executable, "-I", str(BIN / "stella"), "crew", "follow"], stdin=subprocess.DEVNULL,
                          stdout=log, stderr=log, start_new_session=True, cwd=str(HOME))
-    FOLLOW_PID.write_text(f"{p.pid}\n")
+    FOLLOW_PID.write_text(f"{p.pid} {FOLLOW_VERSION}\n")
     return p.pid
 
 
@@ -910,7 +932,7 @@ def follow_loop(once: bool = False) -> None:
         if mine and mine != os.getpid():
             print(f"the reporter already runs ({mine})")
             return
-        FOLLOW_PID.write_text(f"{os.getpid()}\n")
+        FOLLOW_PID.write_text(f"{os.getpid()} {FOLLOW_VERSION}\n")
     last: dict = {}
     t_view = t_sync = 0.0
     seen_sessions: frozenset | None = None
@@ -1056,6 +1078,29 @@ def _first_window(herdr: str, ws: str, slug: str) -> str | None:
     return next(iter(tabs), None)
 
 
+MAIN_CMD = "cy"  # the shell function that starts a Claude session on the personal token
+
+
+def start_main_sessions() -> None:
+    """Start the main Claude session in the first window of every project that has none yet: a window that is
+    still a shell at its prompt gets `cy` typed into it, once (`stella project main --all`)."""
+    herdr = _herdr()
+    if not herdr:
+        die("herdr is not installed", 1)
+    v = view_state()
+    done = v.setdefault("main_started", [])
+    for slug, tab in v["firsts"].items():
+        panes = _tab_panes(herdr, tab)
+        if slug in done or not panes:
+            continue
+        screen = [l for l in _herdr_run(herdr, "pane", "read", panes[0], "--lines", "8").stdout.splitlines() if l.strip()]
+        if screen and re.search(r"[❯$%#>]\s*$", screen[-1]) and "claude" not in " ".join(screen).lower():
+            _herdr_run(herdr, "pane", "run", panes[0], MAIN_CMD)
+            print(f"{slug}: main session started")
+        done.append(slug)
+    save_view_state(v)
+
+
 def ensure_space(herdr: str, ctx: dict, slug: str, wants: list[dict]) -> str | None:
     """The workspace of project `slug`: the one view.json names, else one Kohen made with that label, else a new
     one whose first window is a shell in the project's directory. A space Kohen closed stays closed until one of
@@ -1090,6 +1135,10 @@ def ensure_space(herdr: str, ctx: dict, slug: str, wants: list[dict]) -> str | N
         print(f"{slug}: could not open its space: {(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)
         return None
     _herdr_run(herdr, "tab", "rename", tab, slug)
+    pane = _herdr_pane(r.stdout)
+    if pane:  # the project's first window is its main Claude session, in the project's directory
+        _herdr_run(herdr, "pane", "run", pane, MAIN_CMD)
+        v.setdefault("main_started", []).append(slug)
     v["spaces"][slug] = ws
     v["firsts"][slug] = tab
     ctx["wss"][ws] = slug
@@ -2098,6 +2147,8 @@ def main(argv: list[str]) -> None:
     elif cmd == "project" and rest[:1] == ["rename"] and len(rest) == 3:
         rename_project(check_project(rest[1]), check_project(norm_name(rest[2])), source="verb")
         sync_quietly()
+    elif cmd == "project" and rest == ["main", "--all"]:
+        start_main_sessions()
     elif cmd == "project" and rest[:1] == ["close"] and len(rest) == 2:
         project_close(rest[1])
     elif cmd == "project" and len(rest) == 2:  # the old `project <crewmate> <slug>`, kept for two weeks
