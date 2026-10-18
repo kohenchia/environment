@@ -9,15 +9,25 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella agents [--all]        `claude agents --json`
     stella launch <name>         launch the crewmate whose brief and record Stella wrote in crew/<name>/
                                  (only from her own session); exit 75 and mark it queued when over a cap
-    stella adopt <name|id> [--team T]   record a session she did not launch (observation only)
-    stella adopt --resume <session-uuid> <name> [--team T]   bring back an unlisted session from its
-                                 transcript under <name>, then adopt it
+    stella adopt <name|id> [--team T] [--project P]   record a session she did not launch (observation only)
+    stella adopt --resume <session-uuid> <name> [--team T] [--project P]   bring back an unlisted session
+                                 from its transcript under <name>, then adopt it
+    stella project <name> <slug>|--none   put a crewmate (or adopted session) under a project, or take it out
+    stella projects              every project with its crew, their state and the decisions waiting in it
+                                 (the projects themselves are Stella's own file, projects.md)
+    stella crew [--watch]        the crew as a compact list: project, crewmate, state, its one-line need;
+                                 `--watch` redraws it every few seconds (the left pane of the work window)
+    stella crew --pane           put that live list in a left pane of Stella's herdr tab (once)
     stella track-pr <url> [name] watch a PR with no session: a track record, so a merge, a failing check,
                                  requested changes or a new review wakes her (`untrack <name>` ends it)
     stella allow <name> <activity>...   grant a session the activities Kohen allowed for its task (a crewmate's
                                  record or an adopted one's; `--none` clears them): the hooks then skip those prompts
-    stella view <name> | --all   open crewmates as terminal tabs (herdr; `--all` opens the missing ones and
-                                 closes the tabs of sessions that are gone), or print the attach command
+    stella view <name> | --all   open crewmates as terminal tabs (herdr), or print the attach command; only
+                                 when Kohen asks to talk to one. `--all` opens every live crewmate's tab
+    stella view --repair         re-attach the tabs that are open, close those of sessions that are gone;
+                                 opens nothing (what `tw` runs)
+    stella hide <name> | --all   close the herdr tabs of crewmates and adopted sessions (never any other tab);
+                                 the sessions keep running
     stella tab [<id>]            what a herdr tab runs: attach to the session (Stella's by default) and attach
                                  again whenever its process is restarted (`tok`, respawn), until it is gone
     stella stop <name> | respawn <name> [--model M] | logs <name>
@@ -26,7 +36,7 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella live-check [show|before|diff]   the tripwire (it needs the process table)
 
 A record is crew/<name>/record.json in Stella's home. Stella writes `repo`, `branch` (or `dir`), `skill`,
-`model`, `weight`, `mode` (ship|scout|local), `team`, `then` and `report` before launch; this script fills
+`model`, `weight`, `mode` (ship|scout|local), `team`, `project`, `then` and `report` before launch; this script fills
 `id`, `session`, `dir` and `state`. `allow` lists the activities the hooks do not prompt for in that session
 (ACTIVITIES); Stella writes it only from Kohen's explicit words for the task, or a canon principle. The brief, crew/<name>/brief.md, is the crewmate's first prompt.
 
@@ -64,6 +74,7 @@ TIMEOUT = 120
 
 ACTIVITIES = ("push", "security-boundary")  # what a record's `allow` can grant; the hooks read it
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,40}$")
+PROJECT = NAME  # a project slug: lowercase letters, digits and dashes
 REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
 MODEL = re.compile(r"^[a-z0-9][a-z0-9.\[\]-]{0,40}$")
@@ -141,6 +152,12 @@ def check_name(name: str) -> str:
     if not NAME.match(name):
         die(f"bad name {name!r} (lowercase letters, digits and dashes, at most 41)")
     return name
+
+
+def check_project(slug: str) -> str:
+    if not PROJECT.match(slug):
+        die(f"bad project {slug!r} (lowercase letters, digits and dashes, at most 41)")
+    return slug
 
 
 def record_path(name: str) -> Path:
@@ -271,6 +288,8 @@ def launch(name: str) -> None:
         die(f"{name} is adopted or tracked: it was not launched by Stella")
     if rec.get("pr"):
         check_pr(rec["pr"])
+    if rec.get("project"):
+        check_project(rec["project"])
     if rec.get("id") and any(a.get("id") == rec["id"] and a.get("state") in ("working", "blocked")
                              for a in agents()):
         die(f"{name} is already running ({rec['id']})")
@@ -307,7 +326,6 @@ def launch(name: str) -> None:
     rec.pop("queued_because", None)
     save(name, rec)
     print(f"launched {name} ({rec['id']}) in {d} on {model}")
-    view(name, quiet=True)
 
 
 ADOPT_PROMPT = ("Stella has adopted this session so Kohen can see it in the agents list while its work is open. "
@@ -315,7 +333,7 @@ ADOPT_PROMPT = ("Stella has adopted this session so Kohen can see it in the agen
 UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 
-def adopt_resume(session: str, name: str, team: str | None) -> None:
+def adopt_resume(session: str, name: str, team: str | None, project: str | None = None) -> None:
     """Bring back a session that is no longer in `claude agents` (removed or never backgrounded) from its
     transcript, under `name`, then adopt it. Observation only, like adopt."""
     if not UUID.match(session):
@@ -345,6 +363,7 @@ def adopt_resume(session: str, name: str, team: str | None) -> None:
     row = rows[-1]
     save(name, {"name": name, "id": row.get("id"), "session": row.get("sessionId"), "dir": str(cwd),
                 "adopted": True, "team": team, "weight": 0, "state": row.get("state"), "resumed_from": session,
+                **({"project": project} if project else {}),
                 "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     print(f"resumed {session[:8]} as {name} ({row.get('id')}) and adopted it (observation only)")
 
@@ -361,7 +380,7 @@ def allow(name: str, activities: list[str]) -> None:
     print(f"{name} may: {', '.join(rec['allow']) or 'nothing extra'}")
 
 
-def adopt(target: str, team: str | None) -> None:
+def adopt(target: str, team: str | None, project: str | None = None) -> None:
     rows = agents()
     if target == "stella":
         die("Stella does not adopt herself")
@@ -374,7 +393,7 @@ def adopt(target: str, team: str | None) -> None:
         die(f"{name} already has a record")
     save(name, {"name": name, "id": row.get("id"), "session": row.get("sessionId"), "dir": row.get("cwd"),
                 "adopted": True, "team": team, "weight": 0, "state": row.get("state"),
-                "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+                **({"project": project} if project else {}), "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     print(f"adopted {row.get('name') or row['id']} as {name} (observation only)")
 
 
@@ -543,9 +562,10 @@ def view(name: str, quiet: bool = False) -> None:
         print(f"{name}: claude attach {sid}")
 
 
-def view_all() -> None:
-    """A tab for every live crewmate that has none (adopted ones included), and no tab for a session that
-    has exited for good: its record is landed, or `claude agents --all` no longer lists it."""
+def view_all(open_missing: bool = True) -> None:
+    """A tab for every live crewmate that has none (adopted ones included; only when `open_missing`), the
+    tabs that are open re-attached, and no tab for a session that has exited for good: its record is landed,
+    or `claude agents --all` no longer lists it."""
     listed = agents(True)
     live = {a.get("id") for a in agents(False)} - {None}
     known = {a.get("id") for a in listed}
@@ -561,7 +581,8 @@ def view_all() -> None:
         if VERBOSE:
             print(f"{rec['name']}: sid={sid} live={sid in live} has_tab={has_tab} state={rec.get('state')}")
         if sid in live and not has_tab:
-            view(rec["name"])
+            if open_missing:
+                view(rec["name"])
         elif sid in live and has_tab and herdr:
             tab = rec.get("tab") if rec.get("tab") in tabs else next(t for t, n in tabs.items() if n == rec["name"])
             repair_tab(herdr, tab, sid)
@@ -574,6 +595,217 @@ def view_all() -> None:
         for tab, label in tabs.items():
             if label.lower() == "stella":
                 repair_tab(herdr, tab, me["id"])
+
+
+def hide(name: str | None) -> None:
+    """Close the herdr tabs of crewmates and adopted sessions (one, or all). Only a tab that a crew record
+    names (its `tab`, else a tab labelled with its name) is closed; Kohen's own tabs and Stella's stay."""
+    recs = [load(name)] if name else records()
+    closed = []
+    for rec in recs:
+        if rec.get("mode") == "track":
+            continue
+        if close_tab(rec):
+            closed.append(rec["name"])
+        if rec.get("tab"):
+            save(rec["name"], {k: v for k, v in load(rec["name"]).items() if k != "tab"})
+    print(f"hid {', '.join(closed)}" if closed else "no crew tabs open")
+
+
+# ------------------------------------------------------------------ projects and the crew list
+
+JOBS = HOME / ".claude/jobs"
+PROJECTS_DIR = HOME / ".claude/projects"
+STATUS_RULE = "━" * 40
+GLYPH = {"waiting": "◆", "blocked": "✖", "working": "●", "queued": "○", "done": "✓", "watching": "◇", "unknown": "?"}
+COLOR = {"waiting": "33", "blocked": "31", "working": "32", "queued": "90", "done": "90", "watching": "36", "unknown": "90"}
+RANK = {k: i for i, k in enumerate(("waiting", "blocked", "working", "queued", "done", "watching", "unknown"))}
+
+
+def _last_status_block(session: str) -> tuple[str | None, str]:
+    """(NEXT|DONE|None, the block) from the last assistant message of a session's transcript."""
+    hits = list(PROJECTS_DIR.glob(f"*/{session}.jsonl")) if session else []
+    if not hits:
+        return None, ""
+    with open(hits[0], "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - 200_000))
+        lines = f.read().decode("utf-8", "replace").splitlines()
+    for line in reversed(lines):
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if ev.get("type") != "assistant":
+            continue
+        c = (ev.get("message") or {}).get("content")
+        text = c if isinstance(c, str) else "\n".join(
+            b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+        if not text.strip():
+            continue
+        if STATUS_RULE not in text:
+            return None, ""
+        block = text.rsplit(STATUS_RULE, 1)[1].strip()
+        return ("NEXT" if "NEXT FOR YOU" in block else "DONE" if "ALL DONE" in block else None), block
+    return None, ""
+
+
+def crew_status(rec: dict) -> tuple[str, str]:
+    """(state, one-line need) of a record, from files only: waiting (on Kohen), blocked, working, queued,
+    done, watching (a track record) or unknown."""
+    if rec.get("mode") == "track":
+        return "watching", rec.get("pr") or ""
+    if rec.get("state") == "queued":
+        return "queued", rec.get("queued_because") or ""
+    job = read_json(JOBS / str(rec.get("id")) / "state.json")
+    need = job.get("needs") or ""
+    kind, block = _last_status_block(rec.get("session") or "")
+    if kind == "NEXT":
+        items = [re.sub(r"^\d+\.\s*", "", l.strip()) for l in block.splitlines() if re.match(r"\s*\d+\.", l)]
+        more = f" (+{len(items) - 1} more)" if len(items) > 1 else ""
+        return "waiting", (items[0] if items else need) + more
+    if job.get("state") == "blocked":
+        return ("waiting", need) if need else ("blocked", job.get("detail") or "")
+    if kind == "DONE" or job.get("state") == "done":
+        return "done", ""
+    return ("working" if job else "unknown"), ""
+
+
+def project_notes() -> dict[str, tuple[str, str]]:
+    """{slug: (title, status)} from Stella's projects.md: a section per project, `## <slug> — <title>`, with
+    a `- status: …` line. Stella writes the file; the helper only reads it."""
+    out: dict[str, tuple[str, str]] = {}
+    cur = None
+    try:
+        text = (STELLA_HOME / "projects.md").read_text()
+    except OSError:
+        return out
+    for line in text.splitlines():
+        m = re.match(r"^##\s+([a-z0-9][a-z0-9-]*)\s*(?:[—:-]+\s*(.*))?$", line)
+        if m:
+            cur = m.group(1)
+            out[cur] = (m.group(2) or "", "")
+        elif cur and (m := re.match(r"^[-*]\s*status:\s*(.*)$", line, re.I)):
+            out[cur] = (out[cur][0], m.group(1).strip())
+    return out
+
+
+def crew_rows() -> list[dict]:
+    rows = []
+    for rec in records():
+        if rec.get("state") == "landed":
+            continue
+        state, need = crew_status(rec)
+        rows.append({"name": rec.get("name"), "project": rec.get("project") or "", "state": state, "need": need})
+    return sorted(rows, key=lambda r: (RANK[r["state"]], r["name"]))
+
+
+def _clip(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: max(width - 1, 0)] + "…"
+
+
+def render_crew(rows: list[dict], width: int, color: bool, detail: bool = False) -> str:
+    """Rows grouped by project, a project with a decision waiting first. `detail` adds each project's title
+    and status from projects.md (the `projects` command); without it this is the compact left-pane list."""
+    notes = project_notes()
+    by: dict[str, list[dict]] = {}
+    for r in rows:
+        by.setdefault(r["project"], []).append(r)
+    if detail:
+        for slug in notes:
+            by.setdefault(slug, [])
+    order = sorted(by, key=lambda k: (k == "", min([RANK[r["state"]] for r in by[k]] or [9]), k))
+
+    def paint(code: str, text: str) -> str:
+        return f"\033[{code}m{text}\033[0m" if color else text
+
+    count = {s: sum(1 for r in rows if r["state"] == s) for s in RANK}
+    head = " · ".join(f"{count[s]} {l}" for s, l in (("waiting", "need you"), ("blocked", "blocked"),
+                                                       ("working", "working"), ("done", "done")) if count[s])
+    lines = [paint("1", "CREW") + ("  " + head if head else "  none")]
+    namew = max([len(r["name"]) for r in rows] + [8])
+    for slug in order:
+        title, status = notes.get(slug, ("", ""))
+        label = slug or "(no project)"
+        lines.append("")
+        lines.append(paint("1", _clip(label + (f" — {title}" if detail and title else ""), width)))
+        if detail and status:
+            lines.append("  " + _clip("status: " + status, width - 2))
+        for r in by[slug]:
+            word = {"waiting": "needs you"}.get(r["state"], r["state"])
+            left = f"  {GLYPH[r['state']]} {r['name']:<{namew}} "
+            tail = f"{word}" + (f": {r['need']}" if r["need"] else "")
+            lines.append(paint(COLOR[r["state"]], left) + _clip(tail, max(width - len(left), 8)))
+        if detail and not by[slug]:
+            lines.append("  no crew")
+        waiting = [r for r in by[slug] if r["state"] in ("waiting", "blocked")]
+        if detail and waiting:
+            lines.append(paint("33", f"  decisions waiting: {len(waiting)}"))
+    return "\n".join(lines)
+
+
+def crew(watch: bool) -> None:
+    import shutil
+    if not watch:
+        print(render_crew(crew_rows(), shutil.get_terminal_size((60, 20)).columns, sys.stdout.isatty()))
+        return
+    every = float(os.environ.get("STELLA_CREW_EVERY", "4"))
+    frames = int(os.environ.get("STELLA_CREW_FRAMES", "0"))  # 0: until interrupted (the tests set a count)
+    n = 0
+    try:
+        while True:
+            width = shutil.get_terminal_size((40, 20)).columns
+            print("\033[H\033[J" + render_crew(crew_rows(), width, True), flush=True)
+            n += 1
+            if frames and n >= frames:
+                return
+            time.sleep(every)
+    except KeyboardInterrupt:
+        return
+
+
+def projects_report() -> None:
+    import shutil
+    print(render_crew(crew_rows(), shutil.get_terminal_size((100, 20)).columns, sys.stdout.isatty(), detail=True))
+
+
+def set_project(name: str, slug: str) -> None:
+    rec = load(name)
+    if slug == "--none":
+        rec.pop("project", None)
+    else:
+        rec["project"] = check_project(slug)
+    save(name, rec)
+    print(f"{name}: project {rec.get('project') or 'none'}")
+
+
+def crew_pane() -> None:
+    """Put the live crew list in a pane on the left of Stella's herdr tab, once: split her pane, run
+    `stella crew --watch` in the new one and swap them so the list sits on the left."""
+    herdr = _herdr()
+    if not herdr:
+        die("herdr is not installed", 1)
+    tabs = _herdr_tabs(herdr)
+    tab = next((t for t, label in tabs.items() if label.lower() == "stella"), None)
+    if not tab:
+        die("no herdr tab labelled Stella", 1)
+    panes = _tab_panes(herdr, tab)
+    mark = STELLA_HOME / "crew-pane"
+    if mark.exists() and mark.read_text().strip() in panes:
+        print("the crew list is already in Stella's tab")
+        return
+    if not panes:
+        die("Stella's tab has no pane", 1)
+    r = subprocess.run([herdr, "pane", "split", panes[0], "--direction", "right", "--ratio", "0.72", "--no-focus"],
+                       capture_output=True, text=True, timeout=30)
+    new = _herdr_pane(r.stdout)
+    if r.returncode != 0 or not new:
+        die(f"could not split Stella's pane: {(r.stderr or r.stdout).strip()[-200:]}", 1)
+    subprocess.run([herdr, "pane", "run", new, f"{BIN / 'stella'} crew --watch"], capture_output=True, text=True, timeout=30)
+    subprocess.run([herdr, "pane", "swap", "--source-pane", new, "--target-pane", panes[0]],
+                   capture_output=True, text=True, timeout=30)
+    mark.write_text(new + "\n")
+    print("the crew list is in Stella's tab")
 
 
 def lifecycle(cmd: str, name: str, model: str | None = None) -> None:
@@ -695,6 +927,17 @@ def rm(name: str) -> None:
 
 # ------------------------------------------------------------------ main
 
+def adopt_options(rest: list[str]) -> dict[str, str]:
+    """`--team T` and `--project P` after an adopt target, each at most once."""
+    out: dict[str, str] = {}
+    while rest:
+        if len(rest) < 2 or rest[0] not in ("--team", "--project") or rest[0][2:] in out:
+            die("usage: stella adopt <name|id> [--team T] [--project P]")
+        out[rest[0][2:]] = (check_name if rest[0] == "--team" else check_project)(rest[1])
+        rest = rest[2:]
+    return out
+
+
 def main(argv: list[str]) -> None:
     cmd, rest = (argv[1] if len(argv) > 1 else "open"), argv[2:]
     if cmd == "open":
@@ -714,14 +957,29 @@ def main(argv: list[str]) -> None:
         print(json.dumps(agents(bool(rest)), indent=1))
     elif cmd == "launch" and len(rest) == 1:
         launch(rest[0])
-    elif cmd == "adopt" and rest[:1] == ["--resume"] and len(rest) in (3, 5) and (len(rest) == 3 or rest[3] == "--team"):
-        adopt_resume(rest[1], check_name(rest[2]), check_name(rest[4]) if len(rest) == 5 else None)
-    elif cmd == "adopt" and len(rest) in (1, 3) and (len(rest) == 1 or rest[1] == "--team"):
-        team = check_name(rest[2]) if len(rest) == 3 else None
+    elif cmd == "adopt" and rest[:1] == ["--resume"] and len(rest) >= 3:
+        opts = adopt_options(rest[3:])
+        adopt_resume(rest[1], check_name(rest[2]), opts.get("team"), opts.get("project"))
+    elif cmd == "adopt" and len(rest) >= 1:
+        opts = adopt_options(rest[1:])
         target = rest[0]
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}", target):
             die(f"bad session name or id {target!r}")
-        adopt(target, team)
+        adopt(target, opts.get("team"), opts.get("project"))
+    elif cmd == "project" and len(rest) == 2:
+        set_project(check_name(rest[0]), rest[1])
+    elif cmd == "projects" and not rest:
+        projects_report()
+    elif cmd == "crew" and rest in ([], ["--watch"]):
+        crew(bool(rest))
+    elif cmd == "crew" and rest == ["--pane"]:
+        crew_pane()
+    elif cmd == "hide" and rest == ["--all"]:
+        hide(None)
+    elif cmd == "hide" and len(rest) == 1:
+        hide(check_name(rest[0]))
+    elif cmd == "view" and rest == ["--repair"]:
+        view_all(open_missing=False)
     elif cmd == "allow" and len(rest) >= 2:
         allow(check_name(rest[0]), rest[1:])
     elif cmd == "track-pr" and len(rest) in (1, 2):
@@ -747,7 +1005,7 @@ def main(argv: list[str]) -> None:
     elif cmd in ("-h", "--help", "help"):
         print(__doc__.split("\n\n")[1])
     else:
-        die("usage: stella [open|start|restart|id|agents|launch|adopt|allow|track-pr|untrack|view|tab|stop|respawn|logs|rm|live-check] ...")
+        die("usage: stella [open|start|restart|id|agents|launch|adopt|project|projects|crew|allow|track-pr|untrack|view|hide|tab|stop|respawn|logs|rm|live-check] ...")
 
 
 if __name__ == "__main__":

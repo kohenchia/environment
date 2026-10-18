@@ -461,6 +461,155 @@ class Helper(unittest.TestCase):
         self.assertEqual([r[2] for r in runs], ["w4:t1:p1"])
         self.assertTrue(runs[0][3].endswith("stella tab aaaaaaaa"))
 
+    # -------------------------------------------------------------- projects, no tabs, the crew list
+
+    def job(self, sid, **state):
+        d = self.home / ".claude/jobs" / sid
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps(state))
+
+    def transcript(self, session, text):
+        d = self.home / ".claude/projects/x"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{session}.jsonl").write_text(json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "text", "text": text}]}}) + "\n")
+
+    def test_launch_opens_no_tab_and_keeps_the_project_of_the_record(self):
+        self.with_herdr()
+        self.crew("fix-flake", project="benchmark-poem")
+        self.assertEqual(self.run_stella("launch", "fix-flake").returncode, 0)
+        self.assertEqual(self.tabs(), {})
+        self.assertEqual(self.rec("fix-flake")["project"], "benchmark-poem")
+
+    def test_launch_refuses_a_bad_project_slug(self):
+        self.crew("fix-flake", project="Bad Slug")
+        self.assertNotEqual(self.run_stella("launch", "fix-flake").returncode, 0)
+
+    def test_adopt_takes_a_project_and_validates_it(self):
+        self.live("mine")
+        self.assertEqual(self.run_stella("adopt", "mine", "--project", "mlc", "--team", "t1").returncode, 0)
+        self.assertEqual((self.rec("mine")["project"], self.rec("mine")["team"]), ("mlc", "t1"))
+        self.live("other")
+        self.assertNotEqual(self.run_stella("adopt", "other", "--project", "Bad_Slug").returncode, 0)
+        self.assertFalse((self.sh / "crew/other/record.json").exists())
+
+    def test_adopt_resume_takes_a_project(self):
+        session = "12345678-1234-1234-1234-123456789abc"
+        tr = self.home / ".claude/projects/x"
+        tr.mkdir(parents=True)
+        (tr / f"{session}.jsonl").write_text(json.dumps({"cwd": str(self.work)}) + "\n")
+        p = self.run_stella("adopt", "--resume", session, "old-one", "--project", "mlc")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.rec("old-one")["project"], "mlc")
+
+    def test_project_sets_and_clears_the_project_of_a_record(self):
+        self.crew("fix-flake")
+        self.assertEqual(self.run_stella("project", "fix-flake", "mlc").returncode, 0)
+        self.assertEqual(self.rec("fix-flake")["project"], "mlc")
+        self.assertNotEqual(self.run_stella("project", "fix-flake", "No Good").returncode, 0)
+        self.assertEqual(self.run_stella("project", "fix-flake", "--none").returncode, 0)
+        self.assertNotIn("project", self.rec("fix-flake"))
+
+    def test_projects_lists_each_project_with_its_crew_and_the_decisions_waiting(self):
+        (self.sh / "projects.md").write_text(
+            "# Projects\n\n## mlc \u2014 Billing revamp\n- status: in review\n\n## empty-one \u2014 Not started\n")
+        self.crew("builder", id="00000001", session="s1", project="mlc")
+        self.crew("asker", id="00000002", session="s2", project="mlc")
+        self.crew("loose", id="00000003", session="s3")
+        self.job("00000001", state="working")
+        self.job("00000002", state="working")
+        self.job("00000003", state="working")
+        self.transcript("s2", "text\n" + "\u2501" * 40 + "\n\U0001F7E7 **NEXT FOR YOU** (2)\n1. Pick the schema\n2. Approve the PR")
+        p = self.run_stella("projects")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        out = p.stdout
+        self.assertIn("mlc \u2014 Billing revamp", out)
+        self.assertIn("status: in review", out)
+        self.assertIn("asker", out)
+        self.assertIn("needs you: Pick the schema (+1 more)", out)
+        self.assertIn("decisions waiting: 1", out)
+        self.assertIn("builder", out)
+        self.assertIn("working", out)
+        self.assertIn("empty-one", out)
+        self.assertIn("no crew", out)
+        self.assertIn("(no project)", out)
+        self.assertLess(out.index("asker"), out.index("builder"))  # the one that needs Kohen first
+
+    def test_crew_states(self):
+        for name, i in (("w", 1), ("b", 2), ("d", 3), ("n", 4)):
+            self.crew(name, id=f"{i:08x}", session=f"s{i}")
+        self.job("00000001", state="working")
+        self.job("00000002", state="blocked", detail="rate limit")
+        self.job("00000003", state="working")
+        self.transcript("s3", "x\n" + "\u2501" * 40 + "\n\U0001F7E9 **ALL DONE** \u2014 nothing left for you.")
+        self.job("00000004", state="blocked", needs="a decision on X")
+        self.crew("q", state="queued", queued_because="slot cap")
+        self.crew("gone", state="landed")
+        out = self.run_stella("crew").stdout
+        self.assertRegex(out, r"w +working")
+        self.assertRegex(out, r"b +blocked: rate limit")
+        self.assertRegex(out, r"d +done")
+        self.assertRegex(out, r"n +needs you: a decision on X")
+        self.assertRegex(out, r"q +queued: slot cap")
+        self.assertNotIn("gone", out)
+
+    def test_crew_watch_redraws_the_list_in_frames(self):
+        self.crew("w", id="00000001", session="s1")
+        self.job("00000001", state="working")
+        self.extra_env = {"STELLA_CREW_EVERY": "0.05", "STELLA_CREW_FRAMES": "2"}
+        out = self.run_stella("crew", "--watch").stdout
+        self.assertEqual(out.count("CREW"), 2)
+        self.assertEqual(out.count("\033[H\033[J"), 2)
+        self.assertIn("w", out)
+
+    def test_crew_pane_splits_stellas_tab_once_and_puts_the_list_on_the_left(self):
+        self.with_herdr()
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "Stella", "w1:t2": "mine"}))
+        self.assertEqual(self.run_stella("crew", "--pane").returncode, 0)
+        calls = [json.loads(l) for l in self.herdr_log.read_text().splitlines()]
+        split = [c for c in calls if c[:2] == ["pane", "split"]]
+        self.assertEqual(split[0][2], "w1:t1:p1")
+        run = [c for c in calls if c[:2] == ["pane", "run"]][0]
+        self.assertTrue(run[3].endswith("stella crew --watch"))
+        swap = [c for c in calls if c[:2] == ["pane", "swap"]][0]
+        self.assertIn("w1:t1:p1", swap)
+        self.assertIn("already", self.run_stella("crew", "--pane").stdout)
+        self.assertEqual(len([c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "split"]]), 1)
+
+    def test_hide_closes_only_the_tabs_of_crew_records_and_keeps_the_sessions(self):
+        self.with_herdr()
+        self.live("built", "adopted-one")
+        self.crew("built", id="00000001", tab="w1:t2")
+        self.crew("adopted-one", id="00000002", adopted=True)
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "Stella", "w1:t2": "built", "w1:t3": "adopted-one",
+                                               "w1:t4": "kohens-own-shell"}))
+        self.assertEqual(self.run_stella("hide", "built").returncode, 0)
+        self.assertEqual(sorted(self.tabs().values()), ["Stella", "adopted-one", "kohens-own-shell"])
+        self.assertNotIn("tab", self.rec("built"))
+        self.assertEqual(self.run_stella("hide", "--all").returncode, 0)
+        self.assertEqual(sorted(self.tabs().values()), ["Stella", "kohens-own-shell"])
+        self.assertFalse([c for c in self.calls() if c[:1] in (["stop"], ["rm"])])  # the sessions are untouched
+
+    def test_view_repair_attaches_again_but_opens_no_tab(self):
+        self.with_herdr()
+        self.live("exited-one", "no-tab-one")
+        self.crew("exited-one", id="00000001")
+        self.crew("no-tab-one", id="00000002")
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "exited-one"}))
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w1:t1:p1": "Session 00000001 has exited."})}
+        self.assertEqual(self.run_stella("view", "--repair").returncode, 0)
+        runs = [c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "run"]]
+        self.assertEqual([r[2] for r in runs], ["w1:t1:p1"])
+        self.assertEqual(list(self.tabs().values()), ["exited-one"])
+
+    def test_view_of_one_opens_a_tab_only_when_asked(self):
+        self.with_herdr()
+        self.live("built")
+        self.crew("built", id="00000001")
+        self.assertEqual(self.tabs(), {})
+        self.assertEqual(self.run_stella("view", "built").returncode, 0)
+        self.assertEqual(list(self.tabs().values()), ["built"])
+
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)
         self.assertEqual(self.run_stella("frobnicate").returncode, 2)

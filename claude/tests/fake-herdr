@@ -20,8 +20,19 @@ if args[:2] == ["tab", "create"]:
     print(json.dumps({"result": {"tab": {"tab_id": tid, "label": tabs[tid]}, "root_pane": {"pane_id": tid + ":p1"}}}))
 elif args[:2] == ["tab", "list"]:
     print(json.dumps({"result": {"tabs": [{"tab_id": t, "label": label} for t, label in tabs.items()]}}))
-elif args[:2] == ["pane", "list"]:  # one pane per tab, w1:t3:p1 in w1:t3
-    print(json.dumps({"result": {"panes": [{"pane_id": t + ":p1", "tab_id": t} for t in tabs]}}))
+elif args[:2] == ["pane", "split"]:  # a new pane next to args[2], kept in $FAKE_HERDR_TABS.panes
+    extra = path + ".panes"
+    more = json.load(open(extra)) if os.path.exists(extra) else {}
+    parent = args[2]
+    new = f"{parent}:s{len(more) + 1}"
+    more[new] = parent.rsplit(":", 1)[0]
+    json.dump(more, open(extra, "w"))
+    print(json.dumps({"result": {"pane": {"pane_id": new, "tab_id": more[new]}}}))
+elif args[:2] == ["pane", "list"]:  # one pane per tab, w1:t3:p1 in w1:t3, and the split ones
+    extra = path + ".panes"
+    more = json.load(open(extra)) if os.path.exists(extra) else {}
+    panes = [{"pane_id": t + ":p1", "tab_id": t} for t in tabs] + [{"pane_id": p, "tab_id": t} for p, t in more.items()]
+    print(json.dumps({"result": {"panes": panes}}))
 elif args[:2] == ["pane", "read"]:  # $FAKE_HERDR_SCREEN maps pane id -> text
     print(json.loads(os.environ.get("FAKE_HERDR_SCREEN", "{}")).get(args[2], ""))
 elif args[:2] == ["tab", "close"]:
