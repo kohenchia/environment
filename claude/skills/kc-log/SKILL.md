@@ -102,6 +102,14 @@ session's work for that day, not just this one:
    Work only started or discussed waits for the day it finishes.
 4. Follow every rule above; this run is unattended, so ask nothing. Derived content from
    chat tools keeps its data-policy tags.
+5. **Kohen's answers** (Stella's run only). Run `stella prefs scan <the day, YYYY-MM-DD>` (the helper, alone on
+   the command line): each line is a question a crewmate left for him (its NEXT FOR YOU items) and his words in
+   its window. For each, append one line to `~/.local/share/stella/preferences.md` (create it with a
+   `# Preferences` heading when missing), skipping a pair already there (same date, crewmate and answer text):
+   `- <date> | <crewmate> | kind: <kind> | answer: <answer> | Q: <the question, one line> | A: <his words, verbatim, one line>`.
+   `kind` is a short slug for the *kind* of question (`squash-merge`, `open-pr-as-draft`, `scope-of-a-fix`), reusing
+   a kind already in the file when the question is the same sort; `answer` is a slug for which way he went
+   (`yes`, `no`, `option-a`). Never summarise his words.
 
 ## Finish
 

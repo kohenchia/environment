@@ -1052,6 +1052,51 @@ class Helper(unittest.TestCase):
         mlc = [w for w, n in self.workspaces().items() if n == "mlc"][0]
         self.assertEqual([(g["workspace_id"], g["insert_index"]) for g in got], [("w1", 0), (mlc, 1)])
 
+    # -------------------------------------------------------------- the preferences loop
+
+    def pref_lines(self, *rows):
+        (self.sh / "preferences.md").write_text("# Preferences\n\n" + "\n".join(
+            f"- {d} | {who} | kind: {kind} | answer: {ans} | Q: {q} | A: {a}" for d, who, kind, ans, q, a in rows) + "\n")
+
+    def test_prefs_propose_drafts_a_principle_from_three_matching_answers_and_only_then(self):
+        three = [("2026-10-01", "a-1", "squash-merge", "yes", "squash?", "yes, always"),
+                 ("2026-10-05", "b-2", "squash-merge", "yes", "squash this one?", "yes"),
+                 ("2026-10-09", "c-3", "squash-merge", "yes", "squash or merge?", "squash")]
+        self.pref_lines(*three)
+        out = self.run_stella("prefs", "propose").stdout
+        self.assertIn("J-NN (proposed): squash-merge", out)
+        self.assertIn("3 times, none against", out)
+        self.assertIn("- 2026-10-05 b-2: squash this one? → \"yes\"", out)  # each date with his words
+        self.assertEqual(out.count("(proposed)"), 1)
+        self.pref_lines(*three[:2])  # two answers are an accident
+        self.assertIn("no pattern yet: squash-merge (2)", self.run_stella("prefs", "propose").stdout)
+        self.assertNotIn("(proposed)", self.run_stella("prefs", "propose").stdout)
+        self.pref_lines(*three, ("2026-10-12", "d-4", "squash-merge", "no", "squash?", "no, merge it"))  # one against
+        out = self.run_stella("prefs", "propose").stdout
+        self.assertNotIn("(proposed)", out)
+        self.assertIn("mixed", out)
+
+    def test_prefs_propose_with_nothing_recorded_says_so(self):
+        self.assertIn("no answers recorded", self.run_stella("prefs", "propose").stdout)
+
+    def test_prefs_scan_pairs_a_next_for_you_with_the_message_that_followed(self):
+        self.crew("built", id="00000001", session="s-built")
+        d = self.home / ".claude/projects/p"
+        d.mkdir(parents=True)
+        rule = "━" * 40
+        ev = [{"type": "user", "timestamp": "2026-10-01T10:00:00Z", "message": {"content": "go"}},
+              {"type": "assistant", "timestamp": "2026-10-01T10:05:00Z", "message": {"content": [
+                  {"type": "text", "text": f"done\n{rule}\n🟧 **NEXT FOR YOU** (1)\n1. Squash it?"}]}},
+              {"type": "user", "timestamp": "2026-10-02T09:00:00Z", "message": {"content": [{"type": "tool_result", "content": "x"}]}},
+              {"type": "user", "timestamp": "2026-10-02T09:01:00Z", "message": {"content": "yes, squash"}},
+              {"type": "assistant", "timestamp": "2026-10-02T09:02:00Z", "message": {"content": [{"type": "text", "text": "ok"}]}},
+              {"type": "user", "timestamp": "2026-10-02T09:03:00Z", "message": {"content": "thanks"}}]
+        (d / "s-built.jsonl").write_text("\n".join(json.dumps(e) for e in ev) + "\n")
+        rows = [json.loads(l) for l in self.run_stella("prefs", "scan").stdout.splitlines()]
+        self.assertEqual(rows, [{"date": "2026-10-02", "crewmate": "built", "question": rows[0]["question"], "answer": "yes, squash"}])
+        self.assertIn("Squash it?", rows[0]["question"])
+        self.assertEqual(self.run_stella("prefs", "scan", "2026-10-03").stdout, "")
+
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)
         self.assertEqual(self.run_stella("frobnicate").returncode, 2)

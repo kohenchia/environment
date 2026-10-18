@@ -35,6 +35,17 @@ Spawn parallel Sonnet subagents, one per area, each returning findings with file
 - **Gaps**: a correction Kohen made more than once that no source records.
 - **Bloat**: instructions so long they will not be followed; propose the cut.
 
+## Kohen's preferences
+
+Weekly, after the areas above: run `stella prefs propose` (the helper, alone on the command line). It groups
+`preferences.md` (his answers, appended nightly by `/kc-log day`) by kind of question, and prints a draft
+`J-NN (proposed)` with dated evidence for each kind with **3 or more** answers, all the same way and none against.
+For each, write the principle (the claim, why, the evidence with each date and his words) and put it to Kohen as
+**one item** in your status block. A proposed principle is never used to answer for him; only his yes moves it into
+`canon.md` as an accepted principle. An accepted principle is never rewritten or deleted without his say-so: a later
+answer against it reopens it as a question for him, not an edit. Two answers, or any answer against, are no pattern:
+propose nothing.
+
 ## Report
 
 Most important first, one line each: what, where, the fix. Then the mechanical fixes applied. Then a

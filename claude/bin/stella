@@ -17,6 +17,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella project new <slug>|--ask      register a project and open its space (`--ask`: prompt for the name, the
                                  Cmd+Shift+N popup); `project rename <old> <new>`; `project close <slug>` closes the space
     stella window new <project> [<name>] | rename <project> <a> <b> | close <project> <a>   windows of a space
+    stella prefs scan [YYYY-MM-DD]   Kohen's answers to crewmates since a date (question and his words), one JSON line each
+    stella prefs propose         patterns in preferences.md: 3 or more same answers to a kind of question, none against
     stella pane rename <project> <window> <pane-number> <new name>
     stella projects              every project with its crew, their state and the decisions waiting in it
                                  (the projects themselves are Stella's own file, projects.md)
@@ -1951,6 +1953,67 @@ def pane_rename(slug: str, window: str, number: int, new: str) -> None:
     print(f"{slug}/{window}: pane {number} is now {new}")
 
 
+# ------------------------------------------------------------------ Kohen's preferences (the learning loop)
+
+PREFS = STELLA_HOME / "preferences.md"
+PREF_LINE = re.compile(r"^- (\d{4}-\d\d-\d\d) \| ([a-z0-9-]+) \| kind: ([a-z0-9-]+) \| answer: ([a-z0-9-]+) \| "
+                       r"Q: (.*?) \| A: (.*)$")
+PREF_MIN = 3  # answers to the same kind of question, all the same way, before a principle is proposed
+
+
+def prefs_scan(since: str) -> None:
+    """Every answer Kohen gave a crewmate in its window since `since` (YYYY-MM-DD), one JSON line each: the
+    NEXT FOR YOU items of the session's last status block and the message of his that followed it, verbatim.
+    The nightly log reads these, tags each with a `kind` and an `answer` and appends it to preferences.md."""
+    for rec in sorted(records(), key=lambda r: r.get("name", "")):
+        hits = list(PROJECTS_DIR.glob(f"*/{rec.get('session')}.jsonl")) if rec.get("session") else []
+        if not hits or rec.get("mode") == "track":
+            continue
+        question = None
+        for line in hits[0].open(errors="ignore"):
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            c = (ev.get("message") or {}).get("content")
+            text = c if isinstance(c, str) else "\n".join(
+                b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+            if ev.get("type") == "assistant" and text.strip():
+                block = text.rsplit(STATUS_RULE, 1)[1] if STATUS_RULE in text else ""
+                question = block.strip() if "NEXT FOR YOU" in block else None
+            elif ev.get("type") == "user" and text.strip() and question:
+                day = str(ev.get("timestamp") or "")[:10]
+                if day >= since:
+                    print(json.dumps({"date": day, "crewmate": rec["name"], "question": question, "answer": text.strip()}))
+                question = None
+
+
+def prefs_propose() -> None:
+    """Group preferences.md by `kind`: a kind with PREF_MIN or more answers, all the same, and none against, is a
+    pattern. Print each as a draft `J-NN (proposed)` with its dated evidence. A proposal is never canon and never
+    used to answer for Kohen: it goes to him as one item, and only his yes moves it into canon.md."""
+    try:
+        lines = PREFS.read_text().splitlines()
+    except OSError:
+        lines = []
+    kinds: dict[str, list[tuple]] = {}
+    for ln in lines:
+        m = PREF_LINE.match(ln)
+        if m:
+            kinds.setdefault(m.group(3), []).append(m.groups())
+    found = 0
+    for kind, rows in sorted(kinds.items()):
+        answers = {r[3] for r in rows}
+        if len(rows) >= PREF_MIN and len(answers) == 1:
+            found += 1
+            print(f"J-NN (proposed): {kind} — Kohen answers \"{next(iter(answers))}\" ({len(rows)} times, none against)")
+            for d, who, _, _, q, a in rows:
+                print(f"  - {d} {who}: {q} → \"{a}\"")
+    if not found:
+        print("no pattern yet: " + (", ".join(f"{k} ({len(r)}{'' if len({x[3] for x in r}) == 1 else ', mixed'})"
+                                              for k, r in sorted(kinds.items())) or "no answers recorded"))
+
+
 # ------------------------------------------------------------------ main
 
 def adopt_options(rest: list[str]) -> dict[str, str]:
@@ -2006,6 +2069,10 @@ def main(argv: list[str]) -> None:
     elif cmd == "project" and len(rest) == 2:  # the old `project <crewmate> <slug>`, kept for two weeks
         print("(`stella project <name> <slug>` is now `stella assign <name> <slug>`)", file=sys.stderr)
         assign(check_name(rest[0]), rest[1])
+    elif cmd == "prefs" and rest == ["propose"]:
+        prefs_propose()
+    elif cmd == "prefs" and rest[:1] == ["scan"] and len(rest) <= 2 and re.fullmatch(r"\d{4}-\d\d-\d\d", (rest + ["0000-00-00"])[1]):
+        prefs_scan(rest[1] if len(rest) == 2 else "0000-00-00")
     elif cmd == "assign" and len(rest) == 2:
         assign(check_name(rest[0]), rest[1])
     elif cmd == "window" and rest[:1] == ["new"] and len(rest) in (2, 3):
