@@ -101,6 +101,28 @@ class Status(unittest.TestCase):
         self.assertEqual(hs.HERDR_STATE, {"prompt": "blocked", "working": "working", "next": "unknown", "done": "idle"})
 
 
+class Dots(unittest.TestCase):
+    def test_a_finished_session_is_new_until_herdr_shows_it_seen(self):
+        self.assertEqual(hs.dot_key("done", "done"), "new")
+        self.assertEqual(hs.dot_key("done", "idle"), "read")
+        self.assertEqual(hs.dot_key("done", None), "read")
+
+    def test_other_statuses_are_their_own_dot(self):
+        for status in ("prompt", "next", "working"):
+            self.assertEqual(hs.dot_key(status, "idle"), status)
+
+    def test_exactly_the_current_dot_is_set_and_the_rest_cleared(self):
+        args = hs.token_args("next")
+        self.assertEqual(args.count("--token"), 1)
+        self.assertIn("dot_next=\u25cf", args)
+        self.assertEqual([args[i + 1] for i, a in enumerate(args) if a == "--clear-token"],
+                         ["dot_prompt", "dot_working", "dot_new", "dot_read"])
+
+    def test_read_is_the_hollow_one_and_none_clears_all(self):
+        self.assertIn("dot_read=\u25cb", hs.token_args("read"))
+        self.assertNotIn("--token", hs.token_args(None))
+
+
 class Move(unittest.TestCase):
     def fake(self, workspaces):
         sent = []

@@ -81,18 +81,20 @@ prompt_new_workspace_name = false # a new space starts as a blank terminal; rena
 mouse_capture = true
 status_indicators = "dots"
 
-# The dots are Claude's own state, reported onto each window by `herdr-space follow` (started by `tw`):
-#   red     a prompt waits for you          herdr state blocked
-#   blue    running                         herdr state working
-#   yellow  finished, next steps for you    herdr state unknown
-#   green   finished, nothing for you: filled until you have looked, then hollow (herdr's done, then idle)
-# herdr draws each state with a theme colour, so the theme sets them: its `yellow` slot is working's, shown
-# blue; `peach` and `mauve` are the candidates for unknown's, shown yellow. `herdr-space probe` opens a space
-# with one window per state to check what herdr really draws.
-[theme.custom]
-yellow = "#89b4fa"
-peach  = "#f9e2af"
-mauve  = "#f9e2af"
+# The dots are Claude's own state, drawn from `dot_*` tokens that `herdr-space follow` (started by `tw`) sets on
+# each window and space: herdr's own dots can only show four fixed states, so the rows below leave out
+# `state_icon` and draw these instead. Exactly one token has a value, and each has its own colour:
+#   red     a prompt waits for you          yellow  finished, next steps for you
+#   blue    running                         green   finished, nothing for you: filled until looked at, then hollow
+[ui.sidebar.spaces]
+rows = [[{ token = "$dot_prompt", fg = "#f38ba8" }, { token = "$dot_next", fg = "#f9e2af" },
+         { token = "$dot_working", fg = "#89b4fa" }, { token = "$dot_new", fg = "#a6e3a1" },
+         { token = "$dot_read", fg = "#a6e3a1" }, "workspace"], ["branch", "git_status"]]
+
+[ui.sidebar.agents]
+rows = [[{ token = "$dot_prompt", fg = "#f38ba8" }, { token = "$dot_next", fg = "#f9e2af" },
+         { token = "$dot_working", fg = "#89b4fa" }, { token = "$dot_new", fg = "#a6e3a1" },
+         { token = "$dot_read", fg = "#a6e3a1" }, "workspace", "tab"], ["agent"]]
 
 # A herdr restart must not resume agent panes into their own conversation: the sessions belong to Claude's
 # background daemon, and each window re-attaches with `claude attach`.

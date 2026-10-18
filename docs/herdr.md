@@ -65,17 +65,18 @@ off-switch). Detach with `C-b q` or `C-b d`: everything keeps running.
 ## Dots
 
 The dot before a window and before a space is Claude's own state for the session, not herdr's guess from the
-screen. `herdr-space follow` (one detached process, started by `tw`) reads Claude's job files every 5 seconds and
-reports each session's state to its window:
+screen. herdr can only draw four fixed states, so the dots are drawn from tokens instead: `herdr-space follow` (one
+detached process, started by `tw`) reads Claude's job files every 5 seconds and sets one `dot_*` token on the
+window and on its space, and the sidebar rows in `local/herdr.toml` give each token its colour.
 
-| Dot | Means | Claude's state | What herdr is told |
-| --- | --- | --- | --- |
-| red | A prompt waits for you (a question or approval on screen) | blocked, transcript ends in an unanswered tool call | `blocked` |
-| blue | Running | working | `working` |
-| yellow | Finished, with next steps for you | blocked, transcript ends in text | `unknown` |
-| green, filled | Finished, nothing for you, not yet looked at | done | `idle`, which herdr shows as done until you focus it |
-| green, hollow | Finished and looked at | done, seen | `idle` |
+| Dot | Means | Claude's state |
+| --- | --- | --- |
+| red | A prompt waits for you (a question or approval on screen) | blocked, the transcript ends in an unanswered tool call |
+| yellow | Finished, with next steps for you | blocked, the transcript ends in text |
+| blue | Running | working |
+| green, filled | Finished, nothing for you, not yet looked at | done; herdr has not shown it as seen |
+| green, hollow | Finished and looked at | done; herdr has shown it as seen |
 
-herdr draws each state with a theme colour, so `[theme.custom]` in `local/herdr.toml` sets them (its `yellow` slot
-is the working colour, shown blue). If a colour is wrong, `herdr-space probe` opens a space with one window per
-state, and `herdr-space probe --clear` closes it. A space's dot is its most urgent window.
+A space shows its most urgent window's dot (red, then yellow, blue, filled green, hollow green). The state is also
+reported to herdr, which keeps the seen tracking that tells filled from hollow. `herdr-space probe` opens a space
+with one window per dot to check the colours, and `herdr-space probe --clear` closes it.

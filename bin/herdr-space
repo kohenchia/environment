@@ -331,12 +331,18 @@ def sync(hours: float, dry: bool) -> None:
 
 # ---------------------------------------------------------------- dots: Claude's state on each window
 
-# What herdr draws for a reported state (herdr has these four to report; `done` is `idle` not yet seen):
-#   prompt  a prompt waits for you             -> blocked   red
-#   working actively running                   -> working   blue   (theme: the `yellow` slot is set to blue)
-#   next    finished, with next steps for you  -> unknown   yellow (theme: unknown's slot is set to yellow)
-#   done    finished, nothing for you          -> idle      filled green until you look, then hollow
+# herdr has four states to report and draws each in one fixed way (the unknown state is a small grey dot), so
+# the five dots are drawn by this program instead: `dot_<kind>` tokens on the window (agents panel) and on the
+# space, each styled with its own colour in herdr.toml's sidebar rows. Only the current kind's token has a value.
+#   prompt  a prompt waits for you             red
+#   next    finished, next steps for you       yellow
+#   working actively running                   blue
+#   new     finished, nothing for you, unread  green, filled
+#   read    finished, nothing for you, read    green, hollow
+# The session's state is also reported to herdr (HERDR_STATE) so that herdr keeps its own seen tracking: a
+# finished session is `idle` there, and herdr's `done` (idle not yet looked at) is what tells new from read.
 HERDR_STATE = {"prompt": "blocked", "working": "working", "next": "unknown", "done": "idle"}
+DOT_ORDER = ["prompt", "next", "working", "new", "read"]  # most urgent first
 SOURCE = "herdr-space"
 STATE_DIR = HOME / ".local/state/herdr-space"
 JOBS = HOME / ".claude/jobs"
@@ -402,17 +408,20 @@ def statuses() -> dict[str, tuple[str, str]]:
     return out
 
 
-def windows() -> dict[str, str]:
-    """{normalised window label: pane id} of every window's first pane, across all spaces."""
+def windows() -> dict[str, tuple[str, str]]:
+    """{normalised window label: (pane id, space id)} of every window's first pane."""
     tab_label: dict[str, str] = {}
+    tab_space: dict[str, str] = {}
     for wid in find_ids(herdr_json("workspace", "list"), ("workspace_id", "id")):
-        tab_label.update(find_ids(herdr_json("tab", "list", "--workspace", wid), ("tab_id", "id")))
-    out: dict[str, str] = {}
+        tabs = find_ids(herdr_json("tab", "list", "--workspace", wid), ("tab_id", "id"))
+        tab_label.update(tabs)
+        tab_space.update({t: wid for t in tabs})
+    out: dict[str, tuple[str, str]] = {}
 
     def walk(x):
         if isinstance(x, dict):
             if isinstance(x.get("pane_id"), str) and x.get("tab_id") in tab_label:
-                out.setdefault(norm(tab_label[x["tab_id"]]), x["pane_id"])
+                out.setdefault(norm(tab_label[x["tab_id"]]), (x["pane_id"], tab_space[x["tab_id"]]))
             for v in x.values():
                 walk(v)
         elif isinstance(x, list):
@@ -423,21 +432,77 @@ def windows() -> dict[str, str]:
     return out
 
 
+def agent_states() -> dict[str, str]:
+    """{pane id: herdr's agent_status} from `herdr agent list`: `done` is idle that you have not looked at."""
+    found: dict[str, str] = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("pane_id"), str) and isinstance(x.get("agent_status"), str):
+                found[x["pane_id"]] = x["agent_status"]
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(herdr_json("agent", "list"))
+    return found
+
+
+def dot_key(status: str, herdr_status: str | None) -> str:
+    """The dot for a session's status: a finished session is new until herdr has shown it as seen."""
+    if status == "done":
+        return "new" if herdr_status == "done" else "read"
+    return status
+
+
+def token_args(key: str | None) -> list[str]:
+    """`--token`/`--clear-token` arguments that leave exactly the dot for `key` set (none when key is None)."""
+    args: list[str] = []
+    for k in DOT_ORDER:
+        args += ["--token", f"dot_{k}={'○' if k == 'read' else '●'}"] if k == key else ["--clear-token", f"dot_{k}"]
+    return args
+
+
+def set_window_dot(pane: str, key: str | None) -> None:
+    run("herdr", "pane", "report-metadata", pane, "--source", SOURCE, "--agent", "claude", *token_args(key))
+
+
+def set_space_dot(space: str, key: str | None) -> None:
+    run("herdr", "workspace", "report-metadata", space, "--source", SOURCE, *token_args(key))
+
+
 def follow_once(last: dict) -> int:
-    """Report each window's status to herdr once per change (and every REFRESH seconds). Returns the calls made."""
+    """Report each window's status and dot to herdr once per change (and every REFRESH seconds). Returns calls."""
     now, calls = time.time(), 0
-    wins, st = windows(), statuses()
-    for label, pane in wins.items():
+    wins, st, shown = windows(), statuses(), agent_states()
+    best: dict[str, str] = {}  # the most urgent dot of each space
+
+    def due(k, value) -> bool:
+        if last.get(k) == value and now - last.get(("at", k), 0) < REFRESH:
+            return False
+        last[k], last[("at", k)] = value, now
+        return True
+
+    for label, (pane, space) in wins.items():
         if label not in st:
             continue
         status, need = st[label]
-        key = (pane, status, need)
-        if last.get(pane) == key and now - last.get(("at", pane), 0) < REFRESH:
-            continue
-        run("herdr", "pane", "report-agent", pane, "--source", SOURCE, "--agent", "claude", "--state",
-            HERDR_STATE[status], "--message", need or status, "--seq", str(time.time_ns() // 1000))
-        last[pane], last[("at", pane)] = key, now
-        calls += 1
+        if due(("report", pane), (status, need)):
+            run("herdr", "pane", "report-agent", pane, "--source", SOURCE, "--agent", "claude", "--state",
+                HERDR_STATE[status], "--message", need or status, "--seq", str(time.time_ns() // 1000))
+            calls += 1
+        key = dot_key(status, shown.get(pane))
+        if due(("dot", pane), key):
+            set_window_dot(pane, key)
+            calls += 1
+        if key in DOT_ORDER and (space not in best or DOT_ORDER.index(key) < DOT_ORDER.index(best[space])):
+            best[space] = key
+    for space in {w[1] for w in wins.values()}:
+        if due(("space", space), best.get(space)):
+            set_space_dot(space, best.get(space))
+            calls += 1
     return calls
 
 
@@ -473,7 +538,7 @@ def ensure_follower() -> None:
 
 
 def probe(clear: bool) -> None:
-    """A space `probe` with one window per state, to see the colours herdr really draws for each."""
+    """A space `probe` with one window per dot, to see each colour as drawn."""
     existing = {label: wid for wid, label in find_ids(herdr_json("workspace", "list"), ("workspace_id", "id")).items()}
     if clear:
         if "probe" in existing:
@@ -483,17 +548,21 @@ def probe(clear: bool) -> None:
         sys.exit("herdr-space: the probe space exists; close it with `herdr-space probe --clear`")
     res = herdr_json("workspace", "create", "--label", "probe", "--cwd", str(HOME), "--no-focus").get("result", {})
     wid, tab, pane = res["workspace"]["workspace_id"], res["tab"]["tab_id"], res["root_pane"]["pane_id"]
-    for i, (label, status) in enumerate([("1-prompt-red", "prompt"), ("2-working-blue", "working"),
-                                         ("3-next-yellow", "next"), ("4-done-green", "done")]):
+    kinds = [("1-prompt-red", "prompt"), ("2-next-yellow", "next"), ("3-working-blue", "working"),
+             ("4-new-green-filled", "new"), ("5-read-green-hollow", "read")]
+    for i, (label, kind) in enumerate(kinds):
         if i:
-            res = herdr_json("tab", "create", "--workspace", wid, "--label", label, "--cwd", str(HOME), "--no-focus")
-            pane = res["result"]["root_pane"]["pane_id"]
+            pane = herdr_json("tab", "create", "--workspace", wid, "--label", label, "--cwd", str(HOME),
+                              "--no-focus")["result"]["root_pane"]["pane_id"]
         else:
             run("herdr", "tab", "rename", tab, label)
         run("herdr", "pane", "run", pane, "sleep 3600")
         run("herdr", "pane", "report-agent", pane, "--source", "herdr-space-probe", "--agent", "claude", "--state",
-            HERDR_STATE[status], "--message", status, "--seq", str(time.time_ns() // 1000))
-    print("probe space opened: expect red, blue, yellow, green in the order of its windows (agents panel)")
+            {"new": "idle", "read": "idle"}.get(kind) or HERDR_STATE[kind], "--message", kind,
+            "--seq", str(time.time_ns() // 1000))
+        set_window_dot(pane, kind)
+    set_space_dot(wid, "prompt")
+    print("probe space opened: its windows should show red, yellow, blue, green and a hollow green dot")
 
 
 def main() -> None:
