@@ -767,7 +767,7 @@ def _retire_old_crew_workspace(herdr: str, wss: dict[str, str], names: set[str])
 FOLLOW_EVERY = float(os.environ.get("STELLA_FOLLOW_EVERY", "2"))  # seconds between two reads of the job states
 FOLLOW_SYNC = float(os.environ.get("STELLA_FOLLOW_SYNC", "30"))  # at most this often: sync, when the sessions changed
 VIEW_EVERY = float(os.environ.get("STELLA_VIEW_EVERY", "60"))  # the agent view is transient: set it again this often
-FOLLOW_VERSION = 2  # bump when the reporter changes: `crew sync` and `follow --ensure` replace one running an older version
+FOLLOW_VERSION = 3  # bump when the reporter changes: `crew sync` and `follow --ensure` replace one running an older version
 REFIX_EVERY = float(os.environ.get("STELLA_REFIX_EVERY", "10"))  # a pane herdr shows differently is reported again, at most this often
 FOLLOW_PID = STELLA_HOME / "follow.pid"
 FOLLOW_LOG = STELLA_HOME / "follow.log"
