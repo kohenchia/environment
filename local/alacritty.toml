@@ -147,7 +147,6 @@ bindings = [
   { key = "K", mods = "Command", chars = "\u001Bk" },          # clear + history
   { key = "F", mods = "Command", chars = "\u001B/" },          # search scrollback
   { key = "B", mods = "Command|Shift", chars = "\u001BB" },    # chord off-switch
-  { key = "V", mods = "Command|Shift", chars = "\u001BV" },    # put the latest screenshot in the prompt (herdr: kc-shot)
 
   # Word movement. zsh binds ESC b / ESC f to backward-word / forward-word,
   # and they are the classic meta sequences TUIs understand. Alt+arrows would

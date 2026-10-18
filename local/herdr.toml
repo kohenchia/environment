@@ -71,13 +71,6 @@ key = "ctrl+alt+shift+down"
 type = "shell"
 command = "herdr-space move down"
 
-# Cmd+Shift+V: type the screenshot you just took into the focused pane as an @-mention. A terminal cannot take a
-# drag from macOS's floating thumbnail, so this replaces the drag (see bin/kc-shot).
-[[keys.command]]
-key = "alt+shift+v"
-type = "shell"
-command = "kc-shot"
-
 [ui]
 tab_bar_position = "top"
 sidebar_start_collapsed = false   # the sidebar is the live view of every agent's state
