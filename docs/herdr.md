@@ -64,6 +64,18 @@ off-switch). Detach with `C-b q` or `C-b d`: everything keeps running.
 
 ## Dots
 
-herdr detects Claude in a window and draws its state beside the window and the space: one filled dot, coloured
-for blocked (needs you), working, or done. They are herdr's own reading of the session, so a session waiting for
-you at its prompt can show as idle; the Claude agents view (`cag`) is the authority for who needs you.
+The dot before a window and before a space is Claude's own state for the session, not herdr's guess from the
+screen. `herdr-space follow` (one detached process, started by `tw`) reads Claude's job files every 5 seconds and
+reports each session's state to its window:
+
+| Dot | Means | Claude's state | What herdr is told |
+| --- | --- | --- | --- |
+| red | A prompt waits for you (a question or approval on screen) | blocked, transcript ends in an unanswered tool call | `blocked` |
+| blue | Running | working | `working` |
+| yellow | Finished, with next steps for you | blocked, transcript ends in text | `unknown` |
+| green, filled | Finished, nothing for you, not yet looked at | done | `idle`, which herdr shows as done until you focus it |
+| green, hollow | Finished and looked at | done, seen | `idle` |
+
+herdr draws each state with a theme colour, so `[theme.custom]` in `local/herdr.toml` sets them (its `yellow` slot
+is the working colour, shown blue). If a colour is wrong, `herdr-space probe` opens a space with one window per
+state, and `herdr-space probe --clear` closes it. A space's dot is its most urgent window.

@@ -69,6 +69,38 @@ class Strays(unittest.TestCase):
                                ("t4", "second window for the same session in stella")})
 
 
+class Status(unittest.TestCase):
+    def transcript(self, *entries):
+        import json as j, tempfile as t
+        f = t.NamedTemporaryFile("w", suffix=".jsonl", delete=False)
+        f.write("\n".join(j.dumps(e) for e in entries) + "\n")
+        f.close()
+        return f.name
+
+    TEXT = {"type": "assistant", "message": {"content": [{"type": "text", "text": "NEXT FOR YOU 1. merge"}]}}
+    ASK = {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "AskUserQuestion", "input": {}}]}}
+    ANSWER = {"type": "user", "message": {"content": [{"type": "tool_result", "content": "yes"}]}}
+
+    def test_working_and_done(self):
+        self.assertEqual(hs.session_status({"state": "working"}), "working")
+        self.assertEqual(hs.session_status({"state": "done"}), "done")
+        self.assertIsNone(hs.session_status({"state": "stopped"}))
+
+    def test_blocked_with_a_question_on_screen_is_a_prompt(self):
+        job = {"state": "blocked", "linkScanPath": self.transcript(self.TEXT, self.ASK)}
+        self.assertEqual(hs.session_status(job), "prompt")
+
+    def test_blocked_after_a_finished_turn_is_next_steps(self):
+        job = {"state": "blocked", "linkScanPath": self.transcript(self.ASK, self.ANSWER, self.TEXT)}
+        self.assertEqual(hs.session_status(job), "next")
+
+    def test_blocked_without_a_transcript_is_next_steps(self):
+        self.assertEqual(hs.session_status({"state": "blocked"}), "next")
+
+    def test_every_status_has_a_herdr_state(self):
+        self.assertEqual(hs.HERDR_STATE, {"prompt": "blocked", "working": "working", "next": "unknown", "done": "idle"})
+
+
 class Move(unittest.TestCase):
     def fake(self, workspaces):
         sent = []

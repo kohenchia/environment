@@ -329,6 +329,173 @@ def sync(hours: float, dry: bool) -> None:
             rpc("workspace.move", {"workspace_id": stella, "insert_index": 0})
 
 
+# ---------------------------------------------------------------- dots: Claude's state on each window
+
+# What herdr draws for a reported state (herdr has these four to report; `done` is `idle` not yet seen):
+#   prompt  a prompt waits for you             -> blocked   red
+#   working actively running                   -> working   blue   (theme: the `yellow` slot is set to blue)
+#   next    finished, with next steps for you  -> unknown   yellow (theme: unknown's slot is set to yellow)
+#   done    finished, nothing for you          -> idle      filled green until you look, then hollow
+HERDR_STATE = {"prompt": "blocked", "working": "working", "next": "unknown", "done": "idle"}
+SOURCE = "herdr-space"
+STATE_DIR = HOME / ".local/state/herdr-space"
+JOBS = HOME / ".claude/jobs"
+EVERY = 5  # seconds between looks
+REFRESH = 120  # a report that has not changed is repeated this often, so a herdr restart does not lose it
+
+
+def read_json(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def pending_prompt(job: dict) -> bool:
+    """True when the session's transcript ends in a tool call nobody has answered: a question or approval
+    dialog is on screen. A session that finished its turn with next steps ends in text instead."""
+    path = job.get("linkScanPath")
+    if not path:
+        return False
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 200_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return False
+    for ln in reversed(lines):
+        try:
+            d = json.loads(ln)
+        except ValueError:
+            continue
+        if d.get("type") not in ("assistant", "user"):
+            continue
+        content = (d.get("message") or {}).get("content")
+        return d["type"] == "assistant" and isinstance(content, list) and any(
+            isinstance(c, dict) and c.get("type") == "tool_use" for c in content)
+    return False
+
+
+def session_status(job: dict) -> str | None:
+    """prompt, working, next or done for a job's state.json; None for a stopped or unknown session."""
+    state = job.get("state")
+    if state == "working":
+        return "working"
+    if state == "done":
+        return "done"
+    if state == "blocked":
+        return "prompt" if pending_prompt(job) else "next"
+    return None
+
+
+def statuses() -> dict[str, tuple[str, str]]:
+    """{normalised session name: (status, one line of what it needs)} from Claude's own job files."""
+    out = {}
+    if not JOBS.is_dir():
+        return out
+    for d in JOBS.iterdir():
+        job = read_json(d / "state.json")
+        name, st = job.get("name"), session_status(job)
+        if name and st:
+            out[norm(name)] = (st, (job.get("needs") or job.get("detail") or "")[:80])
+    return out
+
+
+def windows() -> dict[str, str]:
+    """{normalised window label: pane id} of every window's first pane, across all spaces."""
+    tab_label: dict[str, str] = {}
+    for wid in find_ids(herdr_json("workspace", "list"), ("workspace_id", "id")):
+        tab_label.update(find_ids(herdr_json("tab", "list", "--workspace", wid), ("tab_id", "id")))
+    out: dict[str, str] = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("pane_id"), str) and x.get("tab_id") in tab_label:
+                out.setdefault(norm(tab_label[x["tab_id"]]), x["pane_id"])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(herdr_json("pane", "list"))
+    return out
+
+
+def follow_once(last: dict) -> int:
+    """Report each window's status to herdr once per change (and every REFRESH seconds). Returns the calls made."""
+    now, calls = time.time(), 0
+    wins, st = windows(), statuses()
+    for label, pane in wins.items():
+        if label not in st:
+            continue
+        status, need = st[label]
+        key = (pane, status, need)
+        if last.get(pane) == key and now - last.get(("at", pane), 0) < REFRESH:
+            continue
+        run("herdr", "pane", "report-agent", pane, "--source", SOURCE, "--agent", "claude", "--state",
+            HERDR_STATE[status], "--message", need or status, "--seq", str(time.time_ns() // 1000))
+        last[pane], last[("at", pane)] = key, now
+        calls += 1
+    return calls
+
+
+def follower_pid() -> int | None:
+    try:
+        pid = int((STATE_DIR / "follow.pid").read_text().split()[0])
+        os.kill(pid, 0)
+        return pid
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def follow() -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    (STATE_DIR / "follow.pid").write_text(f"{os.getpid()}\n")
+    last: dict = {}
+    while True:
+        try:
+            follow_once(last)
+        except (SystemExit, Exception):  # herdr not answering: try again, never die
+            last.clear()
+        time.sleep(EVERY)
+
+
+def ensure_follower() -> None:
+    """Start the reporter detached from this shell unless one runs."""
+    if follower_pid():
+        return
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log = open(STATE_DIR / "follow.log", "ab")
+    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "follow"], stdin=subprocess.DEVNULL,
+                     stdout=log, stderr=log, start_new_session=True)
+
+
+def probe(clear: bool) -> None:
+    """A space `probe` with one window per state, to see the colours herdr really draws for each."""
+    existing = {label: wid for wid, label in find_ids(herdr_json("workspace", "list"), ("workspace_id", "id")).items()}
+    if clear:
+        if "probe" in existing:
+            run("herdr", "workspace", "close", existing["probe"])
+        return
+    if "probe" in existing:
+        sys.exit("herdr-space: the probe space exists; close it with `herdr-space probe --clear`")
+    res = herdr_json("workspace", "create", "--label", "probe", "--cwd", str(HOME), "--no-focus").get("result", {})
+    wid, tab, pane = res["workspace"]["workspace_id"], res["tab"]["tab_id"], res["root_pane"]["pane_id"]
+    for i, (label, status) in enumerate([("1-prompt-red", "prompt"), ("2-working-blue", "working"),
+                                         ("3-next-yellow", "next"), ("4-done-green", "done")]):
+        if i:
+            res = herdr_json("tab", "create", "--workspace", wid, "--label", label, "--cwd", str(HOME), "--no-focus")
+            pane = res["result"]["root_pane"]["pane_id"]
+        else:
+            run("herdr", "tab", "rename", tab, label)
+        run("herdr", "pane", "run", pane, "sleep 3600")
+        run("herdr", "pane", "report-agent", pane, "--source", "herdr-space-probe", "--agent", "claude", "--state",
+            HERDR_STATE[status], "--message", status, "--seq", str(time.time_ns() // 1000))
+    print("probe space opened: expect red, blue, yellow, green in the order of its windows (agents panel)")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(prog="herdr-space")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -337,7 +504,17 @@ def main() -> None:
     s = sub.add_parser("sync")
     s.add_argument("--hours", type=float, default=48)
     s.add_argument("--dry-run", action="store_true")
+    f = sub.add_parser("follow")
+    f.add_argument("--ensure", action="store_true", help="start the reporter in the background unless it runs")
+    p = sub.add_parser("probe")
+    p.add_argument("--clear", action="store_true")
     args = ap.parse_args()
+    if args.cmd == "follow":
+        ensure_follower() if args.ensure else follow()
+        return
+    if args.cmd == "probe":
+        probe(args.clear)
+        return
     if args.cmd == "move":
         move(args.direction)
     else:
