@@ -555,10 +555,22 @@ def _tab_panes(herdr: str, tab: str) -> list[str]:
     return found
 
 
-def _attach_cmd(sid: str) -> str:
+def _dormant_cmd(sid: str) -> str:
+    """What the window of a *finished* session runs: its log, then a wait. A viewer attached to a finished session
+    makes the daemon start a host process for it, so none is attached until the session works again, when the loop
+    attaches by itself (`stella dormant` says whether it is still finished)."""
+    stella = BIN / "stella"
+    return (f"claude logs {sid} 2>&1 | tail -n 60; echo '(finished: this window attaches by itself when it works "
+            f"again, or run claude attach {sid} to continue it)'; while {stella} listed {sid}; do "
+            f"if {stella} dormant {sid}; then sleep 5; else claude attach {sid}; sleep 2; fi; done")
+
+
+def _attach_cmd(sid: str, dormant: bool = False) -> str:
     """What a crew pane runs, typed into the pane's shell: `claude attach` itself is the foreground process, so
     herdr detects a Claude agent (a python parent in front of it, as `stella tab` is, hides it). The loop attaches
     again after a restart (`tok`, respawn) for as long as the session is listed."""
+    if dormant:
+        return _dormant_cmd(sid)
     stella = BIN / "stella"
     return f"while {stella} listed {sid}; do claude attach {sid}; sleep 2; done"
 
@@ -1085,6 +1097,10 @@ def ensure_space(herdr: str, ctx: dict, slug: str, wants: list[dict]) -> str | N
     return ws
 
 
+def _is_finished(sid: str) -> bool:
+    return claude_state(sid) == "done"
+
+
 def _new_window(herdr: str, space: str, want: dict, cwd: str) -> tuple[str, str] | None:
     """A new window in `space` named after the session, running the attach loop. (tab id, pane id)."""
     r = _herdr_run(herdr, "tab", "create", "--workspace", space, "--label", want["name"], "--cwd", cwd, "--no-focus")
@@ -1092,7 +1108,7 @@ def _new_window(herdr: str, space: str, want: dict, cwd: str) -> tuple[str, str]
     if r.returncode != 0 or not tab or not pane:
         print(f"{want['name']}: could not open its window: {(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)
         return None
-    _herdr_run(herdr, "pane", "run", pane, _attach_cmd(want["sid"]))
+    _herdr_run(herdr, "pane", "run", pane, _attach_cmd(want["sid"], _is_finished(want["sid"])))
     return tab, pane
 
 
@@ -1160,7 +1176,8 @@ def ensure_window(herdr: str, ctx: dict, want: dict, space: str) -> None:
         return
     made = _new_window(herdr, space, want, hold.get("dir") or (want["row"] or {}).get("cwd") or str(HOME))
     if made:
-        _remember(want, space=space, tab=made[0], label=want["name"], attach=ATTACH_VERSION)
+        _remember(want, space=space, tab=made[0], label=want["name"], attach=ATTACH_VERSION,
+                  dormant=True if _is_finished(want["sid"]) else None)
         tabs[made[0]] = (want["name"], space)
         print(f"{want['name']}: window opened")
 
@@ -1265,6 +1282,16 @@ def sync_sidebar(restart_follower: bool = True) -> None:
         if sid not in known:
             _close_window(herdr, w.get("tab"))
             _forget(sid)
+    # a window attached to a session that has finished: swap its command for the dormant one, once (no host process)
+    for want in wants:
+        hold = _holder(want)
+        tab = hold.get("tab")
+        if tab and tab in ctx["tabs"] and _is_finished(want["sid"]) and not hold.get("dormant"):
+            for pane in _tab_panes(herdr, tab)[:1]:
+                _herdr_run(herdr, "pane", "send-keys", pane, "ctrl+c")
+                _herdr_run(herdr, "pane", "run", pane, _attach_cmd(want["sid"], True))
+            _remember(want, dormant=True)
+            print(f"{want['name']}: finished, its window no longer holds a host process")
     # a window of an earlier layout still showing 'session exited' is attached again; every crew window is checked
     for want in wants:
         tab = _holder(want).get("tab")
@@ -1897,7 +1924,12 @@ def _space_of(slug: str) -> tuple[str, str]:
 
 
 def _window_in(herdr: str, ws: str, label: str) -> str:
+    """The window called `label` in a space. A session named like its project has two: the project's own first
+    window and the session's; the session's is meant (the first window is closed with the project)."""
     tabs = [t for t, l in _herdr_tabs(herdr, ws).items() if l == label]
+    firsts = set(view_state()["firsts"].values())
+    if len(tabs) > 1:
+        tabs = [t for t in tabs if t not in firsts] or tabs
     if len(tabs) != 1:
         die(f"{'no' if not tabs else 'several'} window called {label}")
     return tabs[0]
@@ -2037,6 +2069,8 @@ def main(argv: list[str]) -> None:
         sys.exit(follow(rest[0] if rest else start()))
     elif cmd == "listed" and len(rest) == 1 and SHORT_ID.match(rest[0]):  # what a crew pane's loop asks
         sys.exit(0 if _process(rest[0])[0] else 1)
+    elif cmd == "dormant" and len(rest) == 1 and SHORT_ID.match(rest[0]):  # what a finished session's window asks
+        sys.exit(0 if _is_finished(rest[0]) else 1)
     elif cmd == "start":
         print(start())
     elif cmd == "restart" and not rest:
