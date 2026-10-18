@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -506,18 +507,29 @@ def follow_once(last: dict) -> int:
     return calls
 
 
-def follower_pid() -> int | None:
+FOLLOW_VERSION = 2  # raise it when the reporter's behaviour changes: `tw` then replaces a reporter running the old code
+
+
+def follower() -> tuple[int, int] | None:
+    """(pid, version) of the running reporter, or None (no pid file, or a stale one). A pid file written by a
+    version before versions existed has only the pid: version 0."""
     try:
-        pid = int((STATE_DIR / "follow.pid").read_text().split()[0])
+        parts = (STATE_DIR / "follow.pid").read_text().split()
+        pid = int(parts[0])
         os.kill(pid, 0)
-        return pid
+        return pid, int(parts[1]) if len(parts) > 1 else 0
     except (OSError, ValueError, IndexError):
         return None
 
 
+def follower_pid() -> int | None:
+    f = follower()
+    return f[0] if f else None
+
+
 def follow() -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
-    (STATE_DIR / "follow.pid").write_text(f"{os.getpid()}\n")
+    (STATE_DIR / "follow.pid").write_text(f"{os.getpid()} {FOLLOW_VERSION}\n")
     last: dict = {}
     while True:
         try:
@@ -528,9 +540,15 @@ def follow() -> None:
 
 
 def ensure_follower() -> None:
-    """Start the reporter detached from this shell unless one runs."""
-    if follower_pid():
+    """Start the reporter detached from this shell unless one of this version runs; replace an older one."""
+    running = follower()
+    if running and running[1] == FOLLOW_VERSION:
         return
+    if running:
+        try:
+            os.kill(running[0], signal.SIGTERM)
+        except OSError:
+            pass
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     log = open(STATE_DIR / "follow.log", "ab")
     subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "follow"], stdin=subprocess.DEVNULL,

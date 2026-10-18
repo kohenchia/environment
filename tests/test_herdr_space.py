@@ -123,6 +123,42 @@ class Dots(unittest.TestCase):
         self.assertNotIn("--token", hs.token_args(None))
 
 
+class Follower(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.old = hs.STATE_DIR
+        hs.STATE_DIR = Path(tempfile.mkdtemp())
+
+    def tearDown(self):
+        hs.STATE_DIR = self.old
+
+    def test_a_pid_file_without_a_version_is_version_zero(self):
+        import os
+        (hs.STATE_DIR / "follow.pid").write_text(f"{os.getpid()}\n")
+        self.assertEqual(hs.follower(), (os.getpid(), 0))
+
+    def test_a_pid_file_with_a_version_and_a_dead_pid_is_none(self):
+        (hs.STATE_DIR / "follow.pid").write_text("999999 2\n")
+        self.assertIsNone(hs.follower())
+
+    def test_an_older_reporter_is_replaced_and_a_current_one_is_kept(self):
+        import os
+        launched, killed = [], []
+        real = (hs.subprocess.Popen, hs.os.kill)
+        hs.subprocess.Popen = lambda *a, **k: launched.append(a)
+        hs.os.kill = lambda pid, sig: killed.append((pid, sig)) if sig else None
+        try:
+            (hs.STATE_DIR / "follow.pid").write_text(f"{os.getpid()} {hs.FOLLOW_VERSION}\n")
+            hs.ensure_follower()
+            self.assertEqual((launched, killed), ([], []))
+            (hs.STATE_DIR / "follow.pid").write_text(f"{os.getpid()}\n")
+            hs.ensure_follower()
+            self.assertEqual(len(launched), 1)
+            self.assertEqual(killed, [(os.getpid(), hs.signal.SIGTERM)])
+        finally:
+            hs.subprocess.Popen, hs.os.kill = real
+
+
 class Move(unittest.TestCase):
     def fake(self, workspaces):
         sent = []
