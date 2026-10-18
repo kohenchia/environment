@@ -9,8 +9,12 @@ It runs inside the machine's command sandbox: it only reads files and calls `gh`
 the machine's extension declares. It never calls `claude`.
 
 What wakes Stella, per crewmate record in crew/<name>/record.json:
-  - its last status block becomes NEXT FOR YOU or ALL DONE, or its job state becomes blocked with a need
-    (an ALL DONE from a team member without `then` is held until the rest of the team is done);
+  - its last status block becomes ALL DONE (from a team member without `then`, held until the rest of the team
+    is done);
+  - it has waited WAIT_GRACE (15 minutes) on Kohen: its last status block is NEXT FOR YOU, or its job state is
+    blocked with a need, and no message of his has followed in its transcript. Kohen answers in the crewmate's
+    own window; Stella only tests the question against the canon (a question is not a wake before that);
+  - a project was renamed in herdr (a line in renames.jsonl);
   - its PR (record `pr`) is merged, gets a failing check, gets changes requested, or a new review;
   - a steer (record `steers`) has not shown up in its transcript after 10 minutes;
   - a queued launch while something finished, so a cap (Opus weight, throttle, budget) may have freed;
@@ -42,6 +46,7 @@ WAKE = STELLA_HOME / "wake.json"
 PIDFILE = STELLA_HOME / "watch.pid"
 LOCAL_EVERY, REMOTE_EVERY, DEBOUNCE = 20, 300, 30
 HEARTBEAT, STEER_GRACE, THROTTLE_PAUSE = 8 * 3600, 600, 240
+WAIT_GRACE = float(os.environ.get("STELLA_WAIT_GRACE", 15 * 60))  # seconds a question waits for Kohen before Stella may test it
 RULE = "━" * 40
 
 
@@ -100,6 +105,26 @@ def status_block(events: list[dict]) -> tuple[str | None, str]:
             "WORKING" if "WORKING" in block else None
         return kind, block[:600]
     return None, ""
+
+
+def answered_since_block(events: list[dict]) -> bool:
+    """True when a message of Kohen's follows the session's last assistant text (a tool result is not one)."""
+    for ev in reversed(events):
+        if ev.get("type") == "assistant" and text_of(ev).strip():
+            return False
+        if ev.get("type") == "user" and text_of(ev).strip():
+            return True
+    return False
+
+
+def last_assistant_epoch(events: list[dict]) -> float | None:
+    for ev in reversed(events):
+        if ev.get("type") == "assistant" and text_of(ev).strip():
+            try:
+                return calendar.timegm(time.strptime(str(ev.get("timestamp"))[:19], "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                return None
+    return None
 
 
 def throttled_at(events: list[dict]) -> str | None:
@@ -209,9 +234,7 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
         if hit and hit != prev.get("throttle") and _recent(hit, THROTTLE_PAUSE):
             cur["throttle"] = hit
             write_json(STELLA_HOME / "throttle-until", {"until": now + THROTTLE_PAUSE, "because": name})
-        if cur["block"] == "NEXT" and (prev.get("block") != "NEXT" or block != prev.get("block_text")):
-            events.append(f"{name}: NEXT FOR YOU\n{block}")
-        elif cur["block"] == "DONE" and prev.get("block") != "DONE":
+        if cur["block"] == "DONE" and prev.get("block") != "DONE":
             finished_any = True
             mates = teams.get(r.get("team") or "", [])
             hold = r.get("team") and not r.get("then") and any(
@@ -222,8 +245,24 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
                 cur["held"] = line
             else:
                 events.append(line)
-        elif cur["job"] == "blocked" and cur["needs"] and cur["needs"] != prev.get("needs") and cur["block"] != "NEXT":
-            events.append(f"{name}: blocked, needs: {cur['needs']}")
+        # A question for Kohen (NEXT FOR YOU, or blocked with a need) is recorded but is not a wake: he answers
+        # in the crewmate's own window. Unanswered for WAIT_GRACE it wakes Stella once, to test it against the canon.
+        sig = None
+        if cur["block"] == "NEXT":
+            sig = f"NEXT\n{block}"
+        elif cur["job"] == "blocked" and cur["needs"]:
+            sig = f"blocked\n{cur['needs']}"
+        if sig and not answered_since_block(evs):
+            if prev.get("wait_sig") != sig:
+                cur.update({"wait_sig": sig, "wait_since": min(now, last_assistant_epoch(evs) or now)})
+                cur.pop("wait_woken", None)
+            if now - cur["wait_since"] >= WAIT_GRACE and cur.get("wait_woken") != sig:
+                events.append(f"{name}: waiting on Kohen for {int((now - cur['wait_since']) // 60)} min, unanswered"
+                              + (f"\n{block}" if cur["block"] == "NEXT" else f" (blocked, needs: {cur['needs']})"))
+                cur["wait_woken"] = sig
+        else:
+            for k in ("wait_sig", "wait_since", "wait_woken"):
+                cur.pop(k, None)
         cur["block_text"] = block
         for s in r.get("steers") or []:
             age = now - s.get("at", now)
@@ -247,6 +286,7 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
         if cur.get("held"):
             held.append(cur)
         seen[session] = cur
+    events += renamed_projects(seen)
     queued = [r.get("name") for r in recs if r.get("state") == "queued"]
     window = _launch_window_open(seen)
     if queued and (finished_any or window):
@@ -260,6 +300,29 @@ def check(seen: dict, remote: bool) -> tuple[list[str], dict]:
         if r.get("state") not in ("landed",) and r.get("watches") and not tracked:
             events += check_watches(seen, remote, r["watches"], f"{r.get('name')}: ")
     return events, seen
+
+
+def renamed_projects(seen: dict) -> list[str]:
+    """One event per line `stella` appended to renames.jsonl (a project renamed in herdr or by the verb) since the
+    last look; a first look skips what is already there."""
+    p = STELLA_HOME / "renames.jsonl"
+    size = p.stat().st_size if p.exists() else 0
+    pos = seen.get("renames_pos")
+    seen["renames_pos"] = size
+    if pos is None or size <= pos:
+        return []
+    with open(p, "rb") as f:
+        f.seek(pos)
+        lines = f.read().decode("utf-8", "replace").splitlines()
+    out = []
+    for line in lines:
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        out.append(f"project renamed: {d.get('old')} is now {d.get('new')}: update priorities.md, the projects.md "
+                   "title and your journal")
+    return out
 
 
 def check_watches(seen: dict, remote: bool, watches: list[dict], who: str) -> list[str]:
