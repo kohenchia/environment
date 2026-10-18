@@ -16,22 +16,23 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella projects              every project with its crew, their state and the decisions waiting in it
                                  (the projects themselves are Stella's own file, projects.md)
     stella crew [--watch]        the crew as a compact list: project, crewmate, state, its one-line need;
-                                 `--watch` redraws it every few seconds (the left pane of the work window)
-    stella crew --pane           put that live list in a left pane of Stella's herdr tab (once)
+                                 `--watch` redraws it every few seconds
+    stella crew sync             make herdr's sidebar the crew list: one tab per live crewmate in the `crew`
+                                 workspace (not a tab of Stella's window), repaired, labelled and tidied;
+                                 launch, adopt, rm, `tw` and `tok` run it, and Stella after a wake
+    stella crew --unpane         close the crew-list pane an earlier version put in Stella's tab
     stella track-pr <url> [name] watch a PR with no session: a track record, so a merge, a failing check,
                                  requested changes or a new review wakes her (`untrack <name>` ends it)
     stella allow <name> <activity>...   grant a session the activities Kohen allowed for its task (a crewmate's
                                  record or an adopted one's; `--none` clears them): the hooks then skip those prompts
-    stella view <name> | --all   open crewmates as terminal tabs (herdr), or print the attach command; only
-                                 when Kohen asks to talk to one. `--all` opens every live crewmate's tab
-    stella view --repair         re-attach the tabs that are open, close those of sessions that are gone;
-                                 opens nothing (what `tw` runs)
-    stella hide <name> | --all   close the herdr tabs of crewmates and adopted sessions (never any other tab);
-                                 the sessions keep running
-    stella tab [<id>]            what a herdr tab runs: attach to the session (Stella's by default) and attach
+    stella view <name>           take Kohen to a crewmate: focus its tab in the crew workspace (made if missing),
+                                 or print the attach command; only when Kohen asks to talk to one
+    stella hide <name> | --all   close the crew tabs of the old layout (opened in the work window); never any
+                                 other tab, the sidebar's included; the sessions keep running
+    stella tab [<id>]            what a sidebar tab runs: attach to the session (Stella's by default) and attach
                                  again whenever its process is restarted (`tok`, respawn), until it is gone
     stella stop <name> | respawn <name> [--model M] | logs <name>
-    stella rm <name>             remove a finished crewmate, its worktree and its tab, only once its work has
+    stella rm <name>             remove a finished crewmate, its worktree and its sidebar entry, only once its work has
                                  landed (an open PR keeps it); a track record goes once its PR is closed
     stella live-check [show|before|diff]   the tripwire (it needs the process table)
 
@@ -79,6 +80,7 @@ REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
 MODEL = re.compile(r"^[a-z0-9][a-z0-9.\[\]-]{0,40}$")
 SHORT_ID = re.compile(r"^[0-9a-f]{8}$")
+CREW_WORKSPACE = "crew"  # the herdr workspace whose tabs the sidebar lists as the crew
 # `gh pr view owner/repo#N` silently fails on the enterprise host, so a `pr` is always a full URL.
 PR_URL = re.compile(r"^https://([A-Za-z0-9.-]+)/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/pull/([0-9]+)$")
 
@@ -326,6 +328,7 @@ def launch(name: str) -> None:
     rec.pop("queued_because", None)
     save(name, rec)
     print(f"launched {name} ({rec['id']}) in {d} on {model}")
+    sync_quietly()
 
 
 ADOPT_PROMPT = ("Stella has adopted this session so Kohen can see it in the agents list while its work is open. "
@@ -366,6 +369,7 @@ def adopt_resume(session: str, name: str, team: str | None, project: str | None 
                 **({"project": project} if project else {}),
                 "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     print(f"resumed {session[:8]} as {name} ({row.get('id')}) and adopted it (observation only)")
+    sync_quietly()
 
 
 def allow(name: str, activities: list[str]) -> None:
@@ -395,6 +399,7 @@ def adopt(target: str, team: str | None, project: str | None = None) -> None:
                 "adopted": True, "team": team, "weight": 0, "state": row.get("state"),
                 **({"project": project} if project else {}), "adopted_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     print(f"adopted {row.get('name') or row['id']} as {name} (observation only)")
+    sync_quietly()
 
 
 # ------------------------------------------------------------------ view / lifecycle
@@ -417,9 +422,11 @@ def _tab_id(out: str) -> str | None:
         return None
 
 
-def _herdr_tabs(herdr: str) -> dict[str, str]:
-    """{tab id: label} of every tab, from `herdr tab list` (any nesting; a tab has an id and a label)."""
-    p = subprocess.run([herdr, "tab", "list"], capture_output=True, text=True, timeout=30)
+def _herdr_tabs(herdr: str, workspace: str | None = None) -> dict[str, str]:
+    """{tab id: label} of every tab (of one workspace when given), from `herdr tab list` (any nesting; a tab
+    has an id and a label)."""
+    cmd = [herdr, "tab", "list"] + (["--workspace", workspace] if workspace else [])
+    p = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     found: dict[str, str] = {}
 
     def walk(x):
@@ -441,13 +448,51 @@ def _herdr_tabs(herdr: str) -> dict[str, str]:
     return found
 
 
+def _workspaces(herdr: str) -> dict[str, str] | None:
+    """{workspace id: label} from `herdr workspace list`; None when herdr does not answer (no server)."""
+    p = subprocess.run([herdr, "workspace", "list"], capture_output=True, text=True, timeout=30)
+    if p.returncode != 0:
+        return None
+    found: dict[str, str] = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            wid = x.get("workspace_id") or x.get("id")
+            if isinstance(wid, str) and isinstance(x.get("label"), str) and "tab_id" not in x and "pane_id" not in x:
+                found[wid] = x["label"]
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    try:
+        walk(json.loads(p.stdout))
+    except ValueError:
+        return None
+    return found
+
+
+def _crew_ws(herdr: str) -> str | None:
+    """The id of the workspace the crew lives in (its tabs are not in Stella's tab bar), if it exists."""
+    return next((w for w, label in (_workspaces(herdr) or {}).items() if label == CREW_WORKSPACE), None)
+
+
+def _legacy_tabs(herdr: str) -> dict[str, str]:
+    """Every tab outside the crew workspace: Stella's, Kohen's own, and crew tabs opened before the sidebar."""
+    ws = _crew_ws(herdr)
+    own = set(_herdr_tabs(herdr, ws)) if ws else set()
+    return {t: label for t, label in _herdr_tabs(herdr).items() if t not in own}
+
+
 def close_tab(rec: dict) -> bool:
-    """Close the herdr tab opened for this crewmate (`herdr tab close`): the id kept in its record, else
-    the tab carrying its name as label. True when a tab was closed."""
+    """Close the crew tab opened in the work window before the sidebar (`herdr tab close`): the id kept in
+    its record, else the tab carrying its name as label; never a tab of the crew workspace. True when a tab
+    was closed."""
     herdr = _herdr()
     if not herdr:
         return False
-    tabs = _herdr_tabs(herdr)
+    tabs = _legacy_tabs(herdr)
     ids = [rec["tab"]] if rec.get("tab") in tabs else [t for t, label in tabs.items() if label == rec.get("name")]
     for t in ids:
         subprocess.run([herdr, "tab", "close", t], capture_output=True, text=True, timeout=30)
@@ -540,66 +585,148 @@ def repair_tab(herdr: str, tab: str, sid: str) -> None:
                            timeout=30)
 
 
-def view(name: str, quiet: bool = False) -> None:
+def _ws_id(out: str) -> str | None:
+    """The id of the workspace in a `herdr workspace create` reply (`.result.workspace`)."""
+    try:
+        ws = json.loads(out)["result"]["workspace"]
+        return ws.get("workspace_id") or ws.get("id")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def _herdr_run(herdr: str, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run([herdr, *args], capture_output=True, text=True, timeout=30)
+
+
+def _open_crew_tab(herdr: str, rec: dict) -> str | None:
+    """A tab for the crewmate in the crew workspace (made on first use), running `stella tab <id>`. It does not
+    take focus. The new tab's id, or None when herdr refused."""
+    cwd = rec.get("dir") or str(HOME)
+    ws = _crew_ws(herdr)
+    if ws:
+        r = _herdr_run(herdr, "tab", "create", "--workspace", ws, "--label", rec["name"], "--cwd", cwd, "--no-focus")
+        tab, pane = _tab_id(r.stdout), _herdr_pane(r.stdout)
+    else:  # the workspace comes with one tab: it becomes this crewmate's
+        r = _herdr_run(herdr, "workspace", "create", "--label", CREW_WORKSPACE, "--cwd", cwd, "--no-focus")
+        try:
+            tab = json.loads(r.stdout)["result"]["tab"]
+            tab = tab.get("tab_id") or tab.get("id")
+        except (ValueError, KeyError, TypeError, AttributeError):
+            tab = None
+        pane = _herdr_pane(r.stdout)
+        if tab:
+            _herdr_run(herdr, "tab", "rename", tab, rec["name"])
+    if r.returncode != 0 or not tab or not pane:
+        print(f"{rec['name']}: could not open its sidebar tab: {(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)
+        return None
+    _herdr_run(herdr, "pane", "run", pane, _attach_cmd(rec["id"]))
+    return tab
+
+
+AGENT_NAME = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")  # what herdr accepts as an agent name
+
+
+def _token(text: str, width: int = 60) -> str:
+    return _clip(re.sub(r"[\x00-\x1f]+", " ", text).strip(), width)
+
+
+def _label_pane(herdr: str, pane: str, rec: dict) -> None:
+    """Name the agent in the pane and report its project and one-line need, for the sidebar rows (`$project`,
+    `$note`). Display only and best effort: herdr's own state dot stays the live one."""
+    state, need = crew_status(rec)
+    note = {"waiting": "needs you: " + need, "blocked": "blocked: " + need, "queued": "queued", "done": "done"}.get(state, "")
+    if AGENT_NAME.match(rec["name"]):
+        _herdr_run(herdr, "agent", "rename", pane, rec["name"])
+    _herdr_run(herdr, "pane", "report-metadata", pane, "--source", "stella",
+               "--token", f"project={_token(rec.get('project') or '-')}", "--token", f"note={_token(note)}",
+               "--ttl-ms", str(6 * 3600 * 1000))
+
+
+def sync_sidebar() -> None:
+    """Make herdr's sidebar the crew list. Every live crewmate (adopted ones too) has one tab in the crew
+    workspace, which is not a tab of Stella's window; each tab runs `stella tab <id>`, so herdr sees an agent
+    there and lists it with its state. Idempotent: it opens a missing tab, attaches again in a tab showing
+    'session exited', refreshes each project and need, closes the tab of a session that has exited for good
+    (landed, or no longer in `claude agents --all`) and leaves every other tab alone, Kohen's included."""
+    herdr = _herdr()
+    if not herdr:
+        print("herdr is not installed: no sidebar to keep")
+        return
+    if _workspaces(herdr) is None:
+        print("herdr is not running: no sidebar to keep")
+        return
+    live = {a.get("id") for a in agents(False)} - {None}
+    known = {a.get("id") for a in agents(True)}
+    ws = _crew_ws(herdr)
+    tabs = _herdr_tabs(herdr, ws) if ws else {}
+    recs = [r for r in records() if r.get("id") and r.get("mode") != "track"]
+    for rec in recs:
+        sid, name = rec["id"], rec["name"]
+        tab = rec.get("crew_tab") if rec.get("crew_tab") in tabs else next((t for t, n in tabs.items() if n == name), None)
+        if VERBOSE:
+            print(f"{name}: sid={sid} live={sid in live} tab={tab} state={rec.get('state')}")
+        if sid in live and rec.get("state") != "landed":
+            if not tab:
+                tab = _open_crew_tab(herdr, rec)
+                if tab:
+                    ws = ws or _crew_ws(herdr)
+                    tabs[tab] = name
+                    save(name, {**load(name), "crew_tab": tab})
+                    print(f"{name}: in the sidebar")
+                continue
+            repair_tab(herdr, tab, sid)
+            for pane in _tab_panes(herdr, tab)[:1]:
+                _label_pane(herdr, pane, rec)
+            if rec.get("crew_tab") != tab:
+                save(name, {**load(name), "crew_tab": tab})
+        elif tab and (rec.get("state") == "landed" or sid not in known):
+            _herdr_run(herdr, "tab", "close", tab)
+            save(name, {k: v for k, v in load(name).items() if k != "crew_tab"})
+            print(f"{name}: left the sidebar")
+    # Stella's own tab has no crew record: find it by its label and repair it the same way
+    me = stella_row()
+    if me:
+        for tab, label in _legacy_tabs(herdr).items():
+            if label.lower() == "stella":
+                repair_tab(herdr, tab, me["id"])
+
+
+def sync_quietly() -> None:
+    """The sidebar follows a launch, an adoption or a removal; a herdr problem never fails those."""
+    try:
+        sync_sidebar()
+    except Exception as e:  # noqa: BLE001
+        print(f"sidebar not updated: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
+
+
+def view(name: str) -> None:
+    """Take Kohen to the crewmate: its tab in the crew workspace (made if missing). No other tab opens."""
     rec = load(name)
     sid = rec.get("id")
     if not sid or not SHORT_ID.match(sid):
         die(f"{name} has no session id yet")
     herdr = _herdr()
-    if herdr:
-        t = subprocess.run([herdr, "tab", "create", "--label", name, "--cwd", rec.get("dir") or str(HOME)],
-                           capture_output=True, text=True, timeout=30)
-        pane = _herdr_pane(t.stdout)
-        if t.returncode == 0 and pane:
-            subprocess.run([herdr, "pane", "run", pane, _attach_cmd(sid)], capture_output=True, text=True, timeout=30)
-            tab = _tab_id(t.stdout)
-            if tab:
-                save(name, {**load(name), "tab": tab})
-            if not quiet:
-                print(f"{name}: herdr tab opened")
-            return
-    if not quiet:
+    ws = _crew_ws(herdr) if herdr else None
+    if herdr and not ws:
+        sync_quietly()
+        ws = _crew_ws(herdr)
+    tabs = _herdr_tabs(herdr, ws) if ws else {}
+    tab = next((t for t, n in tabs.items() if n == name), None)
+    if tab is None and herdr and ws:
+        sync_quietly()
+        tab = next((t for t, n in _herdr_tabs(herdr, ws).items() if n == name), None)
+    if herdr and ws and tab:
+        _herdr_run(herdr, "workspace", "focus", ws)
+        _herdr_run(herdr, "tab", "focus", tab)
+        print(f"{name}: focused in the crew workspace")
+    else:
         print(f"{name}: claude attach {sid}")
 
 
-def view_all(open_missing: bool = True) -> None:
-    """A tab for every live crewmate that has none (adopted ones included; only when `open_missing`), the
-    tabs that are open re-attached, and no tab for a session that has exited for good: its record is landed,
-    or `claude agents --all` no longer lists it."""
-    listed = agents(True)
-    live = {a.get("id") for a in agents(False)} - {None}
-    known = {a.get("id") for a in listed}
-    herdr = _herdr()
-    tabs = _herdr_tabs(herdr) if herdr else {}
-    if VERBOSE:
-        print(f"tabs: {tabs}\nlive: {sorted(live)}")
-    for rec in records():
-        sid = rec.get("id")
-        if not sid or rec.get("mode") == "track":
-            continue
-        has_tab = (rec.get("tab") in tabs) or rec.get("name") in tabs.values()
-        if VERBOSE:
-            print(f"{rec['name']}: sid={sid} live={sid in live} has_tab={has_tab} state={rec.get('state')}")
-        if sid in live and not has_tab:
-            if open_missing:
-                view(rec["name"])
-        elif sid in live and has_tab and herdr:
-            tab = rec.get("tab") if rec.get("tab") in tabs else next(t for t, n in tabs.items() if n == rec["name"])
-            repair_tab(herdr, tab, sid)
-        elif has_tab and sid not in live and (rec.get("state") == "landed" or sid not in known):
-            close_tab(rec)
-            save(rec["name"], {k: v for k, v in load(rec["name"]).items() if k != "tab"})
-    # Stella's own tab has no crew record: find it by its label and repair it the same way
-    me = stella_row()
-    if me and herdr:
-        for tab, label in tabs.items():
-            if label.lower() == "stella":
-                repair_tab(herdr, tab, me["id"])
-
-
 def hide(name: str | None) -> None:
-    """Close the herdr tabs of crewmates and adopted sessions (one, or all). Only a tab that a crew record
-    names (its `tab`, else a tab labelled with its name) is closed; Kohen's own tabs and Stella's stay."""
+    """Close the crew tabs that were opened in the work window before the sidebar (one crewmate's, or all).
+    Only a tab that a crew record names (its `tab`, else a tab labelled with its name) outside the crew
+    workspace is closed; Kohen's own tabs, Stella's and the sidebar's stay. The sessions keep running."""
     recs = [load(name)] if name else records()
     closed = []
     for rec in recs:
@@ -779,33 +906,21 @@ def set_project(name: str, slug: str) -> None:
     print(f"{name}: project {rec.get('project') or 'none'}")
 
 
-def crew_pane() -> None:
-    """Put the live crew list in a pane on the left of Stella's herdr tab, once: split her pane, run
-    `stella crew --watch` in the new one and swap them so the list sits on the left."""
-    herdr = _herdr()
-    if not herdr:
-        die("herdr is not installed", 1)
-    tabs = _herdr_tabs(herdr)
-    tab = next((t for t, label in tabs.items() if label.lower() == "stella"), None)
-    if not tab:
-        die("no herdr tab labelled Stella", 1)
-    panes = _tab_panes(herdr, tab)
+def crew_unpane() -> None:
+    """Close the crew-list pane an earlier version put in Stella's tab (recorded in crew-pane); the sidebar
+    is the crew list now. Closes that one pane and nothing else."""
     mark = STELLA_HOME / "crew-pane"
-    if mark.exists() and mark.read_text().strip() in panes:
-        print("the crew list is already in Stella's tab")
+    if not mark.exists():
+        print("no crew-list pane to close")
         return
-    if not panes:
-        die("Stella's tab has no pane", 1)
-    r = subprocess.run([herdr, "pane", "split", panes[0], "--direction", "right", "--ratio", "0.72", "--no-focus"],
-                       capture_output=True, text=True, timeout=30)
-    new = _herdr_pane(r.stdout)
-    if r.returncode != 0 or not new:
-        die(f"could not split Stella's pane: {(r.stderr or r.stdout).strip()[-200:]}", 1)
-    subprocess.run([herdr, "pane", "run", new, f"{BIN / 'stella'} crew --watch"], capture_output=True, text=True, timeout=30)
-    subprocess.run([herdr, "pane", "swap", "--source-pane", new, "--target-pane", panes[0]],
-                   capture_output=True, text=True, timeout=30)
-    mark.write_text(new + "\n")
-    print("the crew list is in Stella's tab")
+    pane = mark.read_text().strip()
+    herdr = _herdr()
+    if herdr and pane and any(pane in _tab_panes(herdr, t) for t in _herdr_tabs(herdr)):
+        _herdr_run(herdr, "pane", "close", pane)
+        print(f"closed the crew-list pane {pane}")
+    else:
+        print("the crew-list pane is already gone")
+    mark.unlink()
 
 
 def lifecycle(cmd: str, name: str, model: str | None = None) -> None:
@@ -923,6 +1038,7 @@ def rm(name: str) -> None:
     rec["removed_at"] = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     save(name, rec)
     print(f"removed {name}")
+    sync_quietly()
 
 
 # ------------------------------------------------------------------ main
@@ -972,26 +1088,26 @@ def main(argv: list[str]) -> None:
         projects_report()
     elif cmd == "crew" and rest in ([], ["--watch"]):
         crew(bool(rest))
-    elif cmd == "crew" and rest == ["--pane"]:
-        crew_pane()
+    elif cmd == "crew" and rest == ["sync"]:
+        sync_sidebar()
+    elif cmd == "crew" and rest == ["--unpane"]:
+        crew_unpane()
     elif cmd == "hide" and rest == ["--all"]:
         hide(None)
     elif cmd == "hide" and len(rest) == 1:
         hide(check_name(rest[0]))
-    elif cmd == "view" and rest == ["--repair"]:
-        view_all(open_missing=False)
+    elif cmd == "view" and rest in (["--repair"], ["--all"]):  # the old names of `crew sync`
+        sync_sidebar()
     elif cmd == "allow" and len(rest) >= 2:
         allow(check_name(rest[0]), rest[1:])
     elif cmd == "track-pr" and len(rest) in (1, 2):
         track_pr(rest[0], rest[1] if len(rest) == 2 else None)
     elif cmd == "untrack" and len(rest) == 1:
         untrack(rest[0])
-    elif cmd == "view" and rest == ["--all", "--verbose"]:
+    elif cmd in ("crew", "view") and rest in (["sync", "--verbose"], ["--all", "--verbose"]):
         global VERBOSE
         VERBOSE = True
-        view_all()
-    elif cmd == "view" and rest == ["--all"]:
-        view_all()
+        sync_sidebar()
     elif cmd == "view" and len(rest) == 1:
         view(rest[0])
     elif cmd in ("stop", "logs") and len(rest) == 1:

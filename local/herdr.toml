@@ -54,3 +54,10 @@ tab_bar_position = "top"
 sidebar_start_collapsed = false   # the sidebar is the live view of every agent's state
 prompt_new_tab_name = false
 mouse_capture = true
+
+# The sidebar is the crew list (Work Env 3.0): Stella's tab is the only tab of the `work` workspace, and each
+# crewmate is a tab of the `crew` workspace (`stella crew sync`). Its row is the state dot, the tab (the
+# crewmate's name), its project, and below it a one-line need that `stella crew sync` reports ("needs you: …").
+# `$project` and `$note` are tokens reported with `herdr pane report-metadata --source stella`.
+[ui.sidebar.agents]
+rows = [["state_icon", "tab", "$project"], ["$note"]]

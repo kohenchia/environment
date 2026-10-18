@@ -52,6 +52,14 @@ class Helper(unittest.TestCase):
     def tabs(self):
         return json.loads(self.herdr_tabs.read_text()) if self.herdr_tabs.exists() else {}
 
+    def sidebar(self):
+        """{tab id: label} of the tabs in the crew workspace (fake-herdr's first created workspace, w10)."""
+        return {t: n for t, n in self.tabs().items() if t.startswith("w10:")}
+
+    def herdr_calls(self, *head):
+        calls = [json.loads(l) for l in self.herdr_log.read_text().splitlines()] if self.herdr_log.exists() else []
+        return [c for c in calls if c[:len(head)] == list(head)]
+
     def pr_is(self, state):
         self.gh_state.write_text(json.dumps({"state": state, "url": PR}))
 
@@ -345,17 +353,46 @@ class Helper(unittest.TestCase):
                          "sessionId": f"{i + 1:08x}-s"})
         self.set_agents(rows)
 
-    def test_view_all_opens_a_tab_for_each_live_session_without_one_adopted_included(self):
+    def test_crew_sync_puts_each_live_session_in_the_sidebar_adopted_included_and_not_in_the_work_window(self):
         self.with_herdr()
         self.live("built", "adopted-one")
-        self.crew("built", id="00000001")
+        self.crew("built", id="00000001", project="mlc")
         self.crew("adopted-one", id="00000002", adopted=True)
         self.herdr_tabs.write_text(json.dumps({"w1:t1": "stella"}))
-        self.assertEqual(self.run_stella("view", "--all").returncode, 0)
-        self.assertEqual(sorted(self.tabs().values()), ["adopted-one", "built", "stella"])
-        self.assertEqual(self.rec("built")["tab"], [t for t, n in self.tabs().items() if n == "built"][0])
-        self.run_stella("view", "--all")  # a second run opens nothing new
-        self.assertEqual(len(self.tabs()), 3)
+        self.assertEqual(self.run_stella("crew", "sync").returncode, 0)
+        self.assertEqual(sorted(self.sidebar().values()), ["adopted-one", "built"])
+        self.assertEqual(self.tabs()["w1:t1"], "stella")  # Stella's window gained no tab
+        self.assertEqual([t for t in self.tabs() if t.startswith("w1:")], ["w1:t1"])
+        self.assertEqual(self.rec("built")["crew_tab"], [t for t, n in self.sidebar().items() if n == "built"][0])
+        self.assertEqual(len(self.herdr_calls("workspace", "create")), 1)  # one workspace, made once
+        self.assertEqual(self.herdr_calls("workspace", "create")[0][-1], "--no-focus")
+        self.run_stella("crew", "sync")  # a second run opens nothing new
+        self.assertEqual(len(self.sidebar()), 2)
+        self.assertEqual(len(self.herdr_calls("workspace", "create")), 1)
+        self.assertEqual(len(self.herdr_calls("tab", "create")), 1)
+
+    def test_crew_sync_names_each_agent_and_reports_its_project_and_need(self):
+        self.with_herdr()
+        self.live("built")
+        self.crew("built", id="00000001", project="mlc")
+        self.run_stella("crew", "sync")  # opens the tab
+        self.run_stella("crew", "sync")  # labels the pane that is there now
+        rename = self.herdr_calls("agent", "rename")
+        self.assertEqual(rename[-1][3:], ["built"])
+        meta = self.herdr_calls("pane", "report-metadata")[-1]
+        self.assertIn("project=mlc", meta)
+        self.assertEqual(meta[meta.index("--source") + 1], "stella")
+
+    def test_crew_sync_without_a_herdr_server_says_so_and_opens_nothing(self):
+        self.with_herdr()
+        self.live("built")
+        self.crew("built", id="00000001")
+        self.extra_env = {"FAKE_HERDR_DOWN": "1"}
+        r = self.run_stella("crew", "sync")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("not running", r.stdout)
+        self.assertEqual(self.herdr_calls("tab", "create"), [])
+        self.assertEqual(self.herdr_calls("workspace", "create"), [])
 
     def test_rm_closes_the_tab_it_opened(self):
         self.with_herdr()
@@ -376,15 +413,17 @@ class Helper(unittest.TestCase):
         self.assertEqual(self.run_stella("rm", "old-one").returncode, 0)
         self.assertEqual(self.tabs(), {"w1:t8": "keep"})
 
-    def test_view_all_closes_tabs_of_sessions_that_exited_for_good(self):
+    def test_crew_sync_closes_the_sidebar_tab_of_sessions_that_exited_for_good(self):
         self.with_herdr()
         self.live("alive")  # `gone` is not listed at all; `landed-one` is listed but its record is landed
         self.crew("alive", id="00000001")
         self.crew("gone", id="000000f1")
         self.crew("landed-one", id="00000002", state="landed")
-        self.herdr_tabs.write_text(json.dumps({"w1:t1": "alive", "w1:t2": "gone", "w1:t3": "landed-one"}))
-        self.run_stella("view", "--all")
-        self.assertEqual(sorted(self.tabs().values()), ["alive"])
+        self.herdr_tabs.write_text(json.dumps({"w10:t1": "alive", "w10:t2": "gone", "w10:t3": "landed-one",
+                                               "w10:t4": "kohens-own", "w1:t1": "gone"}))
+        (self.herdr_tabs.parent / "herdr-tabs.json.ws").write_text(json.dumps({"w10": "crew"}))
+        self.run_stella("crew", "sync")
+        self.assertEqual(sorted(self.tabs().items()), [("w10:t1", "alive"), ("w10:t4", "kohens-own"), ("w1:t1", "gone")])
 
     # -------------------------------------------------------------- tabs follow their session
 
@@ -438,16 +477,17 @@ class Helper(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertTrue(runs[0][3].endswith("stella tab 00000001"), runs[0])
 
-    def test_view_all_attaches_again_in_a_tab_that_shows_session_exited(self):
+    def test_crew_sync_attaches_again_in_a_sidebar_tab_that_shows_session_exited(self):
         self.with_herdr()
         self.live("exited-one", "fine-one")
         self.crew("exited-one", id="00000001")
         self.crew("fine-one", id="00000002")
-        self.herdr_tabs.write_text(json.dumps({"w1:t1": "exited-one", "w1:t2": "fine-one"}))
-        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w1:t1:p1": "...\nSession 00000001 has exited.\n\n~/github on main\n❯\n", "w1:t2:p1": "working"})}
-        self.assertEqual(self.run_stella("view", "--all").returncode, 0)
-        runs = [c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "run"]]
-        self.assertEqual([r[2] for r in runs], ["w1:t1:p1"])
+        self.herdr_tabs.write_text(json.dumps({"w10:t1": "exited-one", "w10:t2": "fine-one"}))
+        (self.herdr_tabs.parent / "herdr-tabs.json.ws").write_text(json.dumps({"w10": "crew"}))
+        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w10:t1:p1": "...\nSession 00000001 has exited.\n\n~/github on main\n❯\n", "w10:t2:p1": "working"})}
+        self.assertEqual(self.run_stella("crew", "sync").returncode, 0)
+        runs = self.herdr_calls("pane", "run")
+        self.assertEqual([r[2] for r in runs], ["w10:t1:p1"])
         self.assertTrue(runs[0][3].endswith("stella tab 00000001"))
         self.assertEqual(len(self.tabs()), 2)  # the tabs and their order are untouched
 
@@ -474,12 +514,25 @@ class Helper(unittest.TestCase):
         (d / f"{session}.jsonl").write_text(json.dumps({"type": "assistant", "message": {"content": [
             {"type": "text", "text": text}]}}) + "\n")
 
-    def test_launch_opens_no_tab_and_keeps_the_project_of_the_record(self):
+    def test_launch_lists_the_crewmate_in_the_sidebar_and_opens_no_tab_in_the_work_window(self):
         self.with_herdr()
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "Stella"}))
         self.crew("fix-flake", project="benchmark-poem")
         self.assertEqual(self.run_stella("launch", "fix-flake").returncode, 0)
-        self.assertEqual(self.tabs(), {})
+        self.assertEqual(self.tabs()["w1:t1"], "Stella")
+        self.assertEqual([t for t in self.tabs() if t.startswith("w1:")], ["w1:t1"])
+        self.assertEqual(list(self.sidebar().values()), ["fix-flake"])
         self.assertEqual(self.rec("fix-flake")["project"], "benchmark-poem")
+
+    def test_adopt_lists_the_session_in_the_sidebar(self):
+        self.with_herdr()
+        self.live("mine")
+        self.assertEqual(self.run_stella("adopt", "mine").returncode, 0)
+        self.assertEqual(list(self.sidebar().values()), ["mine"])
+
+    def test_launch_still_works_when_herdr_is_missing(self):
+        self.crew("fix-flake")
+        self.assertEqual(self.run_stella("launch", "fix-flake").returncode, 0)
 
     def test_launch_refuses_a_bad_project_slug(self):
         self.crew("fix-flake", project="Bad Slug")
@@ -562,19 +615,16 @@ class Helper(unittest.TestCase):
         self.assertEqual(out.count("\033[H\033[J"), 2)
         self.assertIn("w", out)
 
-    def test_crew_pane_splits_stellas_tab_once_and_puts_the_list_on_the_left(self):
+    def test_crew_pane_is_gone_and_unpane_closes_only_the_recorded_pane(self):
         self.with_herdr()
-        self.herdr_tabs.write_text(json.dumps({"w1:t1": "Stella", "w1:t2": "mine"}))
-        self.assertEqual(self.run_stella("crew", "--pane").returncode, 0)
-        calls = [json.loads(l) for l in self.herdr_log.read_text().splitlines()]
-        split = [c for c in calls if c[:2] == ["pane", "split"]]
-        self.assertEqual(split[0][2], "w1:t1:p1")
-        run = [c for c in calls if c[:2] == ["pane", "run"]][0]
-        self.assertTrue(run[3].endswith("stella crew --watch"))
-        swap = [c for c in calls if c[:2] == ["pane", "swap"]][0]
-        self.assertIn("w1:t1:p1", swap)
-        self.assertIn("already", self.run_stella("crew", "--pane").stdout)
-        self.assertEqual(len([c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "split"]]), 1)
+        self.assertNotEqual(self.run_stella("crew", "--pane").returncode, 0)
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "Stella"}))
+        (self.sh / "crew-pane").write_text("w1:t1:p1\n")
+        self.assertEqual(self.run_stella("crew", "--unpane").returncode, 0)
+        self.assertEqual(self.herdr_calls("pane", "close"), [["pane", "close", "w1:t1:p1"]])
+        self.assertFalse((self.sh / "crew-pane").exists())
+        self.assertIn("no crew-list pane", self.run_stella("crew", "--unpane").stdout)
+        self.assertEqual(len(self.herdr_calls("pane", "close")), 1)
 
     def test_hide_closes_only_the_tabs_of_crew_records_and_keeps_the_sessions(self):
         self.with_herdr()
@@ -590,25 +640,36 @@ class Helper(unittest.TestCase):
         self.assertEqual(sorted(self.tabs().values()), ["Stella", "kohens-own-shell"])
         self.assertFalse([c for c in self.calls() if c[:1] in (["stop"], ["rm"])])  # the sessions are untouched
 
-    def test_view_repair_attaches_again_but_opens_no_tab(self):
-        self.with_herdr()
-        self.live("exited-one", "no-tab-one")
-        self.crew("exited-one", id="00000001")
-        self.crew("no-tab-one", id="00000002")
-        self.herdr_tabs.write_text(json.dumps({"w1:t1": "exited-one"}))
-        self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w1:t1:p1": "Session 00000001 has exited."})}
-        self.assertEqual(self.run_stella("view", "--repair").returncode, 0)
-        runs = [c for c in map(json.loads, self.herdr_log.read_text().splitlines()) if c[:2] == ["pane", "run"]]
-        self.assertEqual([r[2] for r in runs], ["w1:t1:p1"])
-        self.assertEqual(list(self.tabs().values()), ["exited-one"])
-
-    def test_view_of_one_opens_a_tab_only_when_asked(self):
+    def test_hide_never_closes_a_tab_of_the_crew_workspace(self):
         self.with_herdr()
         self.live("built")
         self.crew("built", id="00000001")
-        self.assertEqual(self.tabs(), {})
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "Stella", "w1:t2": "built"}))
+        self.run_stella("crew", "sync")  # the sidebar tab of `built`, next to the old tab in the work window
+        self.assertEqual(sorted(self.tabs().values()), ["Stella", "built", "built"])
+        self.run_stella("hide", "--all")
+        self.assertEqual(sorted(self.tabs()), ["w10:t1", "w1:t1"])  # the old one went, the sidebar's stays
+        self.assertEqual(list(self.sidebar().values()), ["built"])
+
+    def test_view_repair_and_view_all_are_the_old_names_of_crew_sync(self):
+        self.with_herdr()
+        self.live("built")
+        self.crew("built", id="00000001")
+        for old in ("--repair", "--all"):
+            self.assertEqual(self.run_stella("view", old).returncode, 0)
+        self.assertEqual(list(self.sidebar().values()), ["built"])
+        self.assertEqual([t for t in self.tabs() if t.startswith("w1:")], [])
+
+    def test_view_of_one_takes_kohen_to_its_sidebar_tab_and_opens_no_tab_in_the_work_window(self):
+        self.with_herdr()
+        self.live("built")
+        self.crew("built", id="00000001")
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "Stella"}))
+        self.assertEqual(self.tabs(), {"w1:t1": "Stella"})
         self.assertEqual(self.run_stella("view", "built").returncode, 0)
-        self.assertEqual(list(self.tabs().values()), ["built"])
+        self.assertEqual(sorted(self.tabs()), ["w1:t1", "w10:t1"][::-1])
+        self.assertEqual(self.herdr_calls("tab", "focus"), [["tab", "focus", "w10:t1"]])
+        self.assertEqual(self.herdr_calls("workspace", "focus"), [["workspace", "focus", "w10"]])
 
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)

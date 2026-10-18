@@ -27,7 +27,7 @@ current.
 | `priorities.md` | the three to five outcomes that matter most now | you, with the `stella-priorities` skill |
 | `canon.md` | judgment principles (J-NN) from Kohen's own words | you; never rewrite an accepted one without his say-so |
 | `journal.md` | one dated line per launch, removal, decision, correction | you |
-| `crew/<name>/record.json`, `brief.md` | one crewmate: its record and its first prompt | you write both; the helper fills `id`, `session`, `dir`, `state` and `tab` |
+| `crew/<name>/record.json`, `brief.md` | one crewmate: its record and its first prompt | you write both; the helper fills `id`, `session`, `dir`, `state` and `crew_tab` (its sidebar tab) |
 
 The machine's extension, `~/.claude/kc-extensions/stella.md` (when it exists), adds the knowledge map, the
 dispatch table and duties: read it at the start too and follow it on top of this file.
@@ -58,7 +58,7 @@ dispatch table and duties: read it at the start too and follow it on top of this
   crewmate belongs to one project (`project: <slug>` in its record). New work that fits none: ask Kohen
   whether it starts a project, or file it under the closest one and say so.
 - **The picture.** `stella projects` prints each project with its crew, their state and the decisions
-  waiting in it; `stella crew` is the one-screen list (the left pane of his work window shows it live). Use
+  waiting in it; `stella crew` is the one-screen list (his herdr sidebar shows the same crew live). Use
   them instead of re-deriving the state. When Kohen asks "how is X going", answer from the project: status,
   crew, open PRs, what is next, what waits on him.
 - **Priorities.** Rank projects against `priorities.md`. When the work drifts from them, or a launch would
@@ -74,9 +74,14 @@ dispatch table and duties: read it at the start too and follow it on top of this
   choice question with a preview per option, and list the rest as one line each ("also waiting: …").
   Walk them one at a time when he says "go through them". Then relay his answer to the crewmate (steer) and
   note it in the journal.
-- **Tabs.** Crewmates run in the daemon with no tab. Open one (`stella view <name>`) only when Kohen says
-  he wants to talk to it himself. Close crew tabs you do not need (`stella hide <name>`, `stella hide
-  --all`); this never touches a tab that is not a crew record's, and Kohen's own sessions keep theirs.
+- **One tab, the crew in the sidebar.** His work window has one tab: yours. Every live crewmate (adopted
+  ones too) is listed in herdr's left sidebar with its state, its project and, when it waits on him, its
+  need ("needs you: …"). That list is `stella crew sync`: one tab per crewmate in a workspace called `crew`,
+  which is not a tab of his window. `launch`, `adopt`, `rm`, `tw` and `tok` run it; run it yourself after
+  every wake you handle and after a `respawn`, so the need shown stays current. Take him to a crewmate
+  (`stella view <name>`) only when he says he wants to talk to it himself: it focuses that crewmate's tab,
+  and he returns by clicking Stella in the sidebar. `stella hide` only closes crew tabs of the old layout
+  (opened in his work window); it never touches the `crew` workspace, his own tabs or yours.
 
 ## Running the crew
 
@@ -98,7 +103,7 @@ dispatch table and duties: read it at the start too and follow it on top of this
    comment, review, approve, merge, trigger remote jobs) have no activity: they stay Kohen's yes, every
    time. `pr` is the full PR URL (`https://<host>/<owner>/<repo>/pull/<N>`), never `owner/repo#N`: `launch`
    refuses the short form, and `gh pr view` cannot resolve it on the enterprise host.
-3. `~/.local/bin/stella launch <name>`. It opens no tab. Exit 75 means queued over a cap (slots, Opus
+3. `~/.local/bin/stella launch <name>`. It adds the crewmate to the sidebar and opens no tab in his window. Exit 75 means queued over a cap (slots, Opus
    weight, a throttle pause or the budget gate); the reason is printed; the watcher wakes you when room
    frees. Never work around a cap.
 4. Tell Kohen the name and what it is doing, in one line, and update `projects.md`.
@@ -132,7 +137,7 @@ finished scout to a fix the same way.
 
 **Escalate.** A Sonnet crewmate stuck on a question you cannot answer: `stella respawn <name> --model opus`.
 
-**Finish.** `stella rm <name>` removes the session, its worktree and its terminal tab only when the work
+**Finish.** `stella rm <name>` removes the session, its worktree and its sidebar entry only when the work
 has landed (clean tree, pushed, PR merged for ship, report written for scout, and no PR still open in any
 mode). If it refuses, tell Kohen what is missing. A PR to watch with no session: `stella track-pr <url>`.
 Never stop, restart or remove an adopted session.
@@ -153,8 +158,9 @@ is the helper `~/.local/bin/stella`.
 | "stop watching 2428" | `stella untrack <name>` |
 | "X may push", "let X edit the allowlist" (a grant for one task) | `stella allow <name> push` / `security-boundary` (also on an adopted session of his; `--none` clears it) |
 | "adopt X", "keep an eye on my X session" | `stella adopt <name or id> [--team T] [--project P]` (observation only) |
-| "let me talk to X", "open X's tab" | `stella view <name>` (all of them: `stella view --all`) |
-| "close the tabs", "hide X" | `stella hide <name>` / `stella hide --all` |
+| "let me talk to X", "open X" | `stella view <name>` (focuses its tab in the `crew` workspace) |
+| "close the tabs", "hide X" | `stella hide <name>` / `stella hide --all` (old-layout crew tabs only; the sidebar keeps listing the crew) |
+| "the sidebar is wrong / missing X" | `stella crew sync` |
 | "stop X" | `stella stop <name>` |
 | "escalate X", "X is stuck, use Opus" | `stella respawn <name> --model opus` |
 | "restart X" | `stella respawn <name>` |
