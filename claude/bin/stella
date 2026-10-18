@@ -83,6 +83,7 @@ REPO = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
 BRANCH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,100}$")
 MODEL = re.compile(r"^[a-z0-9][a-z0-9.\[\]-]{0,40}$")
 SHORT_ID = re.compile(r"^[0-9a-f]{8}$")
+PROJECT_SEP = " · "  # between the project and the name in a crew workspace label
 CHILD = "└ "  # a crewmate's herdr workspace is labelled "└ <name>", as firstmate labels its crew workspaces
 TAB_PREFIX = "fm-"  # and its one tab "fm-<name>"
 PARENT = "stella"  # the workspace that holds Stella's tab (firstmate's is "firstmate"); the crew sits right after it
@@ -642,26 +643,80 @@ def _move_workspace(herdr: str, ws: str, index: int) -> bool:
     return reply.get("error") is None and reply.get("id") == req["id"]
 
 
-def _order_after_parent(herdr: str, ws: str) -> None:
-    """Put the new crew workspace after the others, or right after Stella's own, so the sidebar reads: work,
-    then its crew in the order they started."""
-    p = _herdr_run(herdr, "workspace", "list")
-    order: list[tuple[str, str]] = []
+def priority_rank(recs: list[dict]) -> dict[str, int]:
+    """{project: rank} from priorities.md: a project ranks by the first numbered priority that names its slug
+    or one of its crewmates; a project no priority names has no rank."""
     try:
-        for w in json.loads(p.stdout)["result"]["workspaces"]:
-            order.append((w.get("workspace_id") or w.get("id"), w.get("label") or ""))
+        lines = (STELLA_HOME / "priorities.md").read_text().splitlines()
+    except OSError:
+        return {}
+    items = [ln for ln in lines if re.match(r"\s*\d+\.\s", ln)]
+    rank: dict[str, int] = {}
+    for proj in {r["project"] for r in recs if r.get("project")}:
+        words = {proj} | {r["name"] for r in recs if r.get("project") == proj}
+        for i, ln in enumerate(items):
+            if any(re.search(rf"(?<![A-Za-z0-9-]){re.escape(w)}(?![A-Za-z0-9-])", ln) for w in words):
+                rank[proj] = i
+                break
+    return rank
+
+
+def crew_label(rec: dict) -> str:
+    """The crewmate's workspace label: "└ <project> · <name>", or "└ <name>" without a project."""
+    return CHILD + (f"{rec['project']}{PROJECT_SEP}" if rec.get("project") else "") + rec["name"]
+
+
+def crew_sort(recs: list[dict]) -> list[dict]:
+    """Projects in the order of priorities.md, then the rest alphabetically; crewmates of a project
+    alphabetically; a crewmate with no project last."""
+    rank = priority_rank(recs)
+    return sorted(recs, key=lambda r: (not r.get("project"), rank.get(r.get("project"), len(rank)),
+                                       r.get("project") or "", r["name"]))
+
+
+def find_workspace(wss: dict[str, str], rec: dict) -> str | None:
+    """The crewmate's workspace: the one its record names, else the one labelled with its name, with or
+    without a project in front (the layout before projects)."""
+    if rec.get("crew_ws") in wss:
+        return rec["crew_ws"]
+    name = rec["name"]
+    return next((w for w, label in wss.items()
+                 if label == CHILD + name or (label.startswith(CHILD) and label.endswith(PROJECT_SEP + name))), None)
+
+
+def desired_order(herdr: str, recs: list[dict], wss: dict[str, str]) -> list[str]:
+    """The ids of the live crewmates' workspaces in the order the sidebar should list them."""
+    return [w for w in (find_workspace(wss, r) for r in crew_sort(recs)) if w]
+
+
+def _order_crew(herdr: str, wanted: list[str]) -> None:
+    """Put the crew workspaces right after Stella's, in `wanted` order. Idempotent: a workspace already at its
+    place is not moved, and Kohen's workspaces only keep their relative order (they follow the crew)."""
+    p = _herdr_run(herdr, "workspace", "list")
+    try:
+        cur = [w.get("workspace_id") or w.get("id") for w in json.loads(p.stdout)["result"]["workspaces"]]
+        labels = {(w.get("workspace_id") or w.get("id")): w.get("label") or "" for w in json.loads(p.stdout)["result"]["workspaces"]}
     except (ValueError, KeyError, TypeError, AttributeError):
         return
-    rest = [(w, label) for w, label in order if w != ws]
-    parent = next((i for i, (_, label) in enumerate(rest) if label in (PARENT, OLD_PARENT)), None)
-    if parent is None:
-        return
-    # after the last crew workspace (the block right after Stella's, when it is one), else right after Stella's;
-    # the existing ones are never moved
-    last = max((i for i, (_, label) in enumerate(rest) if label.startswith(CHILD)), default=None)
-    at = (last if last is not None else parent) + 1
-    if next(i for i, (w, _) in enumerate(order) if w == ws) != at:
-        _move_workspace(herdr, ws, at)
+    for k, ws in enumerate(wanted):
+        parent = next((i for i, w in enumerate(cur) if labels[w] in (PARENT, OLD_PARENT)), None)
+        if parent is None or ws not in cur:
+            return
+        at = parent + 1 + k
+        if at >= len(cur) or cur[at] == ws:
+            continue
+        if not _move_workspace(herdr, ws, at):
+            return
+        cur.remove(ws)
+        cur.insert(at, ws)
+
+
+def _relabel(herdr: str, wss: dict[str, str], recs: list[dict]) -> None:
+    for rec in recs:
+        ws = find_workspace(wss, rec)
+        if ws and wss[ws] != crew_label(rec):
+            _herdr_run(herdr, "workspace", "rename", ws, crew_label(rec))
+            wss[ws] = crew_label(rec)
 
 
 def _agent_panes(herdr: str) -> set[str]:
@@ -702,7 +757,7 @@ def _report_agent(herdr: str, pane: str, rec: dict) -> None:
 def _open_crew_workspace(herdr: str, rec: dict) -> tuple[str, str] | None:
     """The crewmate's own workspace, "└ <name>", with one tab "fm-<name>" running `stella tab <id>`. It takes
     no focus. (workspace id, tab id), or None when herdr refused."""
-    r = _herdr_run(herdr, "workspace", "create", "--label", CHILD + rec["name"], "--cwd", rec.get("dir") or str(HOME),
+    r = _herdr_run(herdr, "workspace", "create", "--label", crew_label(rec), "--cwd", rec.get("dir") or str(HOME),
                    "--no-focus")
     try:
         res = json.loads(r.stdout)["result"]
@@ -716,7 +771,6 @@ def _open_crew_workspace(herdr: str, rec: dict) -> tuple[str, str] | None:
         return None
     _herdr_run(herdr, "tab", "rename", tab, TAB_PREFIX + rec["name"])
     _herdr_run(herdr, "pane", "run", pane, _attach_cmd(rec["id"]))
-    _order_after_parent(herdr, ws)
     return ws, tab
 
 
@@ -758,13 +812,14 @@ def sync_sidebar() -> None:
     _retire_old_crew_workspace(herdr, wss, {r["name"] for r in recs})
     for rec in recs:
         sid, name = rec["id"], rec["name"]
-        ws = rec.get("crew_ws") if rec.get("crew_ws") in wss else next((w for w, label in wss.items() if label == CHILD + name), None)
+        ws = find_workspace(wss, rec)
         if VERBOSE:
             print(f"{name}: sid={sid} live={sid in live} workspace={ws} state={rec.get('state')}")
         if sid in live and rec.get("state") != "landed":
             if not ws:
                 opened = _open_crew_workspace(herdr, rec)
                 if opened:
+                    wss[opened[0]] = crew_label(rec)
                     save(name, {**load(name), "crew_ws": opened[0], "attach": ATTACH_VERSION})
                     print(f"{name}: in the sidebar")
                 continue
@@ -790,6 +845,10 @@ def sync_sidebar() -> None:
             _herdr_run(herdr, "workspace", "close", ws)
             save(name, {k: v for k, v in load(name).items() if k != "crew_ws"})
             print(f"{name}: left the sidebar")
+    live_recs = [r for r in recs if r["id"] in live and r.get("state") != "landed"]
+    wss = _workspaces(herdr) or wss
+    _relabel(herdr, wss, live_recs)
+    _order_crew(herdr, desired_order(herdr, live_recs, wss))
     # Stella's own tab has no crew record: find it by its label and repair it the same way
     me = stella_row()
     if me:
@@ -815,7 +874,7 @@ def view(name: str) -> None:
     herdr = _herdr()
 
     def find() -> str | None:
-        return next((w for w, label in (_workspaces(herdr) or {}).items() if label == CHILD + name), None)
+        return find_workspace(_workspaces(herdr) or {}, rec)
 
     ws = find() if herdr else None
     if herdr and not ws:
@@ -867,11 +926,15 @@ def doctor(as_json: bool) -> None:
         live = {a.get("id") for a in agents(False)} - {None}
         order = list(wss.items())
         detected = _agent_panes(herdr)
+        live_recs = [r for r in records() if r.get("id") and r.get("mode") != "track"
+                     and r["id"] in live and r.get("state") != "landed"]
+        wanted_ws = desired_order(herdr, live_recs, wss)
+        parent_idx = next((i for i, (_, label) in enumerate(order) if label in (PARENT, OLD_PARENT)), -1)
         for rec in records():
             if not rec.get("id") or rec.get("mode") == "track":
                 continue
             name = rec["name"]
-            ws = next((w for w, label in wss.items() if label == CHILD + name), None)
+            ws = find_workspace(wss, rec)
             tabs = _herdr_tabs(herdr, ws) if ws else {}
             panes = [pn for t in tabs for pn in _tab_panes(herdr, t)]
             idx = next((i for i, (w, _) in enumerate(order) if w == ws), None)
@@ -879,11 +942,14 @@ def doctor(as_json: bool) -> None:
             listed = bool(panes) and all(pn in detected for pn in panes)
             check = {
                 "crewmate": name, "session_live": rec["id"] in live, "state": rec.get("state"),
-                "workspace": ws, "label": CHILD + name, "position": idx,
+                "workspace": ws, "label": crew_label(rec), "actual_label": wss.get(ws) if ws else None,
+                "label_ok": ws is None or wss[ws] == crew_label(rec), "position": idx,
+                "order_ok": ws is None or ws not in wanted_ws or idx == (parent_idx + 1 + wanted_ws.index(ws)),
                 "tabs": list(tabs.values()), "tab_ok": TAB_PREFIX + name in tabs.values(),
                 "panes": panes, "agent_listed": listed, "reported_by_stella": bool(rec.get("reported")),
                 "ok": (ws is not None) == wanted and (listed or not wanted),
             }
+            check["ok"] = check["ok"] and check["label_ok"] and check["order_ok"]
             if wanted and panes and not listed:  # why herdr does not see an agent there
                 diag = {}
                 for pn in panes:

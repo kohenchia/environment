@@ -366,12 +366,12 @@ class Helper(unittest.TestCase):
         self.herdr_tabs.write_text(json.dumps({"w1:t1": "stella"}))
         Path(str(self.herdr_tabs) + ".ws").write_text(json.dumps({"w1": "work"}))
         self.assertEqual(self.run_stella("crew", "sync").returncode, 0)
-        self.assertEqual(self.sidebar(), {"└ built": ["fm-built"], "└ adopted-one": ["fm-adopted-one"]})
+        self.assertEqual(self.sidebar(), {"└ mlc · built": ["fm-built"], "└ adopted-one": ["fm-adopted-one"]})
         self.assertEqual([t for t in self.tabs() if t.startswith("w1:")], ["w1:t1"])  # the work window gained no tab
         creates = self.herdr_calls("workspace", "create")
         self.assertEqual(len(creates), 2)
         self.assertIn("--no-focus", creates[0])
-        self.assertEqual(self.rec("built")["crew_ws"], [w for w, n in self.workspaces().items() if n == "└ built"][0])
+        self.assertEqual(self.rec("built")["crew_ws"], [w for w, n in self.workspaces().items() if n == "└ mlc · built"][0])
         runs = self.herdr_calls("pane", "run")
         self.assertEqual(sorted(r[3].split("claude attach ")[1].split(";")[0] for r in runs), ["00000001", "00000002"])
         self.run_stella("crew", "sync")  # a second run opens nothing new
@@ -413,9 +413,54 @@ class Helper(unittest.TestCase):
         finally:
             srv.close()
         # the fake lists workspaces in creation order: work, scratch, first, second. `first` goes to index 1,
-        # right after work; `second` already follows `first`, so it is not moved
-        self.assertEqual([g["insert_index"] for g in got], [1])
+        # right after work; `second` then goes to 2, ahead of scratch (the fake socket does not really move)
+        self.assertEqual([g["insert_index"] for g in got], [1, 2])
         self.assertEqual(got[0]["workspace_id"], [w for w, n in self.workspaces().items() if n == "└ first"][0])
+
+    def test_crew_sync_labels_with_the_project_and_orders_by_priority_then_alphabet_and_is_idempotent(self):
+        self.with_herdr()
+        (self.home / ".local/share/stella").mkdir(parents=True, exist_ok=True)
+        (self.home / ".local/share/stella/priorities.md").write_text(
+            "# P\n\n1. **Infer.** Crew: zeta-crew.\n2. **Other.** project beta.\n")
+        self.live("zeta-crew", "a-beta", "b-alpha", "loose")
+        self.crew("zeta-crew", id="00000001", project="gamma")
+        self.crew("a-beta", id="00000002", project="beta")
+        self.crew("b-alpha", id="00000003", project="alpha")
+        self.crew("loose", id="00000004")
+        self.herdr_tabs.write_text(json.dumps({"w1:t1": "stella", "w2:t1": "scratch"}))
+        Path(str(self.herdr_tabs) + ".ws").write_text(json.dumps({"w1": "stella", "w2": "scratch"}))
+        self.run_stella("crew", "sync")
+        labels = sorted(self.workspaces().values())
+        self.assertEqual(labels, sorted(["stella", "scratch", "└ gamma · zeta-crew", "└ beta · a-beta",
+                                         "└ alpha · b-alpha", "└ loose"]))
+        d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
+        by = {c["crewmate"]: c for c in d["checks"] if "crewmate" in c}
+        self.assertTrue(all(c["label_ok"] for c in by.values()))
+        # a stale label (no project) is renamed once; a second run renames and creates nothing
+        ws = [w for w, n in self.workspaces().items() if n == "└ gamma · zeta-crew"][0]
+        Path(str(self.herdr_tabs) + ".ws").write_text(json.dumps({**self.workspaces(), ws: "└ zeta-crew"}))
+        before = len(self.herdr_calls("workspace", "rename"))
+        self.run_stella("crew", "sync")
+        self.assertEqual(len(self.herdr_calls("workspace", "rename")), before + 1)
+        self.run_stella("crew", "sync")
+        self.assertEqual(len(self.herdr_calls("workspace", "rename")), before + 1)
+        self.assertEqual(len(self.herdr_calls("workspace", "create")), 4)
+        self.assertEqual(self.workspaces()[ws], "└ gamma · zeta-crew")
+        self.assertEqual(self.workspaces()["w2"], "scratch")
+
+    def test_crew_sort_puts_prioritised_projects_first_then_alphabetical_and_no_project_last(self):
+        import importlib.machinery
+        import importlib.util
+        loader = importlib.machinery.SourceFileLoader("stella_mod", str(STELLA))
+        spec = importlib.util.spec_from_loader("stella_mod", loader)
+        mod = importlib.util.module_from_spec(spec)
+        loader.exec_module(mod)
+        (self.home / ".local/share/stella").mkdir(parents=True, exist_ok=True)
+        mod.STELLA_HOME = self.home / ".local/share/stella"
+        (mod.STELLA_HOME / "priorities.md").write_text("1. one\n2. project zed and crew m2\n")
+        recs = [{"name": "n1", "project": "alpha"}, {"name": "m2", "project": "mid"}, {"name": "x"},
+                {"name": "m1", "project": "mid"}, {"name": "z", "project": "zed"}, {"name": "b", "project": "beta"}]
+        self.assertEqual([r["name"] for r in mod.crew_sort(recs)], ["m1", "m2", "z", "n1", "b", "x"])
 
     def test_crew_sync_renames_the_work_workspace_to_stella(self):
         self.with_herdr()
@@ -672,7 +717,7 @@ class Helper(unittest.TestCase):
         self.crew("fix-flake", project="benchmark-poem")
         self.assertEqual(self.run_stella("launch", "fix-flake").returncode, 0)
         self.assertEqual([t for t in self.tabs() if t.startswith("w1:")], ["w1:t1"])
-        self.assertEqual(self.sidebar(), {"└ fix-flake": ["fm-fix-flake"]})
+        self.assertEqual(self.sidebar(), {"└ benchmark-poem · fix-flake": ["fm-fix-flake"]})
         self.assertEqual(self.rec("fix-flake")["project"], "benchmark-poem")
 
     def test_adopt_lists_the_session_in_the_sidebar(self):

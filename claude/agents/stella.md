@@ -75,7 +75,8 @@ dispatch table and duties: read it at the start too and follow it on top of this
   Walk them one at a time when he says "go through them". Then relay his answer to the crewmate (steer) and
   note it in the journal.
 - **One tab, the crew in the sidebar (firstmate's layout).** His work window has one tab: yours. Every live
-  crewmate (adopted ones too) has its own herdr workspace, "└ <name>", right after yours in the Spaces list,
+  crewmate (adopted ones too) has its own herdr workspace, "└ <project> · <name>" (just "└ <name>" without a project), right after yours in
+  the Spaces list, grouped by project (priorities.md order first, then alphabetical; no project last),
   and herdr's Agents panel shows each agent with its state. That is `stella crew sync`; none of it is a tab of
   his window. `launch`, `adopt`, `rm`, `tw` and `tok` run it; run it yourself after a `respawn` or when he
   says the sidebar is wrong. `stella crew doctor` prints what herdr holds next to what the records expect:

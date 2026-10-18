@@ -10,7 +10,7 @@ install it with the package manager, never a release older than v0.8.0.
 | Where | What |
 | --- | --- |
 | Workspace `stella`, its one tab | Stella's session: talk to her here. Nothing else is a tab of this window |
-| The sidebar, top (Spaces) | `stella`, then one workspace "└ <crewmate>" per live crewmate, in the order they started |
+| The sidebar, top (Spaces) | `stella`, then one workspace "└ <project> · <crewmate>" per live crewmate, grouped by project (priorities.md order, then alphabetical; no project last) |
 | The sidebar, bottom (Agents) | herdr's own panel: one row per agent with its state dot, workspace, tab and harness. It is herdr's default, the same as firstmate's |
 | A crewmate's workspace | one tab, `fm-<crewmate>`, whose shell runs `while stella listed <id>; do claude attach <id>; sleep 2; done`: `claude attach` itself is the foreground process (herdr detects an agent from that, so a wrapper process in front of it would hide it), and the loop attaches again after a restart, of a session that lives in the Claude daemon. If herdr still lists no agent in the pane, `stella crew sync` registers it with `herdr pane report-agent` (source `stella`) and releases that when herdr sees it itself. Closing it does not stop the session |
 
