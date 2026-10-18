@@ -1284,6 +1284,25 @@ class Helper(unittest.TestCase):
             time.sleep(0.1)
         self.assertFalse(_alive(old))
 
+    def test_doctor_accepts_a_first_window_kohen_closed_and_shows_what_runs_in_the_panes(self):
+        self.herdr_start()
+        self.live("built")
+        self.crew("built", id="00000001", project="mlc")
+        self.run_stella("crew", "sync")
+        d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
+        space = next(c for c in d["checks"] if c.get("check") == "space mlc")
+        self.assertEqual(space["first_window"], "ok")
+        self.assertEqual(space["first_window_foreground"][0], "zsh")
+        self.assertEqual(next(c for c in d["checks"] if c.get("crewmate") == "built")["foreground"][0], "zsh")
+        first = json.loads((self.sh / "view.json").read_text())["firsts"]["mlc"]
+        t = self.tabs()
+        del t[first]
+        self.herdr_tabs.write_text(json.dumps(t))
+        d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
+        space = next(c for c in d["checks"] if c.get("check") == "space mlc")
+        self.assertEqual(space["first_window"], "closed by Kohen")
+        self.assertTrue(space["ok"])
+
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)
         self.assertEqual(self.run_stella("frobnicate").returncode, 2)

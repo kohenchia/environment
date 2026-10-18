@@ -1567,10 +1567,14 @@ def doctor(as_json: bool) -> None:
             members = [w for w in wants if w["project"] == slug]
             closed = ws not in wss and slug in v["closed"]
             first = v["firsts"].get(slug)
+            first_gone = first not in tabs  # Kohen closed or merged it into another window: his to arrange
+            first_ok = first_gone or tabs[first][0] == slug
+            fpanes = by_tab.get(first) or [] if not first_gone else []
             checks.append({"check": f"space {slug}", "workspace": ws, "closed_by_kohen": closed,
                            "label_ok": closed or wss.get(ws) == slug,
-                           "first_window_ok": closed or (first in tabs and tabs[first][0] == slug),
-                           "ok": closed or (wss.get(ws) == slug and first in tabs and tabs[first][0] == slug)})
+                           "first_window": "closed by Kohen" if first_gone else "ok" if first_ok else "wrong label",
+                           "first_window_foreground": pane_foreground(herdr, fpanes[0]) if fpanes else None,
+                           "ok": closed or (wss.get(ws) == slug and first_ok)})
             _ = members
         claude_n = {"awaiting": 0, "working": 0, "completed": 0}
         herdr_n = {"yellow": 0, "blue": 0, "green/hollow": 0}
@@ -1605,6 +1609,7 @@ def doctor(as_json: bool) -> None:
                     info = {}
                 ids = set(re.findall(r"attach\s+([0-9a-f]{8})", " ".join(v for _, v in _strings(info))))
                 chk["attached_other"] = bool(ids) and w["sid"] not in ids
+                chk["foreground"] = pane_foreground(herdr, pane)
             chk["ok"] = (chk["space_ok"] and chk["state_ok"] and not chk["legacy_workspace"]
                          and not chk.get("attached_other"))
             checks.append(chk)
