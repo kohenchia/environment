@@ -20,6 +20,14 @@ FAKE_HERDR = REPO / "claude/tests/fake-herdr"
 PR = "https://github.example.com/acme/widgets/pull/2428"
 
 
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
 class Helper(unittest.TestCase):
     def setUp(self):
         self.t = tempfile.TemporaryDirectory()
@@ -47,7 +55,8 @@ class Helper(unittest.TestCase):
     extra_env: dict = {}
 
     def with_herdr(self):
-        (self.bin / "herdr").symlink_to(FAKE_HERDR)
+        if not (self.bin / "herdr").exists():
+            (self.bin / "herdr").symlink_to(FAKE_HERDR)
 
     def tabs(self):
         return json.loads(self.herdr_tabs.read_text()) if self.herdr_tabs.exists() else {}
@@ -78,7 +87,7 @@ class Helper(unittest.TestCase):
         env = {"HOME": str(self.home), "STELLA_PATH": f"{self.bin}:/usr/bin:/bin", "FAKE_CLAUDE_LOG": str(self.log),
                "FAKE_CLAUDE_AGENTS": str(self.agents), "FAKE_HERDR_LOG": str(self.herdr_log),
                "FAKE_HERDR_TABS": str(self.herdr_tabs), "STELLA_FOLLOW_GRACE": "0.2",
-               "STELLA_FOLLOW_WAIT": "3", **self.extra_env}
+               "STELLA_FOLLOW_WAIT": "3", "STELLA_NO_FOLLOWER": "1", **self.extra_env}
         return subprocess.run(["python3", str(STELLA), *args], cwd=cwd or self.sh, env=env,
                               capture_output=True, text=True, timeout=30)
 
@@ -512,23 +521,89 @@ class Helper(unittest.TestCase):
         self.assertEqual(self.run_stella("listed", "00000001").returncode, 0)
         self.assertEqual(self.run_stella("listed", "000000ff").returncode, 1)
 
-    def test_an_undetected_crew_pane_is_registered_as_a_claude_agent_and_released_once_herdr_sees_it(self):
+    def with_window(self, name="built", sid="00000001", ws="w10", **rec):
+        """A live crewmate with a window in the workspace of the earlier layout (the reporter reads either)."""
         self.with_herdr()
-        self.live("built")
-        self.crew("built", id="00000001")
-        self.extra_env = {"FAKE_HERDR_AGENTS": "[]"}
-        self.run_stella("crew", "sync")  # opens the workspace
-        self.run_stella("crew", "sync")  # the pane exists now and herdr lists no agent in it
+        self.live(name)
+        self.crew(name, id=sid, crew_ws=ws, attach=2, **rec)
+        self.herdr_tabs.write_text(json.dumps({f"{ws}:t1": f"fm-{name}"}))
+        Path(str(self.herdr_tabs) + ".ws").write_text(json.dumps({ws: f"└ {name}"}))
+
+    def test_follow_copies_claudes_awaiting_input_onto_the_pane_and_the_space(self):
+        self.with_window(project="mlc")
+        self.job("00000001", state="blocked", needs="pick the base branch")
+        self.assertEqual(self.run_stella("crew", "follow", "--once").returncode, 0)
         rep = self.herdr_calls("pane", "report-agent")
         self.assertEqual(len(rep), 1)
-        self.assertEqual(rep[0][2:6], [rep[0][2], "--source", "stella", "--agent"])
-        self.assertIn("claude", rep[0])
-        self.assertTrue(self.rec("built")["reported"])
-        pane = rep[0][2]
-        self.extra_env = {"FAKE_HERDR_AGENTS": json.dumps([pane])}
-        self.run_stella("crew", "sync")
-        self.assertEqual(len(self.herdr_calls("pane", "release-agent")), 1)
-        self.assertNotIn("reported", self.rec("built"))
+        self.assertEqual(rep[0][2], "w10:t1:p1")
+        self.assertEqual(rep[0][rep[0].index("--state") + 1], "blocked")
+        self.assertEqual(rep[0][rep[0].index("--message") + 1], "pick the base branch")
+        meta = self.herdr_calls("pane", "report-metadata")[0]
+        self.assertIn("blocked=needs you", meta)
+        self.assertEqual(meta[meta.index("--title") + 1], "pick the base branch")
+        ws = self.herdr_calls("workspace", "report-metadata")
+        self.assertEqual([c for c in ws if c[2] == "w10"][0][3:], ["--source", "stella", "--token", "need=1 waiting"])
+
+    def test_follow_maps_working_to_working_and_everything_else_to_idle(self):
+        for claude_state, herdr_state in (("working", "working"), ("done", "idle"), ("stopped", "idle"),
+                                          ("blocked", "blocked")):
+            with self.subTest(claude_state):
+                self.herdr_log.unlink(missing_ok=True)
+                self.with_window()
+                self.job("00000001", state=claude_state)
+                self.run_stella("crew", "follow", "--once")
+                rep = self.herdr_calls("pane", "report-agent")[0]
+                self.assertEqual(rep[rep.index("--state") + 1], herdr_state)
+
+    def test_follow_reports_a_change_once_and_a_steady_state_not_again(self):
+        self.with_window()
+        self.job("00000001", state="working")
+        env = dict(os.environ, HOME=str(self.home), STELLA_PATH=f"{self.bin}:/usr/bin:/bin",
+                   FAKE_CLAUDE_LOG=str(self.log), FAKE_CLAUDE_AGENTS=str(self.agents),
+                   FAKE_HERDR_LOG=str(self.herdr_log), FAKE_HERDR_TABS=str(self.herdr_tabs),
+                   STELLA_FOLLOW_EVERY="0.3", STELLA_FOLLOW_CYCLES="8", STELLA_NO_FOLLOWER="1")
+        p = subprocess.Popen(["python3", str(STELLA), "crew", "follow"], cwd=self.sh, env=env,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        for _ in range(100):  # the first report is out: now the state changes
+            if self.herdr_calls("pane", "report-agent"):
+                break
+            time.sleep(0.1)
+        self.job("00000001", state="blocked", needs="ship it?")
+        p.communicate(timeout=20)
+        states = [c[c.index("--state") + 1] for c in self.herdr_calls("pane", "report-agent")]
+        self.assertEqual(states, ["working", "blocked"])  # six cycles, two reports
+        need = [c for c in self.herdr_calls("workspace", "report-metadata") if "--token" in c]
+        self.assertEqual(len(need), 1)
+
+    def test_follow_clears_the_space_count_when_nothing_waits_any_more(self):
+        self.with_window()
+        self.job("00000001", state="done")
+        self.run_stella("crew", "follow", "--once")
+        self.assertEqual(self.herdr_calls("workspace", "report-metadata")[0][3:],
+                         ["--source", "stella", "--clear-token", "need"])
+
+    def test_follow_gives_a_session_without_a_job_file_no_dot(self):
+        self.with_window()
+        self.run_stella("crew", "follow", "--once")
+        self.assertEqual(self.herdr_calls("pane", "report-agent"), [])
+
+    def test_follow_ensure_starts_one_detached_reporter_and_a_second_call_starts_none(self):
+        self.with_window()
+        self.extra_env = {"STELLA_FOLLOW_EVERY": "0.1", "STELLA_NO_FOLLOWER": ""}
+        first = self.run_stella("crew", "follow", "--ensure")
+        pid = int(first.stdout.split("(")[1].split(")")[0])
+        self.addCleanup(lambda: os.kill(pid, 15) if _alive(pid) else None)
+        self.assertTrue(_alive(pid), first.stdout + first.stderr)
+        self.assertIn(f"({pid})", self.run_stella("crew", "follow", "--ensure").stdout)
+        self.assertEqual(int((self.sh / "follow.pid").read_text()), pid)
+
+    def test_follow_ensure_replaces_a_stale_pidfile(self):
+        self.with_window()
+        self.extra_env = {"STELLA_FOLLOW_EVERY": "0.1", "STELLA_NO_FOLLOWER": ""}
+        (self.sh / "follow.pid").write_text("999999\n")
+        pid = int(self.run_stella("crew", "follow", "--ensure").stdout.split("(")[1].split(")")[0])
+        self.addCleanup(lambda: os.kill(pid, 15) if _alive(pid) else None)
+        self.assertNotEqual(pid, 999999)
 
     def test_an_undetected_pane_of_an_earlier_version_is_restarted_once_with_the_new_command(self):
         self.with_herdr()
@@ -681,8 +756,8 @@ class Helper(unittest.TestCase):
     def test_crew_sync_attaches_again_in_a_crew_tab_that_shows_session_exited(self):
         self.with_herdr()
         self.live("exited-one", "fine-one")
-        self.crew("exited-one", id="00000001")
-        self.crew("fine-one", id="00000002")
+        self.crew("exited-one", id="00000001", attach=2)
+        self.crew("fine-one", id="00000002", attach=2)
         self.herdr_tabs.write_text(json.dumps({"w10:t1": "fm-exited-one", "w11:t1": "fm-fine-one"}))
         Path(str(self.herdr_tabs) + ".ws").write_text(json.dumps({"w10": "└ exited-one", "w11": "└ fine-one"}))
         self.extra_env = {"FAKE_HERDR_SCREEN": json.dumps({"w10:t1:p1": "...\nSession 00000001 has exited.\n\n~/github on main\n❯\n", "w11:t1:p1": "working"})}

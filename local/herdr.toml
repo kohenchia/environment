@@ -54,14 +54,27 @@ tab_bar_position = "top"
 sidebar_start_collapsed = false   # the sidebar is the live view of every agent's state
 prompt_new_tab_name = false
 mouse_capture = true
+status_indicators = "dots"         # one filled shape for blocked/working/done; the colour tells them apart
 sidebar_width = 40                # "└ <project> · <crewmate>" labels are long; the default 26 truncates them
 
-# The sidebar is herdr's own: the Spaces list shows Stella's workspace and, under it, one
-# "└ <project> · <crewmate>" workspace each (`stella crew sync`); the Agents panel shows every agent.
-# A Space is one row (state icon and label): the default second row, the pane's git branch, is dropped.
+# Dots show Claude's own state of each session, copied onto the window's pane by `stella crew follow`:
+# yellow = awaiting input (herdr's `blocked`, which its theme draws with `red`), blue = working (`yellow`),
+# green filled = finished and not yet looked at (`done`), hollow = seen. `dots` draws one filled shape for all
+# three; only the colour differs. The theme override recolours exactly these state marks.
+[theme.custom]
+red = "#f9e2af"
+yellow = "#89b4fa"
+
+# The sidebar is herdr's own. Spaces (one per project, Stella's first): the state icon of its most urgent
+# window, the project name and, when windows wait for you, how many ($need, written by the reporter). Agents:
+# the active space's agents only (the reporter sets the view), each with the one line it needs under its name
+# (the pane title the reporter writes).
 [ui.sidebar.spaces]
-rows = [["state_icon", "workspace"]]
-#
+rows = [["state_icon", "workspace", "$need"]]
+
+[ui.sidebar.agents]
+rows = [["state_icon", "tab"], ["terminal_title_stripped"]]
+
 # A herdr server restart must not resume the crew tabs' Claude panes into their own conversation: the sessions
 # belong to the Claude daemon, and `stella crew sync` (run by `tw`) re-attaches them instead.
 [session]

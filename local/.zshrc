@@ -660,6 +660,7 @@ function tw() {
     # every attach: the sidebar lists the live crew (idempotent), and a tab that lost its session is
     # re-attached; this window gets no new tab
     stella crew sync >/dev/null 2>&1
+    stella crew follow --ensure >/dev/null 2>&1   # the dot reporter: one detached process, never Stella's child
     herdr
 }
 

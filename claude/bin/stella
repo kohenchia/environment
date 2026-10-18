@@ -24,6 +24,9 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  crew records expect; read-only, for debugging the sidebar
     stella crew doctor --spike [<session-id>]   the Workspace 4.0 spike in a throwaway herdr session `ws4-spike`
                                  (never the default one); prints every raw reply and a verdict per question
+    stella crew follow [--ensure|--once]   the dot reporter: one detached process copying Claude's own state of
+                                 each session onto its herdr window (yellow = awaiting input, blue = working);
+                                 `--ensure` starts it when none runs (`tw` and `crew sync` do), `--once` is one cycle
     stella crew --unpane         close the crew-list pane an earlier version put in Stella's tab
     stella track-pr <url> [name] watch a PR with no session: a track record, so a merge, a failing check,
                                  requested changes or a new review wakes her (`untrack <name>` ends it)
@@ -619,15 +622,15 @@ def _socket_path(herdr: str) -> str | None:
         return None
 
 
-def _move_workspace(herdr: str, ws: str, index: int) -> bool:
-    """`workspace.move` over the control socket (herdr has no CLI for it): put workspace `ws` at `index`.
-    The request is the one firstmate's presentation ordering sends (bin/backends/herdr-workspace-move.py, MIT);
-    best effort, the crew stays where herdr put it when this fails."""
+def _rpc(herdr: str, method: str, params: dict) -> dict | None:
+    """One request over the control socket (herdr has no CLI for some methods); the reply's `result`, or None
+    when the socket is out of reach or herdr refuses. The request is the one firstmate's presentation ordering
+    sends (bin/backends/herdr-workspace-move.py, MIT)."""
     import socket
     path = _socket_path(herdr)
     if not path or not path.startswith("/"):
-        return False
-    req = {"id": "stella-workspace-move", "method": "workspace.move", "params": {"workspace_id": ws, "insert_index": index}}
+        return None
+    req = {"id": "stella-" + method, "method": method, "params": params}
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
             c.settimeout(5)
@@ -641,8 +644,16 @@ def _move_workspace(herdr: str, ws: str, index: int) -> bool:
                 buf += chunk
         reply = json.loads(buf.split(b"\n", 1)[0])
     except (OSError, ValueError):
-        return False
-    return reply.get("error") is None and reply.get("id") == req["id"]
+        return None
+    if reply.get("error") is not None or reply.get("id") != req["id"]:
+        return None
+    return reply.get("result") or {}
+
+
+def _move_workspace(herdr: str, ws: str, index: int) -> bool:
+    """`workspace.move`: put workspace `ws` at `index`; best effort, the crew stays where herdr put it when
+    this fails."""
+    return _rpc(herdr, "workspace.move", {"workspace_id": ws, "insert_index": index}) is not None
 
 
 def priority_rank(recs: list[dict]) -> dict[str, int]:
@@ -755,16 +766,6 @@ REPORT_SOURCE = "stella"
 ATTACH_VERSION = 2  # 1: `stella tab` in the pane; 2: `claude attach` itself in a shell loop
 
 
-def _report_agent(herdr: str, pane: str, rec: dict) -> None:
-    """A crew pane herdr's own detection did not recognise: register it as a Claude agent ourselves
-    (`pane report-agent`), with the state Stella knows. Refreshed by every sync. herdr applies a report only
-    from some versions on and only while it has no native detection of the pane, so this is the fallback."""
-    state, need = crew_status(rec)
-    herdr_state = {"working": "working", "waiting": "blocked", "blocked": "blocked"}.get(state, "idle")
-    _herdr_run(herdr, "pane", "report-agent", pane, "--source", REPORT_SOURCE, "--agent", "claude",
-               "--state", herdr_state, "--message", (need or state)[:80])
-
-
 def _open_crew_workspace(herdr: str, rec: dict) -> tuple[str, str] | None:
     """The crewmate's own workspace, "└ <name>", with one tab "fm-<name>" running `stella tab <id>`. It takes
     no focus. (workspace id, tab id), or None when herdr refused."""
@@ -797,7 +798,227 @@ def _retire_old_crew_workspace(herdr: str, wss: dict[str, str], names: set[str])
             print(f"closed the old {OLD_CREW_WORKSPACE} workspace")
 
 
-def sync_sidebar() -> None:
+# ------------------------------------------------------------------ the dot reporter (Workspace 4.0)
+
+# herdr decides a Claude pane's state by reading its screen, and a session that ended its turn waiting for
+# Kohen sits at its `❯` prompt, which herdr reads as idle. Claude's own state (the job file the agent view
+# reads) says "blocked" there. `stella crew follow` copies Claude's state onto each window's pane.
+FOLLOW_EVERY = float(os.environ.get("STELLA_FOLLOW_EVERY", "2"))  # seconds between two reads of the job states
+FOLLOW_SYNC = float(os.environ.get("STELLA_FOLLOW_SYNC", "30"))  # at most this often: sync, when the sessions changed
+VIEW_EVERY = float(os.environ.get("STELLA_VIEW_EVERY", "60"))  # the agent view is transient: set it again this often
+FOLLOW_PID = STELLA_HOME / "follow.pid"
+FOLLOW_LOG = STELLA_HOME / "follow.log"
+VIEW_MARK = STELLA_HOME / "view-applied.json"  # when the reporter last set the agent view (doctor reads it)
+NEED_LABEL = "needs you"
+HERDR_STATE = {"blocked": "blocked", "working": "working"}  # every other Claude state (done, stopped, ...) is idle
+VIEW = {"source": REPORT_SOURCE, "label": "this space",
+        "filter": {"op": "eq", "field": "workspace_id", "value": {"context": "current_workspace_id"}},
+        "sort": [{"field": "attention"}, {"field": "tab_order"}]}
+
+
+def claude_state(sid: str, rows: dict[str, dict] | None = None) -> str | None:
+    """Claude's own state of a session: the job state its agent view reads, else the `claude agents` row's."""
+    job = read_json(JOBS / sid / "state.json").get("state")
+    if job:
+        return job
+    row = (rows or {}).get(sid)
+    return row.get("state") if row else None
+
+
+def dot_of(state: str | None) -> str | None:
+    """What a window's dot shows for Claude's state: blocked, working or idle; None when there is no session."""
+    return HERDR_STATE.get(state, "idle") if state else None
+
+
+def _need_text(rec: dict | None, sid: str) -> str:
+    """The one line saying what a blocked session needs: its first NEXT FOR YOU item, else the job's `needs`."""
+    if rec:
+        return crew_status(rec)[1]
+    job = read_json(JOBS / sid / "state.json")
+    return job.get("needs") or job.get("detail") or ""
+
+
+def _tab_panes_by_tab(herdr: str) -> dict[str, list[str]]:
+    """{tab id: pane ids} from one `herdr pane list`."""
+    p = _herdr_run(herdr, "pane", "list")
+    found: dict[str, list[str]] = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("pane_id"), str) and isinstance(x.get("tab_id"), str):
+                found.setdefault(x["tab_id"], []).append(x["pane_id"])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    try:
+        walk(json.loads(p.stdout))
+    except ValueError:
+        pass
+    return found
+
+
+def session_windows(herdr: str, wss: dict[str, str]) -> list[dict]:
+    """Every window that shows a Claude session, as {sid, name, rec, space, panes}: a crewmate's (its record's
+    `tab` in its project's `space`, or the workspace of the earlier layout), Stella's own, and the sessions in
+    windows.json (nobody adopted them). Panes come from one `pane list`."""
+    by_tab = _tab_panes_by_tab(herdr)
+    out: list[dict] = []
+    for rec in records():
+        if not rec.get("id") or rec.get("mode") == "track" or rec.get("state") == "landed":
+            continue
+        if rec.get("space") and rec.get("tab"):
+            tabs, space = [rec["tab"]], rec["space"]
+        elif rec.get("crew_ws") in wss:
+            tabs, space = list(_herdr_tabs(herdr, rec["crew_ws"])), rec["crew_ws"]
+        else:
+            continue
+        out.append({"sid": rec["id"], "name": rec["name"], "rec": rec, "space": space,
+                    "panes": [pn for t in tabs for pn in by_tab.get(t, [])][:1]})
+    me = stella_row()
+    parent = next((w for w, label in wss.items() if label in (PARENT, OLD_PARENT)), None)
+    if me and parent:
+        tabs = [t for t, label in _herdr_tabs(herdr, parent).items() if label.lower() == "stella"]
+        out.append({"sid": me["id"], "name": "stella", "rec": None, "space": parent,
+                    "panes": [pn for t in tabs for pn in by_tab.get(t, [])][:1]})
+    for sid, w in read_json(STELLA_HOME / "windows.json").items():
+        if isinstance(w, dict) and w.get("tab"):
+            out.append({"sid": sid, "name": w.get("name") or sid, "rec": None, "space": w.get("space"),
+                        "panes": by_tab.get(w["tab"], [])[:1]})
+    return out
+
+
+def apply_agent_view(herdr: str) -> bool:
+    """Scope herdr's Agents panel to the focused space (`agent.view.set`); the view is transient, so the reporter
+    sets it again whenever it may have been lost. Writes view-applied.json for doctor."""
+    ok = _rpc(herdr, "agent.view.set", VIEW) is not None
+    if ok:
+        VIEW_MARK.write_text(json.dumps({"at": time.time(), "pid": os.getpid()}))
+    return ok
+
+
+def follow_once(herdr: str, last: dict, rows: dict[str, dict] | None = None) -> int:
+    """One cycle: copy Claude's state onto every window's pane and the count of its blocked windows onto every
+    space, calling herdr only for what changed since `last` (the previous cycle's reports). Returns the number
+    of herdr calls made."""
+    wss = _workspaces(herdr)
+    if wss is None:
+        last.clear()  # the server is gone: everything is reported again when it comes back
+        return 0
+    calls = 0
+    need_by_space: dict[str, int] = {}
+    seen: set[str] = set()
+    for w in session_windows(herdr, wss):
+        state = dot_of(claude_state(w["sid"], rows))
+        if state is None or not w["panes"]:
+            continue
+        pane = w["panes"][0]
+        seen.add(pane)
+        text = (_need_text(w["rec"], w["sid"]) if state == "blocked" else "")[:80]
+        if state == "blocked":
+            need_by_space[w["space"]] = need_by_space.get(w["space"], 0) + 1
+        key = (state, text)
+        if last.get(pane) == key:
+            continue
+        seq = str(time.time_ns() // 1000)
+        _herdr_run(herdr, "pane", "report-agent", pane, "--source", REPORT_SOURCE, "--agent", "claude",
+                   "--state", state, "--message", text or state, "--seq", seq)
+        _herdr_run(herdr, "pane", "report-metadata", pane, "--source", REPORT_SOURCE, "--agent", "claude",
+                   "--state-label", f"blocked={NEED_LABEL}", "--seq", seq,
+                   *(["--title", text] if text else ["--clear-title"]))
+        last[pane] = key
+        calls += 2
+    for space in wss:
+        n = need_by_space.get(space, 0)
+        if last.get(("space", space)) == n:
+            continue
+        _herdr_run(herdr, "workspace", "report-metadata", space, "--source", REPORT_SOURCE,
+                   *(["--token", f"need={n} waiting"] if n else ["--clear-token", "need"]))
+        last[("space", space)] = n
+        calls += 1
+    for k in [k for k in last if isinstance(k, str) and k not in seen]:
+        del last[k]  # a pane that is gone: forget it, a new pane of the same id is reported again
+    return calls
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def follower_pid() -> int | None:
+    """The pid of the running reporter, or None (no pidfile, or a stale one)."""
+    try:
+        pid = int(FOLLOW_PID.read_text().split()[0])
+    except (OSError, ValueError, IndexError):
+        return None
+    return pid if _alive(pid) else None
+
+
+def ensure_follower() -> int | None:
+    """Start the reporter when none runs. It is detached (a session of its own, no controlling terminal), so
+    stopping Stella's process tree cannot stop it; running it again while one lives starts nothing."""
+    pid = follower_pid()
+    if pid:
+        return pid
+    herdr = _herdr()
+    if not herdr or os.environ.get("STELLA_NO_FOLLOWER"):  # (the tests start none of their own accord)
+        return None
+    STELLA_HOME.mkdir(parents=True, exist_ok=True)
+    log = open(FOLLOW_LOG, "ab")
+    p = subprocess.Popen([sys.executable, "-I", str(BIN / "stella"), "crew", "follow"], stdin=subprocess.DEVNULL,
+                         stdout=log, stderr=log, start_new_session=True, cwd=str(HOME))
+    FOLLOW_PID.write_text(f"{p.pid}\n")
+    return p.pid
+
+
+def follow_loop(once: bool = False) -> None:
+    """`stella crew follow`: the reporter loop (one instance, by pidfile). Every FOLLOW_EVERY seconds it reads
+    the job states and reports what changed; every VIEW_EVERY it sets the agent view; when the sessions Claude
+    lists change it runs a sync (at most every FOLLOW_SYNC) so every session has a window."""
+    herdr = _herdr()
+    if not herdr:
+        die("herdr is not installed", 1)
+    if not once:
+        mine = follower_pid()
+        if mine and mine != os.getpid():
+            print(f"the reporter already runs ({mine})")
+            return
+        FOLLOW_PID.write_text(f"{os.getpid()}\n")
+    last: dict = {}
+    t_view = t_sync = 0.0
+    seen_sessions: frozenset | None = None
+    cycles = int(os.environ.get("STELLA_FOLLOW_CYCLES", "1" if once else "0"))  # 0: until stopped (tests count)
+    n = 0
+    while True:
+        try:
+            now = time.time()
+            if now - t_view >= VIEW_EVERY:
+                if apply_agent_view(herdr):
+                    t_view = now
+            if now - t_sync >= FOLLOW_SYNC and not cycles:
+                ids = frozenset(a.get("id") for a in agents(True))
+                if ids != seen_sessions:
+                    sync_sidebar(restart_follower=False)
+                    seen_sessions = ids
+                t_sync = now
+            follow_once(herdr, last)
+        except Exception as e:  # noqa: BLE001 - the reporter never dies of a herdr hiccup
+            print(f"{time.strftime('%H:%M:%S')} follow: {type(e).__name__}: {str(e)[:160]}", flush=True)
+        n += 1
+        if cycles and n >= cycles:
+            return
+        time.sleep(FOLLOW_EVERY)
+
+
+def sync_sidebar(restart_follower: bool = True) -> None:
     """Make herdr's sidebar the crew list, as firstmate's is. Every live crewmate (adopted ones too) has its
     own workspace "└ <name>" right after Stella's, with one tab "fm-<name>" running `stella tab <id>`, so
     herdr's Spaces list shows the crew and its Agents panel shows each agent with its state; none of it is a
@@ -834,22 +1055,13 @@ def sync_sidebar() -> None:
                     save(name, {**load(name), "crew_ws": opened[0], "attach": ATTACH_VERSION})
                     print(f"{name}: in the sidebar")
                 continue
-            detected = _agent_panes(herdr)
             for tab in _herdr_tabs(herdr, ws):
                 repair_tab(herdr, tab, sid)
                 for pane in _tab_panes(herdr, tab):
-                    if pane in detected:
-                        if rec.get("reported"):  # herdr sees it by itself now: hand the report back
-                            _herdr_run(herdr, "pane", "release-agent", pane, "--source", REPORT_SOURCE, "--agent", "claude")
-                            save(name, {k: v for k, v in load(name).items() if k != "reported"})
-                    else:
-                        if rec.get("attach") != ATTACH_VERSION:  # still running the python parent of an earlier version
-                            _herdr_run(herdr, "pane", "send-keys", pane, "ctrl+c")
-                            _herdr_run(herdr, "pane", "run", pane, _attach_cmd(sid))
-                            save(name, {**load(name), "attach": ATTACH_VERSION})
-                        _report_agent(herdr, pane, rec)
-                        if not rec.get("reported"):
-                            save(name, {**load(name), "reported": True})
+                    if rec.get("attach") != ATTACH_VERSION:  # still running the python parent of an earlier version
+                        _herdr_run(herdr, "pane", "send-keys", pane, "ctrl+c")
+                        _herdr_run(herdr, "pane", "run", pane, _attach_cmd(sid))
+                        save(name, {**load(name), "attach": ATTACH_VERSION})
             if rec.get("crew_ws") != ws:
                 save(name, {**load(name), "crew_ws": ws})
         elif ws and (rec.get("state") == "landed" or sid not in known):
@@ -866,6 +1078,8 @@ def sync_sidebar() -> None:
         for tab, label in _legacy_tabs(herdr).items():
             if label.lower() == "stella":
                 repair_tab(herdr, tab, me["id"])
+    if restart_follower:
+        ensure_follower()
 
 
 def sync_quietly() -> None:
@@ -1348,6 +1562,11 @@ def main(argv: list[str]) -> None:
         projects_report()
     elif cmd == "crew" and rest in ([], ["--watch"]):
         crew(bool(rest))
+    elif cmd == "crew" and rest in (["follow"], ["follow", "--once"]):
+        follow_loop(rest == ["follow", "--once"])
+    elif cmd == "crew" and rest == ["follow", "--ensure"]:
+        pid = ensure_follower()
+        print(f"the reporter runs ({pid})" if pid else "herdr is not installed: no reporter")
     elif cmd == "crew" and rest == ["sync"]:
         sync_sidebar()
     elif cmd == "crew" and rest[:2] == ["doctor", "--spike"] and len(rest) <= 3 and (len(rest) == 2 or SHORT_ID.match(rest[2])):
