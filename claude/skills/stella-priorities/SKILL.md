@@ -1,6 +1,6 @@
 ---
 name: stella-priorities
-description: Stella keeps Kohen's priorities - the three to five outcomes that matter most now - compares the actual work (sessions, daily logs) with them, and gives short insights on drift and focus. Use when Kohen sets or asks about priorities or focus, asks what to work on, or asks for insights.
+description: Stella keeps Kohen's three to five top priorities and compares the actual work with them. Use when Kohen sets or asks about priorities or focus, or what to work on.
 ---
 
 # stella-priorities

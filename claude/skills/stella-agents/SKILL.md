@@ -1,6 +1,6 @@
 ---
 name: stella-agents
-description: Stella's view of every Claude Code session on the machine - what each is doing, which are waiting on Kohen, which are stuck - and, with "tidy", the cleanup of finished sessions. Use when Kohen asks what is running, what needs him, to clean up dead or finished agents, or when Stella runs her morning check.
+description: Stella's report on every session (what runs, what waits on Kohen, what is stuck) and, with "tidy", the cleanup of finished ones. Stella's own session runs it; other sessions do not need it.
 ---
 
 # stella-agents
@@ -9,7 +9,8 @@ description: Stella's view of every Claude Code session on the machine - what ea
 
 ## Look
 
-1. `~/.local/bin/stella agents --all` lists every session (the same JSON as `claude agents --json --all`,
+1. `~/.local/bin/stella projects` first (the crew grouped by project, with the decisions waiting in each),
+   then `~/.local/bin/stella agents --all`, which lists every session (the same JSON as `claude agents --json --all`,
    through the one command allowed outside the sandbox): `id`, `name`, `cwd`, `kind`, `status`
    (busy/idle) and `state` (working/blocked/done/…). Her crew are the sessions with a record in
    `~/.local/share/stella/crew/`; adopted ones carry `"adopted": true`.
@@ -25,14 +26,14 @@ description: Stella's view of every Claude Code session on the machine - what ea
 | Stuck | Blocked on an error (rate limit, budget, crash) or no progress for hours |
 | Finished | Done, last turn ALL DONE |
 
-Report as four sections: **Needs you** (waiting on Kohen, with what he needs to do in the session's own
+Report as four sections: **Needs you** (waiting on Kohen, most important first as Stella's manual ranks them, with what he needs to do in the session's own
 words), **Landed** (finished since the last digest, with the PR or report), **Underway** (working; a team
 as one line, `team · D/N done · W working`), **Queued** (over a cap, with why). Keep it to a screen.
 
 ## Tidy
 
 Crewmates Stella launched: `~/.local/bin/stella rm <name>` for each finished one; it removes the session
-and its worktree (and closes its tab) only when the work has landed, and says what is missing otherwise.
+and its worktree (and closes its tab, if one is open) only when the work has landed, and says what is missing otherwise.
 An open PR counts as not landed, whatever the mode: `stella rm` refuses a session whose record `pr`, or
 whose branch's PR, is still OPEN, and says so. Leave that session in place: removing it would leave the PR
 unwatched. If its PR should be watched without the session, `stella track-pr <url>` first. Track records

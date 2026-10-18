@@ -5,7 +5,7 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella                       open Stella's session in this terminal (starting it if needed)
     stella start | id            start her in the background / print her id
     stella restart               stop her and resume her conversation with the start-of-session prompt
-                                 (after a setup change: she reloads her skill and re-arms her watcher)
+                                 (after a setup change: she reloads her manual and re-arms her watcher)
     stella agents [--all]        `claude agents --json`
     stella launch <name>         launch the crewmate whose brief and record Stella wrote in crew/<name>/
                                  (only from her own session); exit 75 and mark it queued when over a cap
@@ -127,7 +127,7 @@ def start() -> str:
     return ""
 
 
-START_PROMPT = "Session start: load the stella skill and do its start-of-session steps."
+START_PROMPT = "Session start: do the start-of-session steps in your manual."
 
 
 def restart() -> str:

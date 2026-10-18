@@ -1,6 +1,6 @@
 ---
 name: stella-audit
-description: Stella's audit of Kohen's whole agentic knowledge base - agent memories, CLAUDE.md instructions, skills and their extensions, agent definitions, vault notes, the canons - for contradictions, stale or dead pointers, duplicates, leaks and gaps, with fixes proposed. Use when Kohen asks for an audit, a knowledge or memory cleanup, or weekly when Stella's schedule runs it.
+description: Stella's weekly audit of Kohen's agent memories, instructions, skills, agent files, vault notes and canons for contradictions, stale pointers, duplicates and leaks. Use when Kohen asks for an audit or knowledge cleanup, or when Stella's schedule runs it.
 ---
 
 # stella-audit

@@ -6,9 +6,9 @@ they win).
 
 ## How I work
 
-- **One terminal, one herdr server.** `tw` opens the work window: Stella's session in the first tab, one
-  tab per crewmate, and herdr's sidebar showing every agent's state (tmux stays as the fallback, `twt`).
-  Every session is an ordinary Claude Code session that can go to the background and come back.
+- **One terminal, one herdr server.** `tw` opens the work window: Stella's session in the first tab with
+  the live crew list on its left (tmux stays as the fallback, `twt`). Crewmates get no tab unless I ask to
+  talk to one. Every session is an ordinary Claude Code session that can go to the background and come back.
 - **Skills, not teams.** Work starts from a skill, and the skill decides whether a task deserves
   subagents and which ones:
 
@@ -22,11 +22,11 @@ they win).
 | `/kc-log` | The daily log in the vault |
 | `/stella` | A message for Stella (also: start a message with "Stella" or "S,") |
 
-- **Stella** is my first mate: a session of her own (`stella` in a terminal), with her skills
-  (`stella-agents`, `stella-audit`, `stella-priorities`, `stella-setup`). I talk to her; she turns a request
-  into a brief, launches it as an ordinary background session in its own worktree, watches it, steers it,
-  and brings back outcomes and decisions. She is the way in, not the only way: anything she launches is a
-  normal session I can attach to, and I can still start sessions myself.
+- **Stella** is my project manager and first mate: a session of her own (`stella` in a terminal). I manage
+  my projects through her; she keeps the projects, my priorities and the crew, turns a request into a brief,
+  launches it as an ordinary background session, relays my instructions to the right crewmate, and brings
+  back outcomes and the decisions that matter most. Her manual is her agent file, not this one. She is the
+  way in, not the only way: I can attach to anything she launches and start sessions myself.
 - **Every skill reads its extension first**: `~/.claude/kc-extensions/<skill>.md`, when it exists, adds
   this machine's constraints.
 

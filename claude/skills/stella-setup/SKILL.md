@@ -10,7 +10,7 @@ description: How Kohen's environment is built - Alacritty and tmux, the shell, C
 | Piece | Where | Notes |
 |---|---|---|
 | Terminal | Alacritty, one window, `~/github/environment/local/alacritty.toml` | Translates Cmd chords into ESC sequences the multiplexer binds |
-| herdr | `local/herdr.toml` → `~/.config/herdr/config.toml`, docs in `docs/herdr.md` | The work window: `tw` starts the server, builds workspace `work` (a `stella` tab, a tab per crewmate) and attaches. The sidebar shows each agent's state. Update checks off |
+| herdr | `local/herdr.toml` → `~/.config/herdr/config.toml`, docs in `docs/herdr.md` | The work window: `tw` starts the server, builds workspace `work` (a `stella` tab with the live crew list on its left; crew tabs only on request) and attaches. Update checks off |
 | tmux | `local/.tmux.conf`, docs in `docs/tmux.md` | The fallback: `twt` builds the Work Env 2.0 window (agents view left, session right) |
 | Shell | `local/.zshrc` (sources the machine's own extra rc file when present) | `cy` new session, `cag` agents view, `cw` attach to a session, `tw` / `twt` the work window, `wt*` worktrees |
 | Global instructions | `~/.claude/CLAUDE.md` → `~/github/environment/claude/CLAUDE.md` | Public rules; it imports the machine's own instructions at the end |
@@ -18,7 +18,7 @@ description: How Kohen's environment is built - Alacritty and tmux, the shell, C
 | Extensions | `~/.claude/kc-extensions/` → the machine's own repo | Adds constraints to the public skills; never in the public repo |
 | Agents | `~/github/environment/claude/agents/`, linked into `~/.claude/agents/` | `stella` is the main agent of her session |
 | Hooks | the `kc` plugin (`~/github/environment/claude/plugin`, marketplace `kc-local`) running `claude/bin/kc-hook` | Status block (Stop), messages for Stella (UserPromptSubmit), the leak-checked push to `~/github/environment` and the `allow` activities of a crew record (PreToolUse) |
-| Stella | her session (`stella`, on Sonnet), her store `~/.local/share/stella/` (`crew/<name>/` records and briefs, `journal.md`, `canon.md`), `claude/bin/stella` linked to `~/.local/bin/stella` | The helper is the one command allowed outside the command sandbox; it validates every argument. After a change to her skill or setup, `stella restart` (not a plain re-attach, which skips her start-of-session steps). `stella --help` |
+| Stella | her session (`stella`, on Sonnet), her store `~/.local/share/stella/` (`crew/<name>/` records and briefs, `journal.md`, `canon.md`), `claude/bin/stella` linked to `~/.local/bin/stella` | The helper is the one command allowed outside the command sandbox; it validates every argument. After a change to her agent file or setup, `stella restart` (not a plain re-attach, which skips her start-of-session steps). `stella --help` |
 | Stella's watcher | `claude/bin/stella-watch` → `~/.local/bin/stella-watch` | A sandboxed background command in her session; exits (waking her) when the crew needs her |
 | Tripwire | `claude/bin/live-check` (`stella live-check before|diff`) | Proves a change restarted, removed or re-tokened no running session |
 | Calm mode | a function-hooks module in the `kc` plugin (`claude/plugin/hooks/`) | Only in Stella's session, only with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`; `/calm` toggles; the crew band above her prompt |
