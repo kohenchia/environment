@@ -421,7 +421,7 @@ class Helper(unittest.TestCase):
         self.with_herdr()
         (self.home / ".local/share/stella").mkdir(parents=True, exist_ok=True)
         (self.home / ".local/share/stella/priorities.md").write_text(
-            "# P\n\n1. **Infer.** Crew: zeta-crew.\n2. **Other.** project beta.\n")
+            "# P\n\n1. **Infer.**\n   Crew: zeta-crew.\n2. **Other.** project beta.\n")
         self.live("zeta-crew", "a-beta", "b-alpha", "loose")
         self.crew("zeta-crew", id="00000001", project="gamma")
         self.crew("a-beta", id="00000002", project="beta")
@@ -461,6 +461,11 @@ class Helper(unittest.TestCase):
         recs = [{"name": "n1", "project": "alpha"}, {"name": "m2", "project": "mid"}, {"name": "x"},
                 {"name": "m1", "project": "mid"}, {"name": "z", "project": "zed"}, {"name": "b", "project": "beta"}]
         self.assertEqual([r["name"] for r in mod.crew_sort(recs)], ["m1", "m2", "z", "n1", "b", "x"])
+        # a priority naming a crewmate that is not among the ones sorted still ranks its project
+        (mod.STELLA_HOME / "priorities.md").write_text("1. one\n   Crew: gone-one.\n")
+        live = [{"name": "a", "project": "alpha"}, {"name": "k", "project": "keep"}]
+        every = live + [{"name": "gone-one", "project": "keep"}]
+        self.assertEqual([r["name"] for r in mod.crew_sort(live, every)], ["k", "a"])
 
     def test_crew_sync_renames_the_work_workspace_to_stella(self):
         self.with_herdr()

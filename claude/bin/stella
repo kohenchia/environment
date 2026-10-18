@@ -650,7 +650,16 @@ def priority_rank(recs: list[dict]) -> dict[str, int]:
         lines = (STELLA_HOME / "priorities.md").read_text().splitlines()
     except OSError:
         return {}
-    items = [ln for ln in lines if re.match(r"\s*\d+\.\s", ln)]
+    items: list[str] = []  # a numbered item runs over the lines after it, up to a blank line or heading
+    open_item = False
+    for ln in lines:
+        if re.match(r"\s*\d+\.\s", ln):
+            items.append(ln)
+            open_item = True
+        elif open_item and ln.strip() and not ln.startswith("#"):
+            items[-1] += " " + ln
+        else:
+            open_item = False
     rank: dict[str, int] = {}
     for proj in {r["project"] for r in recs if r.get("project")}:
         words = {proj} | {r["name"] for r in recs if r.get("project") == proj}
@@ -666,11 +675,11 @@ def crew_label(rec: dict) -> str:
     return CHILD + (f"{rec['project']}{PROJECT_SEP}" if rec.get("project") else "") + rec["name"]
 
 
-def crew_sort(recs: list[dict]) -> list[dict]:
+def crew_sort(recs: list[dict], every: list[dict] | None = None) -> list[dict]:
     """Projects in the order of priorities.md, then the rest alphabetically; crewmates of a project
     alphabetically; a crewmate with no project last."""
-    rank = priority_rank(recs)
-    return sorted(recs, key=lambda r: (not r.get("project"), rank.get(r.get("project"), len(rank)),
+    rank = priority_rank(every or recs)  # a priority may name a crewmate that is not live now
+    return sorted(recs, key=lambda r: (not r.get("project"), rank.get(r.get("project"), 1 << 30),
                                        r.get("project") or "", r["name"]))
 
 
@@ -684,9 +693,9 @@ def find_workspace(wss: dict[str, str], rec: dict) -> str | None:
                  if label == CHILD + name or (label.startswith(CHILD) and label.endswith(PROJECT_SEP + name))), None)
 
 
-def desired_order(herdr: str, recs: list[dict], wss: dict[str, str]) -> list[str]:
+def desired_order(herdr: str, recs: list[dict], wss: dict[str, str], every: list[dict] | None = None) -> list[str]:
     """The ids of the live crewmates' workspaces in the order the sidebar should list them."""
-    return [w for w in (find_workspace(wss, r) for r in crew_sort(recs)) if w]
+    return [w for w in (find_workspace(wss, r) for r in crew_sort(recs, every)) if w]
 
 
 def _order_crew(herdr: str, wanted: list[str]) -> None:
@@ -848,7 +857,7 @@ def sync_sidebar() -> None:
     live_recs = [r for r in recs if r["id"] in live and r.get("state") != "landed"]
     wss = _workspaces(herdr) or wss
     _relabel(herdr, wss, live_recs)
-    _order_crew(herdr, desired_order(herdr, live_recs, wss))
+    _order_crew(herdr, desired_order(herdr, live_recs, wss, recs))
     # Stella's own tab has no crew record: find it by its label and repair it the same way
     me = stella_row()
     if me:
@@ -928,7 +937,7 @@ def doctor(as_json: bool) -> None:
         detected = _agent_panes(herdr)
         live_recs = [r for r in records() if r.get("id") and r.get("mode") != "track"
                      and r["id"] in live and r.get("state") != "landed"]
-        wanted_ws = desired_order(herdr, live_recs, wss)
+        wanted_ws = desired_order(herdr, live_recs, wss, [r for r in records() if r.get("id")])
         parent_idx = next((i for i, (_, label) in enumerate(order) if label in (PARENT, OLD_PARENT)), -1)
         for rec in records():
             if not rec.get("id") or rec.get("mode") == "track":
@@ -939,7 +948,7 @@ def doctor(as_json: bool) -> None:
             panes = [pn for t in tabs for pn in _tab_panes(herdr, t)]
             idx = next((i for i, (w, _) in enumerate(order) if w == ws), None)
             wanted = rec["id"] in live and rec.get("state") != "landed"
-            listed = bool(panes) and all(pn in detected for pn in panes)
+            listed = any(pn in detected for pn in panes)  # a shell split off next to the agent does not count
             check = {
                 "crewmate": name, "session_live": rec["id"] in live, "state": rec.get("state"),
                 "workspace": ws, "label": crew_label(rec), "actual_label": wss.get(ws) if ws else None,

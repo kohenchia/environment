@@ -54,9 +54,13 @@ tab_bar_position = "top"
 sidebar_start_collapsed = false   # the sidebar is the live view of every agent's state
 prompt_new_tab_name = false
 mouse_capture = true
+sidebar_width = 40                # "└ <project> · <crewmate>" labels are long; the default 26 truncates them
 
-# The sidebar is herdr's own, with its default rows, as in firstmate: the Spaces list shows Stella's workspace
-# and, under it, one "└ <crewmate>" workspace each (`stella crew sync`); the Agents panel shows every agent.
+# The sidebar is herdr's own: the Spaces list shows Stella's workspace and, under it, one
+# "└ <project> · <crewmate>" workspace each (`stella crew sync`); the Agents panel shows every agent.
+# A Space is one row (state icon and label): the default second row, the pane's git branch, is dropped.
+[ui.sidebar.spaces]
+rows = [["state_icon", "workspace"]]
 #
 # A herdr server restart must not resume the crew tabs' Claude panes into their own conversation: the sessions
 # belong to the Claude daemon, and `stella crew sync` (run by `tw`) re-attaches them instead.
