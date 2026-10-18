@@ -994,6 +994,7 @@ def follow_loop(once: bool = False) -> None:
             follow_once(herdr, last)
             if n % 3 == 0 or once:
                 detect_project_renames(herdr)
+                mirror_space_titles(herdr)
         except Exception as e:  # noqa: BLE001 - the reporter never dies of a herdr hiccup
             print(f"{time.strftime('%H:%M:%S')} follow: {type(e).__name__}: {str(e)[:160]}", flush=True)
         n += 1
@@ -1437,6 +1438,31 @@ def rename_project(old: str, new: str, source: str = "verb") -> None:
     print(f"project {old} is now {new}")
 
 
+def ordered_tabs(herdr: str, ws: str) -> list[tuple[str, str]]:
+    """[(tab id, label)] of a space in the order of its window bar (herdr numbers them)."""
+    p = _herdr_run(herdr, "tab", "list", "--workspace", ws)
+    try:
+        tabs = json.loads(p.stdout)["result"]["tabs"]
+    except (ValueError, KeyError, TypeError):
+        return list(_herdr_tabs(herdr, ws).items())
+    tabs = sorted(enumerate(tabs), key=lambda it: (it[1].get("number", it[0]), it[0]))
+    return [(t.get("tab_id"), t.get("label") or "") for _, t in tabs if t.get("tab_id")]
+
+
+def mirror_space_titles(herdr: str) -> None:
+    """A project space's title is always the name of its first window (the leftmost): when the first window is
+    closed, moved or renamed, the title follows. Display only: the project's name (records, projects.md) changes
+    only when the project's own first window is renamed (`detect_project_renames`)."""
+    v = view_state()
+    wss = _workspaces(herdr) or {}
+    for slug, ws in v["spaces"].items():
+        if ws not in wss:
+            continue
+        tabs = ordered_tabs(herdr, ws)
+        if tabs and tabs[0][1] and wss[ws] != tabs[0][1]:
+            _herdr_run(herdr, "workspace", "rename", ws, tabs[0][1])
+
+
 def detect_project_renames(herdr: str) -> None:
     """Kohen renamed a project's first window (Cmd+Shift+R): the project is renamed to match."""
     v = view_state()
@@ -1570,11 +1596,12 @@ def doctor(as_json: bool) -> None:
             first_gone = first not in tabs  # Kohen closed or merged it into another window: his to arrange
             first_ok = first_gone or tabs[first][0] == slug
             fpanes = by_tab.get(first) or [] if not first_gone else []
+            lead = (ordered_tabs(herdr, ws) or [("", "")])[0][1] if ws in wss else ""
             checks.append({"check": f"space {slug}", "workspace": ws, "closed_by_kohen": closed,
-                           "label_ok": closed or wss.get(ws) == slug,
+                           "label_ok": closed or wss.get(ws) == lead,
                            "first_window": "closed by Kohen" if first_gone else "ok" if first_ok else "wrong label",
                            "first_window_foreground": pane_foreground(herdr, fpanes[0]) if fpanes else None,
-                           "ok": closed or (wss.get(ws) == slug and first_ok)})
+                           "ok": closed or (wss.get(ws) == lead and first_ok)})
             _ = members
         claude_n = {"awaiting": 0, "working": 0, "completed": 0}
         herdr_n = {"yellow": 0, "blue": 0, "green/hollow": 0}

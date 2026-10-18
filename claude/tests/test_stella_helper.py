@@ -1298,10 +1298,34 @@ class Helper(unittest.TestCase):
         t = self.tabs()
         del t[first]
         self.herdr_tabs.write_text(json.dumps(t))
+        self.run_stella("crew", "follow", "--once")  # the title follows the window that leads now
         d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
         space = next(c for c in d["checks"] if c.get("check") == "space mlc")
         self.assertEqual(space["first_window"], "closed by Kohen")
         self.assertTrue(space["ok"])
+
+    def test_a_spaces_title_is_always_the_name_of_its_first_window(self):
+        self.herdr_start()
+        self.live("built", "other")
+        self.crew("built", id="00000001", project="mlc")
+        self.crew("other", id="00000002", project="mlc")
+        self.job("00000001", state="working")
+        self.job("00000002", state="working")
+        self.run_stella("crew", "sync")
+        ws = [w for w, n in self.workspaces().items() if n == "mlc"][0]
+        first = json.loads((self.sh / "view.json").read_text())["firsts"]["mlc"]
+        t = self.tabs()
+        del t[first]  # Kohen closes the first window: the next one leads
+        self.herdr_tabs.write_text(json.dumps(t))
+        self.run_stella("crew", "follow", "--once")
+        lead = next(iter(l for tab, l in self.tabs().items() if tab.startswith(ws + ":")))
+        self.assertEqual(self.workspaces()[ws], lead)
+        self.assertEqual(self.rec("built")["project"], "mlc")  # the project's name is not the title's business
+        d = json.loads(self.run_stella("crew", "doctor", "--json").stdout)
+        space = next(c for c in d["checks"] if c.get("check") == "space mlc")
+        self.assertTrue(space["label_ok"])
+        self.run_stella("crew", "follow", "--once")  # steady: nothing more to rename
+        self.assertEqual(len(self.herdr_calls("workspace", "rename")), 1)
 
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)
