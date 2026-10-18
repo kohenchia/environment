@@ -31,7 +31,8 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  or print the attach command; only when Kohen asks to talk to one
     stella hide <name> | --all   close the crew tabs of the old layout (opened in the work window); never any
                                  other tab, the sidebar's included; the sessions keep running
-    stella tab [<id>]            what a sidebar tab runs: attach to the session (Stella's by default) and attach
+    stella listed <id>           exit 0 while the session is listed in `claude agents --all` (the crew pane's loop)
+    stella tab [<id>]            what Stella's own tab runs: attach to the session (Stella's by default) and attach
                                  again whenever its process is restarted (`tok`, respawn), until it is gone
     stella stop <name> | respawn <name> [--model M] | logs <name>
     stella rm <name>             remove a finished crewmate, its worktree and its sidebar entry, only once its work has
@@ -84,7 +85,8 @@ MODEL = re.compile(r"^[a-z0-9][a-z0-9.\[\]-]{0,40}$")
 SHORT_ID = re.compile(r"^[0-9a-f]{8}$")
 CHILD = "└ "  # a crewmate's herdr workspace is labelled "└ <name>", as firstmate labels its crew workspaces
 TAB_PREFIX = "fm-"  # and its one tab "fm-<name>"
-PARENT = "work"  # the workspace that holds Stella's tab; the crew workspaces sit right after it
+PARENT = "stella"  # the workspace that holds Stella's tab (firstmate's is "firstmate"); the crew sits right after it
+OLD_PARENT = "work"  # what it was called before; sync renames it
 OLD_CREW_WORKSPACE = "crew"  # the earlier layout: one workspace with a tab per crewmate
 # `gh pr view owner/repo#N` silently fails on the enterprise host, so a `pr` is always a full URL.
 PR_URL = re.compile(r"^https://([A-Za-z0-9.-]+)/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/pull/([0-9]+)$")
@@ -571,7 +573,11 @@ def _tab_panes(herdr: str, tab: str) -> list[str]:
 
 
 def _attach_cmd(sid: str) -> str:
-    return f"{BIN / 'stella'} tab {sid}"
+    """What a crew pane runs, typed into the pane's shell: `claude attach` itself is the foreground process, so
+    herdr detects a Claude agent (a python parent in front of it, as `stella tab` is, hides it). The loop attaches
+    again after a restart (`tok`, respawn) for as long as the session is listed."""
+    stella = BIN / "stella"
+    return f"while {stella} listed {sid}; do claude attach {sid}; sleep 2; done"
 
 
 VERBOSE = bool(os.environ.get("STELLA_VERBOSE"))
@@ -647,7 +653,7 @@ def _order_after_parent(herdr: str, ws: str) -> None:
     except (ValueError, KeyError, TypeError, AttributeError):
         return
     rest = [(w, label) for w, label in order if w != ws]
-    parent = next((i for i, (_, label) in enumerate(rest) if label == PARENT), None)
+    parent = next((i for i, (_, label) in enumerate(rest) if label in (PARENT, OLD_PARENT)), None)
     if parent is None:
         return
     # after the last crew workspace (the block right after Stella's, when it is one), else right after Stella's;
@@ -656,6 +662,41 @@ def _order_after_parent(herdr: str, ws: str) -> None:
     at = (last if last is not None else parent) + 1
     if next(i for i, (w, _) in enumerate(order) if w == ws) != at:
         _move_workspace(herdr, ws, at)
+
+
+def _agent_panes(herdr: str) -> set[str]:
+    """Pane ids that `herdr agent list` reports an agent in (any nesting)."""
+    found: set[str] = set()
+
+    def walk(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("pane_id"), str):
+                found.add(x["pane_id"])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    try:
+        walk(json.loads(_herdr_run(herdr, "agent", "list").stdout))
+    except ValueError:
+        pass
+    return found
+
+
+REPORT_SOURCE = "stella"
+ATTACH_VERSION = 2  # 1: `stella tab` in the pane; 2: `claude attach` itself in a shell loop
+
+
+def _report_agent(herdr: str, pane: str, rec: dict) -> None:
+    """A crew pane herdr's own detection did not recognise: register it as a Claude agent ourselves
+    (`pane report-agent`), with the state Stella knows. Refreshed by every sync. herdr applies a report only
+    from some versions on and only while it has no native detection of the pane, so this is the fallback."""
+    state, need = crew_status(rec)
+    herdr_state = {"working": "working", "waiting": "blocked", "blocked": "blocked"}.get(state, "idle")
+    _herdr_run(herdr, "pane", "report-agent", pane, "--source", REPORT_SOURCE, "--agent", "claude",
+               "--state", herdr_state, "--message", (need or state)[:80])
 
 
 def _open_crew_workspace(herdr: str, rec: dict) -> tuple[str, str] | None:
@@ -706,6 +747,11 @@ def sync_sidebar() -> None:
     if wss is None:
         print("herdr is not running: no sidebar to keep")
         return
+    old = [w for w, label in wss.items() if label == OLD_PARENT]
+    if len(old) == 1 and PARENT not in wss.values():  # Stella's workspace was called `work`
+        _herdr_run(herdr, "workspace", "rename", old[0], PARENT)
+        wss[old[0]] = PARENT
+        print(f"renamed the workspace {OLD_PARENT} to {PARENT}")
     live = {a.get("id") for a in agents(False)} - {None}
     known = {a.get("id") for a in agents(True)}
     recs = [r for r in records() if r.get("id") and r.get("mode") != "track"]
@@ -719,11 +765,25 @@ def sync_sidebar() -> None:
             if not ws:
                 opened = _open_crew_workspace(herdr, rec)
                 if opened:
-                    save(name, {**load(name), "crew_ws": opened[0]})
+                    save(name, {**load(name), "crew_ws": opened[0], "attach": ATTACH_VERSION})
                     print(f"{name}: in the sidebar")
                 continue
+            detected = _agent_panes(herdr)
             for tab in _herdr_tabs(herdr, ws):
                 repair_tab(herdr, tab, sid)
+                for pane in _tab_panes(herdr, tab):
+                    if pane in detected:
+                        if rec.get("reported"):  # herdr sees it by itself now: hand the report back
+                            _herdr_run(herdr, "pane", "release-agent", pane, "--source", REPORT_SOURCE, "--agent", "claude")
+                            save(name, {k: v for k, v in load(name).items() if k != "reported"})
+                    else:
+                        if rec.get("attach") != ATTACH_VERSION:  # still running the python parent of an earlier version
+                            _herdr_run(herdr, "pane", "send-keys", pane, "ctrl+c")
+                            _herdr_run(herdr, "pane", "run", pane, _attach_cmd(sid))
+                            save(name, {**load(name), "attach": ATTACH_VERSION})
+                        _report_agent(herdr, pane, rec)
+                        if not rec.get("reported"):
+                            save(name, {**load(name), "reported": True})
             if rec.get("crew_ws") != ws:
                 save(name, {**load(name), "crew_ws": ws})
         elif ws and (rec.get("state") == "landed" or sid not in known):
@@ -806,8 +866,7 @@ def doctor(as_json: bool) -> None:
     else:
         live = {a.get("id") for a in agents(False)} - {None}
         order = list(wss.items())
-        panes_json = json.dumps(raw.get("panes"))
-        agents_json = json.dumps(raw.get("agents"))
+        detected = _agent_panes(herdr)
         for rec in records():
             if not rec.get("id") or rec.get("mode") == "track":
                 continue
@@ -816,15 +875,31 @@ def doctor(as_json: bool) -> None:
             tabs = _herdr_tabs(herdr, ws) if ws else {}
             panes = [pn for t in tabs for pn in _tab_panes(herdr, t)]
             idx = next((i for i, (w, _) in enumerate(order) if w == ws), None)
-            checks.append({
+            wanted = rec["id"] in live and rec.get("state") != "landed"
+            listed = bool(panes) and all(pn in detected for pn in panes)
+            check = {
                 "crewmate": name, "session_live": rec["id"] in live, "state": rec.get("state"),
                 "workspace": ws, "label": CHILD + name, "position": idx,
                 "tabs": list(tabs.values()), "tab_ok": TAB_PREFIX + name in tabs.values(),
-                "panes": panes, "agent_listed": any(pn in agents_json for pn in panes) if panes else False,
-                "in_panes_list": any(pn in panes_json for pn in panes) if panes else False,
-                "ok": (ws is not None) == (rec["id"] in live and rec.get("state") != "landed"),
-            })
-        parent = next((i for i, (_, label) in enumerate(order) if label == PARENT), None)
+                "panes": panes, "agent_listed": listed, "reported_by_stella": bool(rec.get("reported")),
+                "ok": (ws is not None) == wanted and (listed or not wanted),
+            }
+            if wanted and panes and not listed:  # why herdr does not see an agent there
+                diag = {}
+                for pn in panes:
+                    info = {}
+                    for key, args in (("process_info", ["pane", "process-info", pn]), ("get", ["pane", "get", pn]),
+                                      ("explain", ["agent", "explain", pn, "--json"]),
+                                      ("screen", ["pane", "read", pn, "--lines", "12"])):
+                        r = _herdr_run(herdr, *args)
+                        try:
+                            info[key] = json.loads(r.stdout)
+                        except ValueError:
+                            info[key] = (r.stdout or r.stderr).strip()[-600:]
+                    diag[pn] = info
+                check["diagnostics"] = diag
+            checks.append(check)
+        parent = next((i for i, (_, label) in enumerate(order) if label in (PARENT, OLD_PARENT)), None)
         block = [label for _, label in order[(parent + 1):]] if parent is not None else []
         checks.append({"check": "crew workspaces follow the work workspace", "parent_index": parent,
                        "after_parent": block, "ok": parent is not None and all(
@@ -1168,6 +1243,8 @@ def main(argv: list[str]) -> None:
         if rest and not SHORT_ID.match(rest[0]):
             die(f"bad session id {rest[0]!r}")
         sys.exit(follow(rest[0] if rest else start()))
+    elif cmd == "listed" and len(rest) == 1 and SHORT_ID.match(rest[0]):  # what a crew pane's loop asks
+        sys.exit(0 if _process(rest[0])[0] else 1)
     elif cmd == "start":
         print(start())
     elif cmd == "restart" and not rest:

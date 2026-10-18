@@ -637,7 +637,7 @@ for s in json.load(sys.stdin):
     claude attach "${pick%%$'\t'*}"
 }
 
-# tw: the work window. With herdr installed (Work Env 3.0): start its server if needed, build the `work`
+# tw: the work window. With herdr installed (Work Env 3.0): start its server if needed, build the `stella`
 # workspace the first time (one `stella` tab, nothing else), and keep the sidebar the crew list
 # (`stella crew sync`: a workspace "└ <crewmate>" per live crewmate after this one, as firstmate lays it out; it
 # also re-attaches any crew tab that lost its session), then attach. Without herdr, tmux (`twt`).
@@ -651,9 +651,9 @@ function tw() {
         local i
         for i in {1..20}; do herdr status server >/dev/null 2>&1 && break; sleep 0.25; done
     fi
-    if ! herdr workspace list 2>/dev/null | grep -q '"label": *"work"'; then
+    if ! herdr workspace list 2>/dev/null | grep -q '"label": *"\(stella\|work\)"'; then
         local pane
-        pane=$(herdr workspace create --cwd "$HOME/github" --label work --focus 2>/dev/null \
+        pane=$(herdr workspace create --cwd "$HOME/github" --label stella --focus 2>/dev/null \
             | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])') \
             && herdr pane run "$pane" "stella tab" >/dev/null
     fi

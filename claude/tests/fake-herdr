@@ -4,7 +4,8 @@ The tabs live in the JSON file $FAKE_HERDR_TABS ({id: label}): `tab create` adds
 shape herdr documents (`.result.tab`, `.result.root_pane`), `tab list [--workspace W]` prints them (a tab id
 starts with its workspace id), `tab close` removes one. Workspaces live in $FAKE_HERDR_TABS.ws ({id: label});
 `workspace create` adds one with its seeded tab. With $FAKE_HERDR_DOWN set, `workspace list` fails like a
-missing server. `workspace close` drops a workspace with its tabs. Focus calls are only logged.
+missing server. `workspace close` drops a workspace with its tabs. `agent list` reports every pane as a Claude agent unless $FAKE_HERDR_AGENTS (a JSON list of pane ids) says
+which are. Report, release and focus calls are only logged.
 """
 
 import json
@@ -30,11 +31,20 @@ elif args[:2] == ["workspace", "create"]:
     json.dump(tabs, open(path, "w"))
     print(json.dumps({"result": {"workspace": {"workspace_id": wid, "label": workspaces[wid]},
                                  "tab": {"tab_id": wid + ":t1", "label": "seed"}, "root_pane": {"pane_id": wid + ":t1:p1"}}}))
+elif args[:2] == ["workspace", "rename"]:
+    workspaces[args[2]] = args[3]
+    json.dump(workspaces, open(wspath, "w"))
 elif args[:2] == ["workspace", "close"]:
     workspaces.pop(args[2], None)
     json.dump(workspaces, open(wspath, "w"))
     tabs = {t: label for t, label in tabs.items() if not t.startswith(args[2] + ":")}
     json.dump(tabs, open(path, "w"))
+elif args[:2] == ["agent", "list"]:  # every pane is an agent, unless $FAKE_HERDR_AGENTS lists the ones that are
+    extra = path + ".panes"
+    more = json.load(open(extra)) if os.path.exists(extra) else {}
+    every = [t + ":p1" for t in tabs] + list(more)
+    pick = json.loads(os.environ["FAKE_HERDR_AGENTS"]) if "FAKE_HERDR_AGENTS" in os.environ else every
+    print(json.dumps({"result": {"agents": [{"pane_id": pn, "agent": "claude"} for pn in pick]}}))
 elif args[:2] == ["session", "list"]:
     print(json.dumps({"sessions": [{"name": "default", "default": True, "socket_path": os.environ.get("FAKE_HERDR_SOCKET", "")}]}))
 elif args[:2] == ["tab", "rename"]:
