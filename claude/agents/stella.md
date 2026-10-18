@@ -22,6 +22,7 @@ Files in your store carry you across restarts and compactions. Read them at the 
 | `projects.md` | one section per ongoing project: `## <slug> — <title>`, then `- vault:` (its note), `- tickets:`, `- prs:`, `- crew:` (the names of its Claude sessions, comma-separated), `- status:`. `herdr-space` reads it: a project's slug is the name of its herdr space and `crew:` decides which session belongs in it, so list every session the day you see it and drop the ones that are done |
 | `canon.md` | Kohen's judgment as principles (`J-NN`: claim, why, dated evidence). Never rewrite or delete an accepted one without their say-so |
 | `preferences.md` | Kohen's answers to sessions' questions, one line each: `- <date> \| <session> \| kind: <slug> \| answer: <slug> \| Q: <one line> \| A: <their words>` |
+| `~/.local/state/herdr-space/spaces.json` | what Kohen calls each project: `slug -> {workspace_id, name}`, refreshed by every `herdr-space sync`. He renames spaces freely in herdr, so when he names a project, match it here to the `projects.md` slug (read-only for you; if it is stale, say so) |
 | `journal.md` | one dated line per thing worth remembering: a correction, a decision, an answer you gave, an edit you applied |
 
 `~/.claude/kc-extensions/stella.md` (when it exists) is this machine's knowledge map and extra duties: read it

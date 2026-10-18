@@ -12,6 +12,10 @@ no project lists goes to the project whose section mentions the number in its na
 `pr-<number>`, else to the name of its repository (a worktree ~/github/<repo>-wt/<branch> counts as <repo>),
 else of its directory. Stella's own session is the space `stella`.
 
+A space is tied to its project by the herdr workspace id, recorded in ~/.local/state/herdr-space/spaces.json
+(slug -> workspace id and the name it has now), not by its name: rename a space in herdr whenever you like and
+sync keeps treating it as the same project. The file also tells Stella what you call each project.
+
 A window is named after its session and runs `claude attach <id>`; a finished session's window shows its log
 first and attaches only when you press Enter (attaching starts a host process).
 
@@ -37,6 +41,8 @@ from pathlib import Path
 HOME = Path.home()
 GITHUB = HOME / "github"
 PROJECTS = HOME / ".local/share/stella/projects.md"
+# project slug -> {"workspace_id", "name"}: which space is which project, so a space can be renamed freely
+BINDINGS = HOME / ".local/state/herdr-space/spaces.json"
 STELLA_SPACE = "stella"
 STELLA_SESSION = "stella"
 LIVE = ("blocked", "working")  # a session in these states always gets a window
@@ -218,6 +224,35 @@ def stray_tabs(layout: dict[str, tuple[str, dict[str, str]]], owner: dict[str, s
     return out
 
 
+def load_bindings() -> dict[str, dict]:
+    try:
+        data = json.loads(BINDINGS.read_text())
+        return {k: v for k, v in data.items() if isinstance(v, dict)}
+    except (OSError, ValueError):
+        return {}
+
+
+def bind(slug: str, spaces_now: dict[str, str], bindings: dict[str, dict]) -> str | None:
+    """The workspace id of project `slug`, or None. `spaces_now` is {workspace id: its label now}. A space is
+    found by the id it was bound to, so renaming it in herdr changes nothing; if that id is gone (the server
+    restarted), by the name it had last time, then by the slug itself. A space another project is bound to is
+    never taken."""
+    rec = bindings.get(slug) or {}
+    if rec.get("workspace_id") in spaces_now:
+        return rec["workspace_id"]
+    taken = {b.get("workspace_id") for s, b in bindings.items() if s != slug and b.get("workspace_id") in spaces_now}
+    by_label = {label: wid for wid, label in spaces_now.items() if wid not in taken}
+    for name in (rec.get("name"), slug):
+        if name and name in by_label:
+            return by_label[name]
+    return None
+
+
+def save_bindings(bindings: dict[str, dict]) -> None:
+    BINDINGS.parent.mkdir(parents=True, exist_ok=True)
+    BINDINGS.write_text(json.dumps(bindings, indent=1, sort_keys=True) + "\n")
+
+
 def sync(hours: float, dry: bool) -> None:
     projects = load_projects()
     cutoff = time.time() - hours * 3600
@@ -231,7 +266,8 @@ def sync(hours: float, dry: bool) -> None:
     # Stella first, then the projects with sessions that need you, then the rest
     order = sorted(wanted, key=lambda k: (k != STELLA_SPACE,
                                           not any(a.get("state") == "blocked" for a in wanted[k]), k))
-    existing = {label: wid for wid, label in find_ids(herdr_json("workspace", "list"), ("workspace_id", "id")).items()}
+    ws = find_ids(herdr_json("workspace", "list"), ("workspace_id", "id"))  # {workspace id: label now}
+    bindings = load_bindings()
 
     def tabs_of(wid: str) -> dict[str, str]:
         return find_ids(herdr_json("tab", "list", "--workspace", wid), ("tab_id", "id"))
@@ -239,17 +275,20 @@ def sync(hours: float, dry: bool) -> None:
     for project in order:
         sessions = sorted(wanted[project], key=lambda a: (a.get("name") or "", a["id"]))
         cwd = sessions[0].get("cwd") or str(HOME)
-        wid = existing.get(project)
+        wid = bind(project, ws, bindings)
         if not wid:  # an earlier run named the space after the bare number in its sessions' names
             for a in sessions:
                 m = re.search(r"\d{3,}", a.get("name") or "")
-                if m and m.group(0) in existing:
-                    wid = existing.pop(m.group(0))
+                num = next((w for w, label in ws.items() if m and label == m.group(0)), None)
+                if num:
+                    wid = num
                     print(f"{project}: renamed from {m.group(0)}")
                     if not dry:
                         run("herdr", "workspace", "rename", wid, project)
-                    existing[project] = wid
+                        ws[wid] = project
                     break
+        if wid:
+            bindings[project] = {"workspace_id": wid, "name": ws.get(wid, project)}
         have = {norm(v) for v in tabs_of(wid).values()} if wid else set()
         pending = [a for a in sessions if norm(a.get("name") or a["id"][:8]) not in have]
         if not pending:
@@ -265,21 +304,29 @@ def sync(hours: float, dry: bool) -> None:
                 tab = res["tab"].get("tab_id") or res["tab"]["id"]
                 pane = res["root_pane"]["pane_id"]
                 run("herdr", "tab", "rename", tab, label)
-                existing[project] = wid
+                ws[wid] = project
+                bindings[project] = {"workspace_id": wid, "name": project}
             else:
                 res = herdr_json("tab", "create", "--workspace", wid, "--label", label, "--cwd",
                                  a.get("cwd") or cwd, "--no-focus").get("result", {})
                 pane = res["root_pane"]["pane_id"]
             run("herdr", "pane", "run", pane, attach_cmd(a))
-    layout = {wid: (label, tabs_of(wid)) for label, wid in existing.items()}
+    # a space counts under its project's slug, whatever it is called now
+    slug_of = {b["workspace_id"]: slug for slug, b in bindings.items() if b.get("workspace_id") in ws}
+    layout = {wid: (slug_of.get(wid, label), tabs_of(wid)) for wid, label in ws.items()}
     for tid, label, why in stray_tabs(layout, owner):
         print(f"close {label}: {why}")
         if not dry:
             run("herdr", "tab", "close", tid)
     if not dry:
-        labels = {w.get("label"): w["workspace_id"] for w in spaces()}
-        if STELLA_SPACE in labels:
-            rpc("workspace.move", {"workspace_id": labels[STELLA_SPACE], "insert_index": 0})
+        now = {w["workspace_id"]: w.get("label") or "" for w in spaces()}
+        for slug, b in bindings.items():  # remember the name each space has now (Stella reads it)
+            if b.get("workspace_id") in now:
+                b["name"] = now[b["workspace_id"]]
+        save_bindings(bindings)
+        stella = bind(STELLA_SPACE, now, bindings)
+        if stella:
+            rpc("workspace.move", {"workspace_id": stella, "insert_index": 0})
 
 
 def main() -> None:

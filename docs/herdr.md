@@ -20,7 +20,9 @@ Spaces (left)                window bar of the active space
 ```
 
 Each project is a space. You open a new one yourself (`Cmd+N`, a blank terminal) and delete it (`Cmd+Ctrl+W`)
-when the project is done. A space's title is its own: it does not follow a session or window name. A window
+when the project is done. A space's title is its own: it does not follow a session or window name. Rename a space whenever you like: `herdr-space sync` ties it to its project by herdr's workspace id
+(recorded in `~/.local/state/herdr-space/spaces.json`, slug → id and the name it has now), never by its name, so
+the project keeps its slug in Stella's `projects.md` and a rename costs nothing. A window
 holds one Claude session (`claude attach <id>`), or whatever else you open there.
 
 ## `tw`
