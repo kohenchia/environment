@@ -398,9 +398,10 @@ LINKS=(
     # from ~/.claude/kc-extensions/ at the end). See docs/claude-code.md.
     "claude/CLAUDE.md|$HOME/.claude/CLAUDE.md"
     # `stella` opens Stella's permanent session, `kc-env` lists every command, skill and background
-    # process, `herdr-space` moves a space and builds one per project (`tw` runs it).
+    # process, `kc-keys` every key binding, `herdr-space` moves a space and builds one per project (`tw` runs it).
     "bin/stella|$HOME/.local/bin/stella"
     "bin/kc-env|$HOME/.local/bin/kc-env"
+    "bin/kc-keys|$HOME/.local/bin/kc-keys"
     "bin/herdr-space|$HOME/.local/bin/herdr-space"
     # herdr, the terminal multiplexer for the work window (`tw`).
     "local/herdr.toml|$HOME/.config/herdr/config.toml"

@@ -35,7 +35,7 @@ session shows its log and attaches only when you press Enter (attaching starts a
 
 ## Keys
 
-`local/herdr.toml`. Alacritty turns each Cmd chord into an ESC string (`local/alacritty.toml`) that herdr reads as
+`kc-keys` prints every binding, read from the config files. `local/herdr.toml`. Alacritty turns each Cmd chord into an ESC string (`local/alacritty.toml`) that herdr reads as
 an `alt+…` chord, so the chords from the tmux days carry over unchanged.
 
 | What | Chord |

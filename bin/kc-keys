@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""kc-keys: every key binding of the work window, read from the config files that define them, so it cannot drift.
+
+Alacritty (~/.config/alacritty/alacritty.toml) turns each Cmd chord into an ESC byte string, herdr
+(~/.config/herdr/config.toml) reads that string as an alt+... chord and runs an action. This joins the two:
+the chord you press, and what it does. Prefix keys (C-b ...) are listed after.
+
+Standard library only (reads the two files with regular expressions: python3 here has no tomllib).
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ALACRITTY = Path.home() / ".config/alacritty/alacritty.toml"
+HERDR = Path.home() / ".config/herdr/config.toml"
+
+ARROWS = {"A": "up", "B": "down", "C": "right", "D": "left"}
+MODS = [(1, "shift"), (2, "alt"), (4, "ctrl")]
+SYMBOL = {"Command": "Cmd", "Shift": "Shift", "Option": "Opt", "Control": "Ctrl"}
+KEY = {"ArrowLeft": "←", "ArrowRight": "→", "ArrowUp": "↑", "ArrowDown": "↓", "Enter": "Enter", "Space": "Space",
+       "Backspace": "Backspace"}
+ORDER = ["Cmd", "Ctrl", "Opt", "Shift"]
+
+
+def herdr_key(chars: str) -> str | None:
+    """The chord herdr sees for the bytes Alacritty sends, in herdr's notation ('alt+shift+left')."""
+    m = re.fullmatch(r"\x1b\[1;(\d)([ABCD])", chars)
+    if m:
+        bits = int(m.group(1)) - 1
+        return "+".join([n for b, n in [(4, "ctrl"), (2, "alt"), (1, "shift")] if bits & b] + [ARROWS[m.group(2)]])
+    if len(chars) == 2 and chars[0] == "\x1b":
+        c = chars[1]
+        if c == " ":
+            return "alt+space"
+        if c.isupper():
+            return f"alt+shift+{c.lower()}"
+        if ord(c) < 32:
+            return f"ctrl+alt+{chr(ord(c) + 96)}"
+        return f"alt+{c}"
+    return None
+
+
+def chord(mods: str, key: str) -> str:
+    parts = sorted((SYMBOL[m] for m in mods.split("|")), key=ORDER.index)
+    return "+".join(parts + [KEY.get(key, key.upper() if len(key) == 1 else key)])
+
+
+def alacritty_bindings() -> list[tuple[str, str | None, str]]:
+    """[(chord, herdr key or None, comment)] for every binding that has a Command modifier and sends bytes."""
+    out = []
+    try:
+        lines = ALACRITTY.read_text().splitlines()
+    except OSError:
+        return out
+    for ln in lines:
+        m = re.search(r'key = "([^"]+)",\s*mods = "([^"]*Command[^"]*)",\s*chars = "((?:[^"\\]|\\.)*)"\s*\},?\s*(?:#\s*(.*))?', ln)
+        if not m:
+            continue
+        chars = m.group(3).encode().decode("unicode_escape")
+        out.append((chord(m.group(2), m.group(1)), herdr_key(chars), (m.group(4) or "").strip()))
+    return out
+
+
+def herdr_actions() -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """({key: action} for direct bindings, [(binding, action)] for prefix bindings) from herdr's [keys]."""
+    direct: dict[str, str] = {}
+    prefixed: list[tuple[str, str]] = []
+    try:
+        text = HERDR.read_text()
+    except OSError:
+        return direct, prefixed
+    keys = re.search(r"(?ms)^\[keys\]\n(.*?)(?=^\[|\Z)", text)
+    for ln in (keys.group(1) if keys else "").splitlines():
+        m = re.match(r'\s*(\w+)\s*=\s*(\[[^\]]*\]|"[^"]*")', ln)
+        if not m:
+            continue
+        action, raw = m.group(1), m.group(2)
+        for b in re.findall(r'"([^"]*)"', raw):
+            if not b or action in ("prefix",):
+                continue
+            if b.startswith("prefix+"):
+                prefixed.append(("C-b " + b[len("prefix+"):], action))
+            else:
+                direct[b] = action
+    for blk in re.finditer(r'(?ms)^\[\[keys\.command\]\]\n(.*?)(?=^\[|\Z)', text):
+        k = re.search(r'key = "([^"]+)"', blk.group(1))
+        c = re.search(r'command = "([^"]+)"', blk.group(1))
+        if k and c:
+            direct[k.group(1)] = f"run: {c.group(1)}"
+    return direct, prefixed
+
+
+def label(action: str) -> str:
+    """herdr's words become this setup's: tab = window, workspace = space."""
+    if action.startswith("run: herdr-space move"):
+        return "move space " + action.rsplit(" ", 1)[1]
+    if action.startswith("run:"):
+        return action
+    return action.replace("_", " ").replace("workspace", "space").replace("tab", "window")
+
+
+def main() -> None:
+    direct, prefixed = herdr_actions()
+    rows = []
+    for ch, hk, comment in alacritty_bindings():
+        if hk is None:
+            continue  # sends bytes to the shell (line editing, word movement): not a window key
+        if hk.startswith("alt+") and hk[4:] in "123456789" and len(hk) == 5:
+            hk_action = direct.get("alt+1..9", "")
+        else:
+            hk_action = direct.get(hk, "")
+        what = label(hk_action) if hk_action else f"(none in herdr){'  ' + comment if comment else ''}"
+        if ch in ("Cmd+2", "Cmd+3", "Cmd+4", "Cmd+5", "Cmd+6", "Cmd+7", "Cmd+8", "Cmd+9"):
+            continue
+        rows.append(("Cmd+1…9" if ch == "Cmd+1" else ch, "go to window 1…9" if ch == "Cmd+1" else what))
+    w = max([len(c) for c, _ in rows] + [10])
+    print("\033[1mChords (Cmd = what you press; herdr action = what it does)\033[0m")
+    for c, a in rows:
+        print(f"  {c:<{w}}  {a}")
+    print("\n\033[1mPrefix keys (C-b, then the key)\033[0m")
+    for b, a in prefixed:
+        print(f"  {b:<{w}}  {label(a)}")
+    print("\nFiles: ~/.config/alacritty/alacritty.toml (the chords), ~/.config/herdr/config.toml (the actions)")
+
+
+if __name__ == "__main__":
+    main()
