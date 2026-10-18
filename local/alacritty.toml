@@ -139,6 +139,7 @@ bindings = [
   { key = "ArrowDown", mods = "Command|Control|Shift", chars = "\u001B[1;8B" },
   { key = "N", mods = "Command", chars = "\u001Bn" },                 # new space
   { key = "W", mods = "Command|Control", chars = "\u001B\u0017" },    # close space (Ctrl+Alt+W)
+  { key = "R", mods = "Command|Control", chars = "\u001B\u0012" },    # rename space (Ctrl+Alt+R)
 
   { key = "Enter", mods = "Command|Shift", chars = "\u001Bz" },    # zoom
   { key = "Space", mods = "Command|Shift", chars = "\u001B " },    # next layout

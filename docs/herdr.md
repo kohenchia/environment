@@ -55,6 +55,7 @@ an `alt+…` chord, so the chords from the tmux days carry over unchanged.
 | **Go to the space above / below** | `Cmd+Ctrl+↑` / `↓` |
 | **Move the space up / down** | `Cmd+Ctrl+Shift+↑` / `↓` |
 | **Delete the space** (herdr asks first; its sessions keep running) | `Cmd+Ctrl+W` |
+| **Rename the space** (a project's name; sync keeps it the same project) | `Cmd+Ctrl+R` (or `C-b` then `Shift+W`) |
 
 The rule for the new ones: the Ctrl layer is for spaces, and Shift means "move", as it does for windows. herdr has
 no action for moving a space, so `Cmd+Ctrl+Shift+↑↓` run `herdr-space move up|down` over its socket.

@@ -33,10 +33,12 @@ close_tab         = "alt+shift+w"
 #   Cmd+Ctrl+Up / Down    go to the space above / below
 #   Cmd+Ctrl+Shift+Up/Down move this space up / down (the command below)
 #   Cmd+Ctrl+W            close this space (herdr asks first; its sessions keep running)
+#   Cmd+Ctrl+R            rename this space (the project's name; the project keeps its slug)
 new_workspace      = "alt+n"
 previous_workspace = "ctrl+alt+up"
 next_workspace     = "ctrl+alt+down"
 close_workspace    = "ctrl+alt+w"
+rename_workspace   = ["ctrl+alt+r", "prefix+shift+w"]
 
 # Panes: Cmd+D / Cmd+Shift+D split, Cmd+Shift+arrows focus, Cmd+Opt+arrows swap, Cmd+Shift+Enter zoom,
 # Cmd+R rename, Cmd+K clear, Cmd+F search. Resize is C-b and the arrows (Cmd+Ctrl+Up/Down walk the spaces).
