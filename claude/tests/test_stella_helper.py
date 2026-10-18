@@ -1097,6 +1097,42 @@ class Helper(unittest.TestCase):
         self.assertIn("Squash it?", rows[0]["question"])
         self.assertEqual(self.run_stella("prefs", "scan", "2026-10-03").stdout, "")
 
+    def test_follow_scopes_the_agents_panel_to_the_active_space_over_the_socket(self):
+        import socket
+        import threading
+        self.herdr_start()
+        got = []
+        sock_path = str(self.home / "v.sock")
+        srv = socket.socket(socket.AF_UNIX)
+        try:
+            srv.bind(sock_path)
+        except PermissionError:
+            self.skipTest("the command sandbox forbids binding a Unix socket; run this test outside it")
+        srv.listen(4)
+
+        def serve():
+            while True:
+                try:
+                    c, _ = srv.accept()
+                except OSError:
+                    return
+                req = json.loads(c.makefile().readline())
+                got.append(req)
+                c.sendall((json.dumps({"id": req["id"], "result": {"type": "ok"}}) + "\n").encode())
+                c.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        self.extra_env = {"FAKE_HERDR_SOCKET": sock_path}
+        try:
+            self.run_stella("crew", "follow", "--once")
+        finally:
+            srv.close()
+        view = [g for g in got if g["method"] == "agent.view.set"][0]["params"]
+        self.assertEqual(view["filter"], {"op": "eq", "field": "workspace_id", "value": {"context": "current_workspace_id"}})
+        self.assertEqual([s["field"] for s in view["sort"]], ["attention", "tab_order"])
+        self.assertEqual(view["source"], "stella")
+        self.assertTrue((self.sh / "view-applied.json").exists())  # doctor reads it
+
     def test_unknown_subcommand(self):
         self.assertEqual(self.run_stella("launch").returncode, 2)
         self.assertEqual(self.run_stella("frobnicate").returncode, 2)
