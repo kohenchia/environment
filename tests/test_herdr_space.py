@@ -12,20 +12,61 @@ loader.exec_module(hs)
 HOME = Path.home()
 
 
+PROJECTS = hs.parse_projects("""# Projects
+
+## bolt-priority — `mlc --priority` on every Bolt-starting step
+- PRs: dashboard#2398 (draft)
+- Crew: 2398-rebase (sole writer), pr-2398-kohen (reviewer), stella-cli-retirement (docs branch)
+
+## mlc-docs-drift — Docs drift fixes
+- Crew: docs-drift-benchmark, fix-430-comment · Status: waiting on review
+
+## cloud-pro-targets — Cloud Pro targets
+- Ticket: T-1 · PR: dashboard#2428 · Crew: 2428-fix-cloud-pro · Status: waiting
+""")
+
+
 class Grouping(unittest.TestCase):
-    def test_number_in_the_name_groups_sessions(self):
-        for name in ("2398-rebase", "pr-2398-kohen", "2398-dev-priority-all"):
-            self.assertEqual(hs.project_of({"name": name, "cwd": str(HOME / "github/dashboard")}), "2398")
+    def of(self, name, cwd="/tmp/x"):
+        return hs.project_of({"name": name, "cwd": cwd}, PROJECTS)
+
+    def test_a_listed_session_goes_to_its_project_by_slug(self):
+        self.assertEqual(self.of("2398-rebase"), "bolt-priority")
+        self.assertEqual(self.of("stella cli retirement"), "bolt-priority")
+        self.assertEqual(self.of("fix-430-comment"), "mlc-docs-drift")
+        self.assertEqual(self.of("2428-fix-cloud-pro"), "cloud-pro-targets")
+
+    def test_an_unlisted_session_follows_its_number_into_the_project_that_mentions_it(self):
+        self.assertEqual(self.of("2398-keep-priority-guide"), "bolt-priority")
+
+    def test_an_unknown_number_is_pr_n_never_a_bare_number(self):
+        self.assertEqual(self.of("2777-new-thing"), "pr-2777")
 
     def test_worktree_counts_as_its_repo(self):
-        a = {"name": "fix-flake", "cwd": str(HOME / "github/dashboard-wt/fix/flake")}
-        self.assertEqual(hs.project_of(a), "dashboard")
+        self.assertEqual(self.of("fix-flake", str(HOME / "github/dashboard-wt/fix/flake")), "dashboard")
 
     def test_stella_has_her_own_space(self):
-        self.assertEqual(hs.project_of({"name": "stella", "cwd": str(HOME)}), "stella")
+        self.assertEqual(self.of("stella", str(HOME)), "stella")
 
     def test_outside_github_uses_the_directory_name(self):
-        self.assertEqual(hs.project_of({"name": "scratch", "cwd": "/tmp/notes"}), "notes")
+        self.assertEqual(self.of("scratch", "/tmp/notes"), "notes")
+
+    def test_crew_line_stops_at_status_and_ignores_parentheses(self):
+        crew = next(p for p in PROJECTS if p["slug"] == "bolt-priority")["crew"]
+        self.assertEqual(crew, {"2398-rebase", "pr-2398-kohen", "stella-cli-retirement"})
+
+
+class Strays(unittest.TestCase):
+    OWNER = {"2398-rebase": "bolt-priority", "stella": "stella", "phase-10": "phase-10"}
+
+    def test_old_layout_windows_in_the_wrong_space_are_closed_and_duplicates_too(self):
+        layout = {
+            "w16": ("stella", {"t1": "Stella", "t2": "2398-rebase", "t3": "phase-10", "t4": "stella", "t5": "my notes"}),
+            "w18": ("bolt-priority", {"t6": "2398-rebase"}),
+        }
+        got = {(tid, why.split(",")[0]) for tid, _, why in hs.stray_tabs(layout, self.OWNER)}
+        self.assertEqual(got, {("t2", "belongs to bolt-priority"), ("t3", "belongs to phase-10"),
+                               ("t4", "second window for the same session in stella")})
 
 
 class Move(unittest.TestCase):

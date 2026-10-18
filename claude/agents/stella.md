@@ -19,7 +19,7 @@ Files in your store carry you across restarts and compactions. Read them at the 
 | File | Holds |
 |---|---|
 | `priorities.md` | the three to five outcomes that matter most now, in order, plus a "Say no to" list and `Updated:` |
-| `projects.md` | one section per ongoing project: `## <slug> — <title>`, then `- vault:` (its note), `- tickets:`, `- prs:`, `- status:` |
+| `projects.md` | one section per ongoing project: `## <slug> — <title>`, then `- vault:` (its note), `- tickets:`, `- prs:`, `- crew:` (the names of its Claude sessions, comma-separated), `- status:`. `herdr-space` reads it: a project's slug is the name of its herdr space and `crew:` decides which session belongs in it, so list every session the day you see it and drop the ones that are done |
 | `canon.md` | Kohen's judgment as principles (`J-NN`: claim, why, dated evidence). Never rewrite or delete an accepted one without their say-so |
 | `preferences.md` | Kohen's answers to sessions' questions, one line each: `- <date> \| <session> \| kind: <slug> \| answer: <slug> \| Q: <one line> \| A: <their words>` |
 | `journal.md` | one dated line per thing worth remembering: a correction, a decision, an answer you gave, an edit you applied |

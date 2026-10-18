@@ -6,12 +6,18 @@
                                 one space per project for every Claude session that needs you, is working,
                                 or finished in the last N hours (default 48); idempotent (run by `tw`)
 
-A session belongs to a project by the first number of 3 or more digits in its name (so every session about
-PR 2398 shares one space), else by the repository of its working directory (a worktree
-~/github/<repo>-wt/<branch> counts as <repo>), else by the directory's name. Stella's own session is the
-space `stella`. A window is named after its session and runs `claude attach <id>`; a finished session's
-window shows its log first and attaches only when you press Enter (attaching starts a host process).
-Spaces and windows that already exist are left alone, never closed or renamed.
+A session belongs to a project, and the space is named after the project's slug in Stella's projects.md
+(~/.local/share/stella/projects.md: `## <slug> — <title>`, and a `Crew:` line naming its sessions). A session
+no project lists goes to the project whose section mentions the number in its name (PR 2398), else to
+`pr-<number>`, else to the name of its repository (a worktree ~/github/<repo>-wt/<branch> counts as <repo>),
+else of its directory. Stella's own session is the space `stella`.
+
+A window is named after its session and runs `claude attach <id>`; a finished session's window shows its log
+first and attaches only when you press Enter (attaching starts a host process).
+
+sync only adds and tidies what it made: a window named like a session that sits in another space than its
+project's, or a second window for the same session, is closed (the session keeps running); a space whose name
+is the bare number an earlier run used is renamed to its project. Your own windows and spaces are left alone.
 
 Standard library only.
 """
@@ -30,6 +36,7 @@ from pathlib import Path
 
 HOME = Path.home()
 GITHUB = HOME / "github"
+PROJECTS = HOME / ".local/share/stella/projects.md"
 STELLA_SPACE = "stella"
 STELLA_SESSION = "stella"
 LIVE = ("blocked", "working")  # a session in these states always gets a window
@@ -85,6 +92,57 @@ def move(direction: str) -> None:
         rpc("workspace.move", {"workspace_id": ws[here]["workspace_id"], "insert_index": to})
 
 
+# ---------------------------------------------------------------- which project a session belongs to
+
+def norm(name: str) -> str:
+    """A name compared loosely: 'merge benchmark-2399' and 'merge-benchmark-2399' are the same session."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+
+
+def parse_projects(text: str) -> list[dict]:
+    """[{slug, text, crew}] from projects.md: `## <slug> — <title>` sections and their `Crew:` lines."""
+    out: list[dict] = []
+    for block in re.split(r"(?m)^## ", text)[1:]:
+        head, _, body = block.partition("\n")
+        slug = re.split(r"\s+[—–-]\s+", head.strip(), maxsplit=1)[0].strip()
+        crew: set[str] = set()
+        for m in re.finditer(r"(?i)crew:\s*([^\n]*)", body):
+            line = re.split(r"\s·\s", re.sub(r"\([^)]*\)", "", m.group(1)))[0]
+            crew |= {norm(c) for c in line.split(",") if norm(c)}
+        out.append({"slug": slug, "text": block, "crew": crew})
+    return out
+
+
+def load_projects() -> list[dict]:
+    try:
+        return parse_projects(PROJECTS.read_text())
+    except OSError:
+        return []
+
+
+def project_of(a: dict, projects: list[dict] | None = None) -> str:
+    name = a.get("name") or ""
+    key = norm(name)
+    if key == STELLA_SESSION:
+        return STELLA_SPACE
+    projects = projects or []
+    for p in projects:
+        if key in p["crew"]:
+            return p["slug"]
+    m = re.search(r"\d{3,}", name)
+    if m:
+        for p in projects:
+            if re.search(rf"\b{m.group(0)}\b", p["text"]):
+                return p["slug"]
+        return f"pr-{m.group(0)}"
+    cwd = Path(a.get("cwd") or HOME)
+    try:
+        top = cwd.relative_to(GITHUB).parts[0]
+    except (ValueError, IndexError):
+        return cwd.name or "home"
+    return top[:-3] if top.endswith("-wt") else top
+
+
 # ---------------------------------------------------------------- sync
 
 def agents() -> list[dict]:
@@ -102,24 +160,9 @@ def finished_at(sid: str) -> float:
         return 0.0
 
 
-def project_of(a: dict) -> str:
-    name = a.get("name") or ""
-    if name == STELLA_SESSION:
-        return STELLA_SPACE
-    m = re.search(r"\d{3,}", name)
-    if m:
-        return m.group(0)
-    cwd = Path(a.get("cwd") or HOME)
-    try:
-        top = cwd.relative_to(GITHUB).parts[0]
-    except (ValueError, IndexError):
-        return cwd.name or "home"
-    return top[:-3] if top.endswith("-wt") else top
-
-
 def attach_cmd(a: dict) -> str:
     sid = a["id"]
-    if a.get("state") in LIVE or a.get("name") == STELLA_SESSION:
+    if a.get("state") in LIVE or norm(a.get("name") or "") == STELLA_SESSION:
         return f"claude attach {sid}"
     return (f"claude logs {sid} | less -R +G; printf '\\nfinished: Enter attaches (it starts a host process) '; "
             f"read; claude attach {sid}")
@@ -155,27 +198,63 @@ def herdr_json(*args: str) -> dict:
         return {}
 
 
+def stray_tabs(layout: dict[str, tuple[str, dict[str, str]]], owner: dict[str, str]) -> list[tuple[str, str, str]]:
+    """Windows to close: (tab id, its label, why). `layout` is {space id: (space label, {tab id: label})} and
+    `owner` {normalised session name: project}. A window named like a session is stray when it sits in a space
+    that is not its project's, or when the same space already has a window for that session."""
+    out = []
+    for _, (space, tabs) in layout.items():
+        seen: set[str] = set()
+        for tid, label in tabs.items():
+            key = norm(label)
+            if key not in owner:
+                continue
+            if owner[key] != space:
+                out.append((tid, label, f"belongs to {owner[key]}, not {space}"))
+            elif key in seen:
+                out.append((tid, label, f"second window for the same session in {space}"))
+            else:
+                seen.add(key)
+    return out
+
+
 def sync(hours: float, dry: bool) -> None:
+    projects = load_projects()
     cutoff = time.time() - hours * 3600
+    rows = agents()
+    owner = {norm(a.get("name") or a["id"][:8]): project_of(a, projects) for a in rows}
     wanted: dict[str, list[dict]] = {}
-    for a in agents():
-        if a.get("state") in LIVE or a.get("name") == STELLA_SESSION or (
+    for a in rows:
+        if a.get("state") in LIVE or norm(a.get("name") or "") == STELLA_SESSION or (
                 a.get("state") == "done" and finished_at(a["id"]) >= cutoff):
-            wanted.setdefault(project_of(a), []).append(a)
+            wanted.setdefault(owner[norm(a.get("name") or a["id"][:8])], []).append(a)
     # Stella first, then the projects with sessions that need you, then the rest
     order = sorted(wanted, key=lambda k: (k != STELLA_SPACE,
                                           not any(a.get("state") == "blocked" for a in wanted[k]), k))
     existing = {label: wid for wid, label in find_ids(herdr_json("workspace", "list"), ("workspace_id", "id")).items()}
+
+    def tabs_of(wid: str) -> dict[str, str]:
+        return find_ids(herdr_json("tab", "list", "--workspace", wid), ("tab_id", "id"))
+
     for project in order:
         sessions = sorted(wanted[project], key=lambda a: (a.get("name") or "", a["id"]))
         cwd = sessions[0].get("cwd") or str(HOME)
         wid = existing.get(project)
-        tabs = {} if not wid else {v: k for k, v in find_ids(
-            herdr_json("tab", "list", "--workspace", wid), ("tab_id", "id")).items()}
-        pending = [a for a in sessions if (a.get("name") or a["id"][:8]) not in tabs]
+        if not wid:  # an earlier run named the space after the bare number in its sessions' names
+            for a in sessions:
+                m = re.search(r"\d{3,}", a.get("name") or "")
+                if m and m.group(0) in existing:
+                    wid = existing.pop(m.group(0))
+                    print(f"{project}: renamed from {m.group(0)}")
+                    if not dry:
+                        run("herdr", "workspace", "rename", wid, project)
+                    existing[project] = wid
+                    break
+        have = {norm(v) for v in tabs_of(wid).values()} if wid else set()
+        pending = [a for a in sessions if norm(a.get("name") or a["id"][:8]) not in have]
         if not pending:
             continue
-        print(f"{project}: {'+ ' + ', '.join(a.get('name') or a['id'][:8] for a in pending)}")
+        print(f"{project}: + {', '.join(a.get('name') or a['id'][:8] for a in pending)}")
         if dry:
             continue
         for a in pending:
@@ -186,13 +265,18 @@ def sync(hours: float, dry: bool) -> None:
                 tab = res["tab"].get("tab_id") or res["tab"]["id"]
                 pane = res["root_pane"]["pane_id"]
                 run("herdr", "tab", "rename", tab, label)
+                existing[project] = wid
             else:
                 res = herdr_json("tab", "create", "--workspace", wid, "--label", label, "--cwd",
                                  a.get("cwd") or cwd, "--no-focus").get("result", {})
                 pane = res["root_pane"]["pane_id"]
             run("herdr", "pane", "run", pane, attach_cmd(a))
+    layout = {wid: (label, tabs_of(wid)) for label, wid in existing.items()}
+    for tid, label, why in stray_tabs(layout, owner):
+        print(f"close {label}: {why}")
+        if not dry:
+            run("herdr", "tab", "close", tid)
     if not dry:
-        # leave Stella's space first, in the order above, after the spaces you had already
         labels = {w.get("label"): w["workspace_id"] for w in spaces()}
         if STELLA_SPACE in labels:
             rpc("workspace.move", {"workspace_id": labels[STELLA_SPACE], "insert_index": 0})
