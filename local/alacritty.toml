@@ -94,8 +94,9 @@ bindings = [
   { key = "0", mods = "Command", chars = "\u001B0" },          # last tab
   { key = "T", mods = "Command", chars = "\u001Bt" },          # new tab
   { key = "W", mods = "Command", chars = "\u001Bw" },          # close pane
-  { key = "W", mods = "Command|Shift", chars = "\u001BW" },    # close tab
+  { key = "W", mods = "Command|Shift", chars = "\u001BW" },    # close tab (herdr: close the space)
   { key = "R", mods = "Command|Shift", chars = "\u001BR" },    # rename tab
+  { key = "N", mods = "Command|Shift", chars = "\u001BN" },    # new project (herdr: a popup that asks for its name)
   { key = "R", mods = "Command", chars = "\u001Br" },          # rename pane
 
   # prev/next tab. Cmd+Shift+[ / ] is the iTerm chord. With Shift held, the
@@ -112,7 +113,8 @@ bindings = [
   { key = "D", mods = "Command", chars = "\u001Bd" },          # split right
   { key = "D", mods = "Command|Shift", chars = "\u001BD" },    # split down
 
-  # focus a pane, in every direction
+  # focus a pane sideways. Up and down: in herdr they move between spaces (projects), and a pane above or below
+  # is C-b k / C-b j; in tmux they still focus the pane above or below.
   { key = "ArrowLeft",   mods = "Command|Shift", chars = "\u001B[1;3D" },
   { key = "ArrowRight",  mods = "Command|Shift", chars = "\u001B[1;3C" },
   { key = "ArrowUp",     mods = "Command|Shift", chars = "\u001B[1;3A" },

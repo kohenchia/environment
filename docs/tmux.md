@@ -90,6 +90,13 @@ the normal way.
 | `Cmd+Shift+R` | Rename the tab |
 | `Cmd+Shift+W` | Close the tab (asks first) |
 
+In herdr (the work window, `docs/herdr.md`) the same chords mean the project layout: a tab is a *window*,
+a workspace a *space* (a project). `Cmd+Shift+N` opens a new project (a popup asks for its name),
+`Cmd+Shift+W` closes the space (herdr asks first; its sessions keep running), `Cmd+Shift+↑` / `↓` walk the
+spaces in order (a pane above or below is `C-b k` / `C-b j`), `Cmd+Shift+R` renames the window in place
+(on a project's first window it renames the project), `Cmd+W` closes a pane and a window with its last
+pane. In tmux the chords keep the meaning in the tables here.
+
 Tab names are stable by design — `allow-rename` and `automatic-rename` are both off, so a program
 can never retitle your project tab. `renumber-windows` is on, so closing a tab reflows the rest and
 `Cmd+1`…`Cmd+9` never develop gaps.
