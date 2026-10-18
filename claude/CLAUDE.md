@@ -6,9 +6,10 @@ they win).
 
 ## How I work
 
-- **One terminal, one herdr server.** `tw` opens the work window: one tab, Stella's session, and herdr's
-  left sidebar lists the crew she manages with their state (tmux stays as the fallback, `twt`). Crewmates get
-  no tab in that window unless I ask to talk to one. Every session is an ordinary Claude Code session that can go to the background and come back.
+- **One terminal, one herdr server.** `tw` opens the work window: Stella's space first, then one space per
+  project with a window per session, and dots that show Claude's own state (yellow = needs me, blue = working,
+  green = completed, not yet seen; tmux stays as the fallback, `twt`). Crewmates wait for me in their own
+  window. Every session is an ordinary Claude Code session that can go to the background and come back.
 - **Skills, not teams.** Work starts from a skill, and the skill decides whether a task deserves
   subagents and which ones:
 

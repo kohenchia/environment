@@ -10,7 +10,7 @@ description: How Kohen's environment is built - Alacritty and tmux, the shell, C
 | Piece | Where | Notes |
 |---|---|---|
 | Terminal | Alacritty, one window, `~/github/environment/local/alacritty.toml` | Translates Cmd chords into ESC sequences the multiplexer binds |
-| herdr | `local/herdr.toml` → `~/.config/herdr/config.toml`, docs in `docs/herdr.md` | The work window: `tw` starts the server, builds workspace `stella` (one `stella` tab), runs `stella crew sync` so the sidebar lists the crew (a workspace "└ <project> · <name>" per crewmate, grouped by project, as firstmate lays it out) and attaches. Update checks off |
+| herdr | `local/herdr.toml` → `~/.config/herdr/config.toml`, docs in `docs/herdr.md` | The work window: `tw` starts the server, builds the space `stella`, runs `stella crew sync` (one space per project labelled with its slug, Stella's first; a project's first window is Kohen's shell, then one window per Claude session) and starts the dot reporter `stella crew follow` (one detached process; dots are Claude's own state: yellow awaiting input, blue working, green completed unseen) and attaches. Update checks off |
 | tmux | `local/.tmux.conf`, docs in `docs/tmux.md` | The fallback: `twt` builds the Work Env 2.0 window (agents view left, session right) |
 | Shell | `local/.zshrc` (sources the machine's own extra rc file when present) | `cy` new session, `cag` agents view, `cw` attach to a session, `tw` / `twt` the work window, `wt*` worktrees |
 | Global instructions | `~/.claude/CLAUDE.md` → `~/github/environment/claude/CLAUDE.md` | Public rules; it imports the machine's own instructions at the end |
