@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""kc-shot: put the screenshot you just took into the prompt of the focused pane (bound to Cmd+Shift+V in herdr).
+
+A terminal cannot take a drag from macOS's floating screenshot thumbnail (the file does not exist yet), so
+instead of dragging, press the key. It types `@<path> ` into the focused pane, which Claude Code reads as the
+image: the newest `Screenshot*.png` on the Desktop from the last two minutes, else the image on the clipboard
+(Cmd+Ctrl+Shift+4 copies instead of saving). Either way it is copied to ~/Pictures/Screenshots/shot-<time>.png
+first, a name without spaces, because an @-mention ends at a space.
+
+Standard library only; macOS (osascript) for the clipboard.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+DESKTOP = HOME / "Desktop"
+DEST = HOME / "Pictures/Screenshots"
+RECENT = 120  # seconds: a Desktop screenshot older than this is not "the one you just took"
+
+
+def newest_desktop_shot(desktop: Path, now: float, window: float = RECENT) -> Path | None:
+    shots = [p for p in desktop.glob("Screenshot*.png") if now - p.stat().st_mtime <= window]
+    return max(shots, key=lambda p: p.stat().st_mtime, default=None)
+
+
+def clipboard_has_image() -> bool:
+    p = subprocess.run(["osascript", "-e", "clipboard info"], capture_output=True, text=True)
+    return "PNGf" in p.stdout or "TIFF" in p.stdout
+
+
+def save_clipboard(dest: Path) -> bool:
+    script = ('set f to open for access POSIX file "%s" with write permission\n'
+              "set eof of f to 0\n"
+              "write (the clipboard as «class PNGf») to f\n"
+              "close access f" % dest)
+    return subprocess.run(["osascript", "-e", script], capture_output=True).returncode == 0 and dest.stat().st_size > 0
+
+
+def say(text: str) -> None:
+    print(text, file=sys.stderr)
+    subprocess.run(["osascript", "-e", f'display notification "{text}" with title "kc-shot"'], capture_output=True)
+
+
+def main() -> None:
+    DEST.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    target = DEST / time.strftime("shot-%Y%m%d-%H%M%S.png", time.localtime(now))
+    src = newest_desktop_shot(DESKTOP, now)
+    if src:
+        shutil.copy2(src, target)
+    elif not (clipboard_has_image() and save_clipboard(target)):
+        say("No screenshot from the last two minutes on the Desktop, and no image on the clipboard.")
+        sys.exit(1)
+    pane = os.environ.get("HERDR_ACTIVE_PANE_ID")
+    if not pane:
+        print(target)  # run by hand: just say where it is
+        return
+    subprocess.run(["herdr", "pane", "send-text", pane, f"@{target} "], check=True)
+
+
+if __name__ == "__main__":
+    main()

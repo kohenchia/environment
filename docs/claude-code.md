@@ -58,6 +58,7 @@ durable session crons she recreates at the start of her session.
 | Command | Does |
 |---|---|
 | `kc-env` | Every command, skill and background process of this environment |
+| `kc-shot` | Types the screenshot you just took into the focused pane (`Cmd+Shift+V`) |
 | `kc-keys` | Every key binding of the work window, read from the Alacritty and herdr configs |
 | `tw` | The work window: herdr, one space per project |
 | `cy` | New session, permission prompts skipped |

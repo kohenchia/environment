@@ -52,6 +52,7 @@ an `alt+…` chord, so the chords from the tmux days carry over unchanged.
 | **New space** | `Cmd+N` |
 | **Go to the space above / below** | `Cmd+Ctrl+↑` / `↓` |
 | **Move the space up / down** | `Cmd+Ctrl+Shift+↑` / `↓` |
+| **Screenshot into the prompt** (the one you just took, from the Desktop or the clipboard) | `Cmd+Shift+V` |
 | **Delete the space** (herdr asks first; its sessions keep running) | `Cmd+Ctrl+W` |
 
 The rule for the new ones: the Ctrl layer is for spaces, and Shift means "move", as it does for windows. herdr has
@@ -64,3 +65,12 @@ off-switch). Detach with `C-b q` or `C-b d`: everything keeps running.
 herdr detects Claude in a window and draws its state beside the window and the space: one filled dot, coloured
 for blocked (needs you), working, or done. They are herdr's own reading of the session, so a session waiting for
 you at its prompt can show as idle; the Claude agents view (`cag`) is the authority for who needs you.
+
+## Screenshots
+
+macOS's floating thumbnail cannot be dragged into a terminal: the file does not exist until the thumbnail goes
+away. `Cmd+Shift+V` replaces the drag. It types `@<path> ` into the focused pane, which Claude Code reads as the
+image: the newest `Screenshot*.png` on the Desktop from the last two minutes, else the image on the clipboard
+(`Cmd+Ctrl+Shift+4` copies instead of saving). The image is copied to `~/Pictures/Screenshots/shot-<time>.png` first,
+because an @-mention ends at a space and macOS names screenshots with spaces. To have the file on the Desktop at
+once, turn the thumbnail off: `defaults write com.apple.screencapture show-thumbnail -bool false`.

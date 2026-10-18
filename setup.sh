@@ -402,6 +402,7 @@ LINKS=(
     "bin/stella|$HOME/.local/bin/stella"
     "bin/kc-env|$HOME/.local/bin/kc-env"
     "bin/kc-keys|$HOME/.local/bin/kc-keys"
+    "bin/kc-shot|$HOME/.local/bin/kc-shot"
     "bin/herdr-space|$HOME/.local/bin/herdr-space"
     # herdr, the terminal multiplexer for the work window (`tw`).
     "local/herdr.toml|$HOME/.config/herdr/config.toml"
