@@ -12,7 +12,12 @@ runs outside the command sandbox, so every argument is validated and nothing is 
     stella adopt <name|id> [--team T] [--project P]   record a session she did not launch (observation only)
     stella adopt --resume <session-uuid> <name> [--team T] [--project P]   bring back an unlisted session
                                  from its transcript under <name>, then adopt it
-    stella project <name> <slug>|--none   put a crewmate (or adopted session) under a project, or take it out
+    stella assign <name> <slug>|--none   put a crewmate (or adopted session) under a project, or take it out
+                                 (was `stella project <name> <slug>`, still accepted for two weeks)
+    stella project new <slug>|--ask      register a project and open its space (`--ask`: prompt for the name, the
+                                 Cmd+Shift+N popup); `project rename <old> <new>`; `project close <slug>` closes the space
+    stella window new <project> [<name>] | rename <project> <a> <b> | close <project> <a>   windows of a space
+    stella pane rename <project> <window> <pane-number> <new name>
     stella projects              every project with its crew, their state and the decisions waiting in it
                                  (the projects themselves are Stella's own file, projects.md)
     stella crew [--watch]        the crew as a compact list: project, crewmate, state, its one-line need;
@@ -485,35 +490,6 @@ def _workspaces(herdr: str) -> dict[str, str] | None:
     return found
 
 
-def _crew_wss(herdr: str, wss: dict[str, str] | None = None) -> dict[str, str]:
-    """{id: label} of the crew workspaces ("└ <name>") and of the one the earlier layout made."""
-    wss = _workspaces(herdr) if wss is None else wss
-    return {w: label for w, label in (wss or {}).items() if label.startswith(CHILD) or label == OLD_CREW_WORKSPACE}
-
-
-def _legacy_tabs(herdr: str) -> dict[str, str]:
-    """Every tab outside the crew workspaces: Stella's, Kohen's own, and crew tabs opened in the work window
-    before the sidebar."""
-    own: set[str] = set()
-    for w in _crew_wss(herdr):
-        own |= set(_herdr_tabs(herdr, w))
-    return {t: label for t, label in _herdr_tabs(herdr).items() if t not in own}
-
-
-def close_tab(rec: dict) -> bool:
-    """Close the crew tab opened in the work window before the sidebar (`herdr tab close`): the id kept in
-    its record, else the tab carrying its name as label; never a tab of the crew workspace. True when a tab
-    was closed."""
-    herdr = _herdr()
-    if not herdr:
-        return False
-    tabs = _legacy_tabs(herdr)
-    ids = [rec["tab"]] if rec.get("tab") in tabs else [t for t, label in tabs.items() if label == rec.get("name")]
-    for t in ids:
-        subprocess.run([herdr, "tab", "close", t], capture_output=True, text=True, timeout=30)
-    return bool(ids)
-
-
 # What a tab shows after its `claude attach` died with the process: "Session 3479a9f0 has exited."
 EXITED_RE = re.compile(r"session [0-9a-f]{8} has exited|session exited", re.I)
 FOLLOW_GRACE = float(os.environ.get("STELLA_FOLLOW_GRACE", "4"))  # seconds to tell a restart from a detach
@@ -682,62 +658,12 @@ def priority_rank(recs: list[dict]) -> dict[str, int]:
     return rank
 
 
-def crew_label(rec: dict) -> str:
-    """The crewmate's workspace label: "└ <project> · <name>", or "└ <name>" without a project."""
-    return CHILD + (f"{rec['project']}{PROJECT_SEP}" if rec.get("project") else "") + rec["name"]
-
-
 def crew_sort(recs: list[dict], every: list[dict] | None = None) -> list[dict]:
     """Projects in the order of priorities.md, then the rest alphabetically; crewmates of a project
     alphabetically; a crewmate with no project last."""
     rank = priority_rank(every or recs)  # a priority may name a crewmate that is not live now
     return sorted(recs, key=lambda r: (not r.get("project"), rank.get(r.get("project"), 1 << 30),
                                        r.get("project") or "", r["name"]))
-
-
-def find_workspace(wss: dict[str, str], rec: dict) -> str | None:
-    """The crewmate's workspace: the one its record names, else the one labelled with its name, with or
-    without a project in front (the layout before projects)."""
-    if rec.get("crew_ws") in wss:
-        return rec["crew_ws"]
-    name = rec["name"]
-    return next((w for w, label in wss.items()
-                 if label == CHILD + name or (label.startswith(CHILD) and label.endswith(PROJECT_SEP + name))), None)
-
-
-def desired_order(herdr: str, recs: list[dict], wss: dict[str, str], every: list[dict] | None = None) -> list[str]:
-    """The ids of the live crewmates' workspaces in the order the sidebar should list them."""
-    return [w for w in (find_workspace(wss, r) for r in crew_sort(recs, every)) if w]
-
-
-def _order_crew(herdr: str, wanted: list[str]) -> None:
-    """Put the crew workspaces right after Stella's, in `wanted` order. Idempotent: a workspace already at its
-    place is not moved, and Kohen's workspaces only keep their relative order (they follow the crew)."""
-    p = _herdr_run(herdr, "workspace", "list")
-    try:
-        cur = [w.get("workspace_id") or w.get("id") for w in json.loads(p.stdout)["result"]["workspaces"]]
-        labels = {(w.get("workspace_id") or w.get("id")): w.get("label") or "" for w in json.loads(p.stdout)["result"]["workspaces"]}
-    except (ValueError, KeyError, TypeError, AttributeError):
-        return
-    for k, ws in enumerate(wanted):
-        parent = next((i for i, w in enumerate(cur) if labels[w] in (PARENT, OLD_PARENT)), None)
-        if parent is None or ws not in cur:
-            return
-        at = parent + 1 + k
-        if at >= len(cur) or cur[at] == ws:
-            continue
-        if not _move_workspace(herdr, ws, at):
-            return
-        cur.remove(ws)
-        cur.insert(at, ws)
-
-
-def _relabel(herdr: str, wss: dict[str, str], recs: list[dict]) -> None:
-    for rec in recs:
-        ws = find_workspace(wss, rec)
-        if ws and wss[ws] != crew_label(rec):
-            _herdr_run(herdr, "workspace", "rename", ws, crew_label(rec))
-            wss[ws] = crew_label(rec)
 
 
 def _agent_panes(herdr: str) -> set[str]:
@@ -763,26 +689,6 @@ def _agent_panes(herdr: str) -> set[str]:
 
 REPORT_SOURCE = "stella"
 ATTACH_VERSION = 2  # 1: `stella tab` in the pane; 2: `claude attach` itself in a shell loop
-
-
-def _open_crew_workspace(herdr: str, rec: dict) -> tuple[str, str] | None:
-    """The crewmate's own workspace, "└ <name>", with one tab "fm-<name>" running `stella tab <id>`. It takes
-    no focus. (workspace id, tab id), or None when herdr refused."""
-    r = _herdr_run(herdr, "workspace", "create", "--label", crew_label(rec), "--cwd", rec.get("dir") or str(HOME),
-                   "--no-focus")
-    try:
-        res = json.loads(r.stdout)["result"]
-        ws = res["workspace"].get("workspace_id") or res["workspace"].get("id")
-        tab = res["tab"].get("tab_id") or res["tab"].get("id")
-    except (ValueError, KeyError, TypeError, AttributeError):
-        ws = tab = None
-    pane = _herdr_pane(r.stdout)
-    if r.returncode != 0 or not ws or not tab or not pane:
-        print(f"{rec['name']}: could not open its workspace: {(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)
-        return None
-    _herdr_run(herdr, "tab", "rename", tab, TAB_PREFIX + rec["name"])
-    _herdr_run(herdr, "pane", "run", pane, _attach_cmd(rec["id"]))
-    return ws, tab
 
 
 def _retire_old_crew_workspace(herdr: str, wss: dict[str, str], names: set[str]) -> None:
@@ -1009,6 +915,8 @@ def follow_loop(once: bool = False) -> None:
                     seen_sessions = ids
                 t_sync = now
             follow_once(herdr, last)
+            if n % 3 == 0 or once:
+                detect_project_renames(herdr)
         except Exception as e:  # noqa: BLE001 - the reporter never dies of a herdr hiccup
             print(f"{time.strftime('%H:%M:%S')} follow: {type(e).__name__}: {str(e)[:160]}", flush=True)
         n += 1
@@ -1017,13 +925,291 @@ def follow_loop(once: bool = False) -> None:
         time.sleep(FOLLOW_EVERY)
 
 
+# ------------------------------------------------------------------ the layout: one space per project (Workspace 4.0)
+
+# herdr's words and Kohen's: a *space* (herdr: workspace) is a project, labelled with its slug, and Stella's
+# comes first; a *window* (herdr: tab) is either his own shell in the project's directory (the first one,
+# named after the project) or one Claude session, named after the session and running the attach loop.
+VIEW_STATE = STELLA_HOME / "view.json"  # {"spaces": {slug: ws}, "firsts": {slug: tab}, "closed": {...}, "all": bool}
+WINDOWS = STELLA_HOME / "windows.json"  # {sid: {"name", "space", "tab", "closed"}}: sessions with no crew record
+RENAMES = STELLA_HOME / "renames.jsonl"  # one line per project renamed in herdr: the watcher wakes Stella for it
+
+
+def view_state() -> dict:
+    v = read_json(VIEW_STATE)
+    for k in ("spaces", "firsts", "closed"):
+        v.setdefault(k, {})
+    v.setdefault("all", True)  # `claude agents --json --all` is the call that lists exactly Claude's agent view
+    v.setdefault("no_window", ["stopped"])  # states with no window: attaching to a stopped session may resume it
+    return v
+
+
+def save_view_state(v: dict) -> None:
+    VIEW_STATE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = VIEW_STATE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(v, indent=1))
+    tmp.replace(VIEW_STATE)
+
+
+def _all_tabs(herdr: str, wss: dict[str, str]) -> dict[str, tuple[str, str]]:
+    """{tab id: (label, workspace id)} of every tab, one `tab list` per workspace."""
+    out: dict[str, tuple[str, str]] = {}
+    for ws in wss:
+        for t, label in _herdr_tabs(herdr, ws).items():
+            out[t] = (label, ws)
+    return out
+
+
+def session_name(row: dict) -> str:
+    """A window's name for a session nobody adopted: its Claude name, made a valid name."""
+    raw = row.get("name") or row.get("id") or ""
+    return raw if NAME.match(raw) else re.sub(r"[^a-z0-9-]+", "-", raw.lower()).strip("-")[:41] or row["id"]
+
+
+def wanted_windows(rows: list[dict] | None = None) -> list[dict]:
+    """A window for every session Claude's agent view lists, as {sid, name, project, rec}: a crewmate's in its
+    project's space, every other session (Kohen's own, unadopted) and the crewmates of no project in Stella's.
+    Stella's own running session is not one: her window is the one tw builds."""
+    v = view_state()
+    rows = agents(bool(v.get("all"))) if rows is None else rows
+    me = stella_row()
+    recs = {r["id"]: r for r in records() if r.get("id") and r.get("mode") != "track" and r.get("state") != "landed"}
+    landed_ids = {r["id"] for r in records() if r.get("id") and r.get("state") == "landed"}
+    out = []
+    for row in rows:
+        sid = row.get("id")
+        if not sid or row.get("kind", "background") != "background" or (me and sid == me["id"]) or sid in landed_ids:
+            continue
+        if row.get("state") in v["no_window"] and not (recs.get(sid) or {}).get("tab"):
+            continue
+        rec = recs.get(sid)
+        out.append({"sid": sid, "name": rec["name"] if rec else session_name(row), "rec": rec,
+                    "project": (rec or {}).get("project") or None, "row": row})
+    return out
+
+
+def project_dir(slug: str, recs: list[dict]) -> Path:
+    """The directory of a project's own shell window: `- dir: <path>` in its section of projects.md, else the
+    main checkout of its first crewmate's repo, else ~/github."""
+    try:
+        text = (STELLA_HOME / "projects.md").read_text()
+    except OSError:
+        text = ""
+    cur = None
+    for line in text.splitlines():
+        m = re.match(r"^##\s+([a-z0-9][a-z0-9-]*)", line)
+        if m:
+            cur = m.group(1)
+        elif cur == slug and (m := re.match(r"^[-*]\s*dir:\s*(\S.*)$", line, re.I)):
+            d = Path(os.path.expanduser(m.group(1).strip().strip("`")))
+            if d.is_dir():
+                return d
+    for r in sorted((r for r in recs if r.get("project") == slug), key=lambda r: r["name"]):
+        repo = r.get("repo")
+        if repo and REPO.match(repo) and (HOME / "github" / repo).is_dir():
+            return HOME / "github" / repo
+    return HOME / "github" if (HOME / "github").is_dir() else HOME
+
+
+def _holder(want: dict) -> dict:
+    """What remembers a window: the crew record, or windows.json for a session without one."""
+    return want["rec"] if want["rec"] else read_json(WINDOWS).get(want["sid"], {})
+
+
+def _remember(want: dict, **kv) -> None:
+    """Write (or, with a None value, drop) fields on the record or the windows.json entry of a window."""
+    if want["rec"]:
+        rec = {**load(want["rec"]["name"]), **kv}
+        rec = {k: x for k, x in rec.items() if x is not None}
+        save(want["rec"]["name"], rec)
+        want["rec"] = rec
+        return
+    w = read_json(WINDOWS)
+    cur = {**w.get(want["sid"], {"name": want["name"]}), **kv}
+    w[want["sid"]] = {k: x for k, x in cur.items() if x is not None}
+    WINDOWS.write_text(json.dumps(w, indent=1))
+
+
+def _forget(sid: str) -> None:
+    w = read_json(WINDOWS)
+    if sid in w:
+        del w[sid]
+        WINDOWS.write_text(json.dumps(w, indent=1))
+
+
+def _first_window(herdr: str, ws: str, slug: str) -> str | None:
+    tabs = _herdr_tabs(herdr, ws)
+    return next(iter(tabs), None)
+
+
+def ensure_space(herdr: str, ctx: dict, slug: str, wants: list[dict]) -> str | None:
+    """The workspace of project `slug`: the one view.json names, else one Kohen made with that label, else a new
+    one whose first window is a shell in the project's directory. A space Kohen closed stays closed until one of
+    its sessions turns awaiting input again or a session joins it. None when it stays closed."""
+    v, wss = ctx["view"], ctx["wss"]
+    ws = v["spaces"].get(slug)
+    if ws not in wss:
+        ws = next((w for w, label in wss.items() if label == slug), None)
+    if ws:
+        v["spaces"][slug] = ws
+        v["closed"].pop(slug, None)
+        return ws
+    blocked = any(claude_state(w["sid"]) == "blocked" for w in wants)
+    if slug in v["spaces"]:  # we made it and it is gone: Kohen closed it
+        c = v["closed"].setdefault(slug, {"state": "blocked" if blocked else "ok",
+                                         "members": sorted(w["sid"] for w in wants)})
+        if c["state"] == "blocked" and not blocked:
+            c["state"] = "ok"
+        joined = any(w["sid"] not in c["members"] for w in wants)
+        if not ((blocked and c["state"] == "ok") or joined):
+            return None
+        v["closed"].pop(slug, None)
+    cwd = str(project_dir(slug, ctx["recs"]))
+    r = _herdr_run(herdr, "workspace", "create", "--label", slug, "--cwd", cwd, "--no-focus")
+    try:
+        res = json.loads(r.stdout)["result"]
+        ws = res["workspace"].get("workspace_id") or res["workspace"].get("id")
+        tab = res["tab"].get("tab_id") or res["tab"].get("id")
+    except (ValueError, KeyError, TypeError, AttributeError):
+        ws = tab = None
+    if r.returncode != 0 or not ws or not tab:
+        print(f"{slug}: could not open its space: {(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)
+        return None
+    _herdr_run(herdr, "tab", "rename", tab, slug)
+    v["spaces"][slug] = ws
+    v["firsts"][slug] = tab
+    ctx["wss"][ws] = slug
+    print(f"{slug}: space opened")
+    return ws
+
+
+def _new_window(herdr: str, space: str, want: dict, cwd: str) -> tuple[str, str] | None:
+    """A new window in `space` named after the session, running the attach loop. (tab id, pane id)."""
+    r = _herdr_run(herdr, "tab", "create", "--workspace", space, "--label", want["name"], "--cwd", cwd, "--no-focus")
+    tab, pane = _tab_id(r.stdout), _herdr_pane(r.stdout)
+    if r.returncode != 0 or not tab or not pane:
+        print(f"{want['name']}: could not open its window: {(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)
+        return None
+    _herdr_run(herdr, "pane", "run", pane, _attach_cmd(want["sid"]))
+    return tab, pane
+
+
+def _move_into(herdr: str, ctx: dict, pane: str, space: str, label: str) -> str | None:
+    """`pane move` into a new window of `space`: the live `claude attach` process is moved, not restarted. The new
+    window's tab id, found as the one tab the space gained; None when herdr refused."""
+    before = set(_herdr_tabs(herdr, space))
+    r = _herdr_run(herdr, "pane", "move", pane, "--new-tab", "--workspace", space, "--label", label, "--no-focus")
+    gained = set(_herdr_tabs(herdr, space)) - before
+    if r.returncode != 0 or len(gained) != 1:
+        return None
+    return gained.pop()
+
+
+def ensure_window(herdr: str, ctx: dict, want: dict, space: str) -> None:
+    """The one window of a session, in `space`: kept, moved there from another space, brought over from the
+    workspace of the earlier layout (its pane moves, nothing restarts), or opened. A window Kohen closed stays
+    closed until the session awaits input again."""
+    tabs = ctx["tabs"]  # {tab id: (label, workspace id)}
+    hold = _holder(want)
+    tab, state = hold.get("tab"), claude_state(want["sid"])
+    if hold.get("closed"):
+        if hold["closed"] == "blocked" and state != "blocked":
+            _remember(want, closed="ok")
+            return
+        if hold["closed"] == "blocked" or state != "blocked":
+            return
+        _remember(want, closed=None)  # it needs him again: open it anew
+        hold, tab = _holder(want), None
+    if tab and tab in tabs:
+        label, ws = tabs[tab]
+        if ws != space:  # the project changed: move the live pane, no restart
+            panes = _tab_panes(herdr, tab)
+            new = _move_into(herdr, ctx, panes[0], space, label) if panes else None
+            if new:
+                _remember(want, space=space, tab=new, crew_ws=None)
+                tabs.pop(tab, None)
+                tabs[new] = (label, space)
+        elif hold.get("space") != space:
+            _remember(want, space=space)
+        if label != want["name"] and label == hold.get("label"):  # the session was renamed, and Kohen had not
+            _herdr_run(herdr, "tab", "rename", tab, want["name"])
+        if hold.get("label") != label and label == want["name"]:
+            _remember(want, label=label)
+        return
+    if tab:  # recorded, and gone from herdr: Kohen closed the window
+        _remember(want, closed="blocked" if state == "blocked" else "ok", tab=None, space=None)
+        return
+    legacy = hold.get("crew_ws")
+    if legacy in ctx["wss"]:  # the earlier layout: bring the live attach pane over, then drop the old workspace
+        old_tabs = _herdr_tabs(herdr, legacy)
+        panes = [pn for t in old_tabs for pn in _tab_panes(herdr, t)]
+        new = _move_into(herdr, ctx, panes[0], space, want["name"]) if panes else None
+        moved = bool(new)
+        if not new:  # fallback: a fresh window with the same loop; the old workspace goes, the session is untouched
+            made = _new_window(herdr, space, want, hold.get("dir") or str(HOME))
+            new = made[0] if made else None
+        if new:
+            _remember(want, space=space, tab=new, crew_ws=None, label=want["name"], attach=ATTACH_VERSION)
+            tabs[new] = (want["name"], space)
+            if not moved or not any(_tab_panes(herdr, t) for t in _herdr_tabs(herdr, legacy)):
+                _herdr_run(herdr, "workspace", "close", legacy)
+                ctx["wss"].pop(legacy, None)
+            print(f"{want['name']}: moved into {ctx['wss'].get(space, space)}")
+        return
+    made = _new_window(herdr, space, want, hold.get("dir") or (want["row"] or {}).get("cwd") or str(HOME))
+    if made:
+        _remember(want, space=space, tab=made[0], label=want["name"], attach=ATTACH_VERSION)
+        tabs[made[0]] = (want["name"], space)
+        print(f"{want['name']}: window opened")
+
+
+def project_order(recs: list[dict], slugs: set[str]) -> list[str]:
+    """Projects in the order of priorities.md, then the rest alphabetically."""
+    rank = priority_rank(recs)
+    return sorted(slugs, key=lambda s: (rank.get(s, 1 << 30), s))
+
+
+def _order_spaces(herdr: str, wanted: list[str]) -> None:
+    """Put Stella's space first and the project spaces right after it, in `wanted` order. Idempotent: a space
+    already at its place is not moved, and Kohen's own workspaces only keep their relative order (they follow the
+    projects)."""
+    p = _herdr_run(herdr, "workspace", "list")
+    try:
+        cur = [w.get("workspace_id") or w.get("id") for w in json.loads(p.stdout)["result"]["workspaces"]]
+        labels = {(w.get("workspace_id") or w.get("id")): w.get("label") or "" for w in json.loads(p.stdout)["result"]["workspaces"]}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return
+    mine = next((w for w in cur if labels[w] in (PARENT, OLD_PARENT)), None)
+    if mine and cur[0] != mine:  # Stella's space is first
+        if not _move_workspace(herdr, mine, 0):
+            return
+        cur.remove(mine)
+        cur.insert(0, mine)
+    for k, ws in enumerate(wanted):
+        parent = next((i for i, w in enumerate(cur) if labels[w] in (PARENT, OLD_PARENT)), None)
+        if parent is None or ws not in cur:
+            return
+        at = parent + 1 + k
+        if at >= len(cur) or cur[at] == ws:
+            continue
+        if not _move_workspace(herdr, ws, at):
+            return
+        cur.remove(ws)
+        cur.insert(at, ws)
+
+
+def _close_window(herdr: str, tab: str | None) -> None:
+    if tab:
+        _herdr_run(herdr, "tab", "close", tab)
+
+
 def sync_sidebar(restart_follower: bool = True) -> None:
-    """Make herdr's sidebar the crew list, as firstmate's is. Every live crewmate (adopted ones too) has its
-    own workspace "└ <name>" right after Stella's, with one tab "fm-<name>" running `stella tab <id>`, so
-    herdr's Spaces list shows the crew and its Agents panel shows each agent with its state; none of it is a
-    tab of Stella's window. Idempotent: it opens a missing workspace, attaches again in a tab showing 'session
-    exited', closes the workspace of a session that has exited for good (landed, or no longer in
-    `claude agents --all`) and leaves every other workspace and tab alone, Kohen's included."""
+    """Make herdr's left column the project list. Stella's space first; then one space per project, labelled
+    with its slug, whose first window is Kohen's shell in the project's directory and which holds one window per
+    session of the project; every other session Claude lists has a window in Stella's space. Idempotent: it opens
+    what is missing, moves the live pane of an earlier layout's workspace into its project's space (no session
+    restarts), closes the window of a session that is gone or landed, attaches again in a window showing 'session
+    exited', orders the spaces by priority and leaves everything of Kohen's alone."""
     herdr = _herdr()
     if not herdr:
         print("herdr is not installed: no sidebar to keep")
@@ -1037,48 +1223,113 @@ def sync_sidebar(restart_follower: bool = True) -> None:
         _herdr_run(herdr, "workspace", "rename", old[0], PARENT)
         wss[old[0]] = PARENT
         print(f"renamed the workspace {OLD_PARENT} to {PARENT}")
-    live = {a.get("id") for a in agents(False)} - {None}
     known = {a.get("id") for a in agents(True)}
-    recs = [r for r in records() if r.get("id") and r.get("mode") != "track"]
-    _retire_old_crew_workspace(herdr, wss, {r["name"] for r in recs})
-    for rec in recs:
-        sid, name = rec["id"], rec["name"]
-        ws = find_workspace(wss, rec)
-        if VERBOSE:
-            print(f"{name}: sid={sid} live={sid in live} workspace={ws} state={rec.get('state')}")
-        if sid in live and rec.get("state") != "landed":
-            if not ws:
-                opened = _open_crew_workspace(herdr, rec)
-                if opened:
-                    wss[opened[0]] = crew_label(rec)
-                    save(name, {**load(name), "crew_ws": opened[0], "attach": ATTACH_VERSION})
-                    print(f"{name}: in the sidebar")
-                continue
-            for tab in _herdr_tabs(herdr, ws):
-                repair_tab(herdr, tab, sid)
-                for pane in _tab_panes(herdr, tab):
-                    if rec.get("attach") != ATTACH_VERSION:  # still running the python parent of an earlier version
-                        _herdr_run(herdr, "pane", "send-keys", pane, "ctrl+c")
-                        _herdr_run(herdr, "pane", "run", pane, _attach_cmd(sid))
-                        save(name, {**load(name), "attach": ATTACH_VERSION})
-            if rec.get("crew_ws") != ws:
-                save(name, {**load(name), "crew_ws": ws})
-        elif ws and (rec.get("state") == "landed" or sid not in known):
-            _herdr_run(herdr, "workspace", "close", ws)
-            save(name, {k: v for k, v in load(name).items() if k != "crew_ws"})
-            print(f"{name}: left the sidebar")
-    live_recs = [r for r in recs if r["id"] in live and r.get("state") != "landed"]
-    wss = _workspaces(herdr) or wss
-    _relabel(herdr, wss, live_recs)
-    _order_crew(herdr, desired_order(herdr, live_recs, wss, recs))
-    # Stella's own tab has no crew record: find it by its label and repair it the same way
+    allrecs = [r for r in records() if r.get("id") and r.get("mode") != "track"]
+    _retire_old_crew_workspace(herdr, wss, {r["name"] for r in allrecs})
+    wants = wanted_windows()
+    ctx = {"view": view_state(), "wss": wss, "recs": allrecs, "tabs": _all_tabs(herdr, wss)}
+    parent = next((w for w, label in wss.items() if label in (PARENT, OLD_PARENT)), None)
+    by_project: dict[str, list[dict]] = {}
+    for w in wants:
+        by_project.setdefault(w["project"] or "", []).append(w)
+    for slug in ctx["view"]["spaces"]:  # a project made by hand (`project new`) has a space even with no session
+        by_project.setdefault(slug, [])
+    spaces: dict[str, str] = {}
+    for slug in project_order(allrecs, {s for s in by_project if s}):
+        ws = ensure_space(herdr, ctx, slug, by_project[slug])
+        if ws:
+            spaces[slug] = ws
+    ctx["tabs"] = _all_tabs(herdr, ctx["wss"])
+    for slug, group in by_project.items():
+        space = spaces.get(slug) if slug else parent
+        if not space:
+            continue
+        for want in sorted(group, key=lambda w: w["name"]):
+            ensure_window(herdr, ctx, want, space)
+    # a session that is gone for good, or landed: its window closes
+    wanted_sids = {w["sid"] for w in wants}
+    for rec in records():
+        gone = rec.get("state") == "landed" or (rec.get("id") and rec["id"] not in known)
+        if rec.get("id") and gone and rec.get("mode") != "track":
+            if rec.get("tab") and rec["tab"] in ctx["tabs"]:
+                _close_window(herdr, rec["tab"])
+                print(f"{rec['name']}: left the sidebar")
+            if rec.get("crew_ws") in ctx["wss"]:
+                _herdr_run(herdr, "workspace", "close", rec["crew_ws"])
+                print(f"{rec['name']}: left the sidebar")
+            if any(k in rec for k in ("tab", "space", "crew_ws")):
+                save(rec["name"], {k: x for k, x in load(rec["name"]).items() if k not in ("tab", "space", "crew_ws")})
+    for sid, w in read_json(WINDOWS).items():
+        if sid not in known:
+            _close_window(herdr, w.get("tab"))
+            _forget(sid)
+    # a window of an earlier layout still showing 'session exited' is attached again; every crew window is checked
+    for want in wants:
+        tab = _holder(want).get("tab")
+        if tab and tab in ctx["tabs"]:
+            repair_tab(herdr, tab, want["sid"])
     me = stella_row()
-    if me:
-        for tab, label in _legacy_tabs(herdr).items():
+    if me and parent:
+        for tab, label in _herdr_tabs(herdr, parent).items():
             if label.lower() == "stella":
                 repair_tab(herdr, tab, me["id"])
+    _order_spaces(herdr, [spaces[s] for s in project_order(allrecs, set(spaces))])
+    save_view_state(ctx["view"])
+    _ = wanted_sids
     if restart_follower:
         ensure_follower()
+
+
+def rename_project(old: str, new: str, source: str = "verb") -> None:
+    """Rename a project everywhere it is written: the records' `project`, the `## <slug>` heading of projects.md,
+    view.json, the space and its first window. Appends a line to renames.jsonl; the watcher wakes Stella for it so
+    she updates priorities.md and her journal."""
+    check_project(old)
+    check_project(new)
+    if old == new:
+        return
+    taken = {r.get("project") for r in records()} | set(project_notes()) | set(view_state()["spaces"])
+    if new in taken:
+        die(f"there is already a project {new}")
+    for rec in records():
+        if rec.get("project") == old:
+            save(rec["name"], {**load(rec["name"]), "project": new})
+    p = STELLA_HOME / "projects.md"
+    if p.exists():
+        p.write_text(re.sub(rf"(?m)^(##\s+){re.escape(old)}(?=\s|$)", rf"\g<1>{new}", p.read_text()))
+    v = view_state()
+    herdr = _herdr()
+    if old in v["spaces"]:
+        ws = v["spaces"].pop(old)
+        v["spaces"][new] = ws
+        if herdr:
+            _herdr_run(herdr, "workspace", "rename", ws, new)
+    if old in v["firsts"]:
+        tab = v["firsts"].pop(old)
+        v["firsts"][new] = tab
+        if herdr:
+            _herdr_run(herdr, "tab", "rename", tab, new)
+    save_view_state(v)
+    with open(RENAMES, "a") as f:
+        f.write(json.dumps({"at": time.time(), "old": old, "new": new, "source": source}) + "\n")
+    print(f"project {old} is now {new}")
+
+
+def detect_project_renames(herdr: str) -> None:
+    """Kohen renamed a project's first window (Cmd+Shift+R): the project is renamed to match."""
+    v = view_state()
+    for slug, tab in list(v["firsts"].items()):
+        ws = v["spaces"].get(slug)
+        if not ws:
+            continue
+        label = _herdr_tabs(herdr, ws).get(tab)
+        if label is None or label == slug:
+            continue
+        new = re.sub(r"[^a-z0-9-]+", "-", label.lower()).strip("-")[:41]
+        if NAME.match(new) and new not in v["spaces"]:
+            rename_project(slug, new, source="window")
+        else:
+            _herdr_run(herdr, "tab", "rename", tab, slug)  # not a valid name: put it back
 
 
 def sync_quietly() -> None:
@@ -1090,47 +1341,79 @@ def sync_quietly() -> None:
 
 
 def view(name: str) -> None:
-    """Take Kohen to the crewmate: focus its workspace (made if missing). No tab opens in the work window."""
-    rec = load(name)
-    sid = rec.get("id")
-    if not sid or not SHORT_ID.match(sid):
-        die(f"{name} has no session id yet")
+    """Take Kohen to a session: focus its window (opened if missing, even one he closed). Sessions are named by
+    their crew record, else by windows.json."""
     herdr = _herdr()
+    try:
+        rec = load(name) if record_path(name).exists() else None
+    except SystemExit:
+        rec = None
+    if rec is None:
+        sid, w = next(((k, x) for k, x in read_json(WINDOWS).items() if x.get("name") == name), (None, None))
+        if not sid:
+            die(f"no record or window named {name}")
+        want = {"sid": sid, "name": name, "rec": None, "project": None, "row": {}}
+    else:
+        sid = rec.get("id")
+        if not sid or not SHORT_ID.match(sid):
+            die(f"{name} has no session id yet")
+        want = {"sid": sid, "name": name, "rec": rec, "project": rec.get("project"), "row": {}}
 
     def find() -> str | None:
-        return find_workspace(_workspaces(herdr) or {}, rec)
+        tab = _holder(want).get("tab")
+        return tab if tab and herdr and tab in _herdr_tabs(herdr) else None
 
-    ws = find() if herdr else None
-    if herdr and not ws:
+    tab = find()
+    if herdr and not tab:
+        _remember(want, closed=None)
         sync_quietly()
-        ws = find()
-    if herdr and ws:
-        _herdr_run(herdr, "workspace", "focus", ws)
-        print(f"{name}: focused in its workspace")
+        want["rec"] = load(name) if rec is not None else None
+        tab = find()
+    if herdr and tab:
+        _herdr_run(herdr, "tab", "focus", tab)
+        ws = _holder(want).get("space")
+        if ws:
+            _herdr_run(herdr, "workspace", "focus", ws)
+        print(f"{name}: focused in its window")
     else:
         print(f"{name}: claude attach {sid}")
 
 
 def hide(name: str | None) -> None:
-    """Close the crew tabs that were opened in the work window before the sidebar (one crewmate's, or all).
-    Only a tab that a crew record names (its `tab`, else a tab labelled with its name) outside the crew
-    workspaces is closed; Kohen's own tabs, Stella's and the sidebar's stay. The sessions keep running."""
-    recs = [load(name)] if name else records()
-    closed = []
-    for rec in recs:
-        if rec.get("mode") == "track":
-            continue
-        if close_tab(rec):
-            closed.append(rec["name"])
-        if rec.get("tab"):
-            save(rec["name"], {k: v for k, v in load(rec["name"]).items() if k != "tab"})
-    print(f"hid {', '.join(closed)}" if closed else "no crew tabs open")
+    """The earlier layout opened crew tabs in the work window; none is ever opened now."""
+    print("no crew tabs open")
+
+
+def _agent_states(herdr: str) -> dict[str, str]:
+    """{pane id: herdr's agent_status} from `herdr agent list`."""
+    found: dict[str, str] = {}
+
+    def walk(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("pane_id"), str) and isinstance(x.get("agent_status"), str):
+                found[x["pane_id"]] = x["agent_status"]
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    try:
+        walk(json.loads(_herdr_run(herdr, "agent", "list").stdout))
+    except ValueError:
+        pass
+    return found
+
+
+YELLOW, BLUE = "blocked", "working"  # herdr's states drawn yellow and blue by the theme override
 
 
 def doctor(as_json: bool) -> None:
-    """What herdr holds right now, next to what the crew records expect, for debugging the sidebar: the
-    workspaces (in order), tabs, panes and agents herdr reports, and per crewmate whether its workspace, tab
-    and agent are there. Read-only."""
+    """What herdr holds right now next to what Claude and the crew records say, for debugging the left column:
+    per project space its label and first window; per session exactly one window, in the right space; per window
+    herdr's state against Claude's; no `└` space left; the reporter and the agent view alive; and one parity
+    line comparing Claude's counts (awaiting input, working, completed) with herdr's dots (yellow, blue,
+    green or hollow). Any mismatch is BAD. Read-only."""
     herdr = _herdr()
     if not herdr:
         die("herdr is not installed", 1)
@@ -1143,70 +1426,89 @@ def doctor(as_json: bool) -> None:
         except ValueError:
             raw[label] = {"rc": p.returncode, "stdout": p.stdout.strip()[-400:], "stderr": p.stderr.strip()[-400:]}
     wss = _workspaces(herdr)
-    checks = []
+    checks: list[dict] = []
+    parity = ""
     if wss is None:
         checks.append({"check": "herdr server answers `workspace list`", "ok": False})
     else:
-        live = {a.get("id") for a in agents(False)} - {None}
-        order = list(wss.items())
-        detected = _agent_panes(herdr)
-        live_recs = [r for r in records() if r.get("id") and r.get("mode") != "track"
-                     and r["id"] in live and r.get("state") != "landed"]
-        wanted_ws = desired_order(herdr, live_recs, wss, [r for r in records() if r.get("id")])
-        parent_idx = next((i for i, (_, label) in enumerate(order) if label in (PARENT, OLD_PARENT)), -1)
-        for rec in records():
-            if not rec.get("id") or rec.get("mode") == "track":
-                continue
-            name = rec["name"]
-            ws = find_workspace(wss, rec)
-            tabs = _herdr_tabs(herdr, ws) if ws else {}
-            panes = [pn for t in tabs for pn in _tab_panes(herdr, t)]
-            idx = next((i for i, (w, _) in enumerate(order) if w == ws), None)
-            wanted = rec["id"] in live and rec.get("state") != "landed"
-            listed = any(pn in detected for pn in panes)  # a shell split off next to the agent does not count
-            check = {
-                "crewmate": name, "session_live": rec["id"] in live, "state": rec.get("state"),
-                "workspace": ws, "label": crew_label(rec), "actual_label": wss.get(ws) if ws else None,
-                "label_ok": ws is None or wss[ws] == crew_label(rec), "position": idx,
-                "order_ok": ws is None or ws not in wanted_ws or idx == (parent_idx + 1 + wanted_ws.index(ws)),
-                "tabs": list(tabs.values()), "tab_ok": TAB_PREFIX + name in tabs.values(),
-                "panes": panes, "agent_listed": listed, "reported_by_stella": bool(rec.get("reported")),
-                "ok": (ws is not None) == wanted and (listed or not wanted),
-            }
-            check["ok"] = check["ok"] and check["label_ok"] and check["order_ok"]
-            if wanted and panes and not listed:  # why herdr does not see an agent there
-                diag = {}
-                for pn in panes:
-                    info = {}
-                    for key, args in (("process_info", ["pane", "process-info", pn]), ("get", ["pane", "get", pn]),
-                                      ("explain", ["agent", "explain", pn, "--json"]),
-                                      ("screen", ["pane", "read", pn, "--lines", "12"])):
-                        r = _herdr_run(herdr, *args)
-                        try:
-                            info[key] = json.loads(r.stdout)
-                        except ValueError:
-                            info[key] = (r.stdout or r.stderr).strip()[-600:]
-                    diag[pn] = info
-                check["diagnostics"] = diag
-            checks.append(check)
-        parent = next((i for i, (_, label) in enumerate(order) if label in (PARENT, OLD_PARENT)), None)
-        block = [label for _, label in order[(parent + 1):]] if parent is not None else []
-        checks.append({"check": "crew workspaces follow the work workspace", "parent_index": parent,
-                       "after_parent": block, "ok": parent is not None and all(
-                           label.startswith(CHILD) for label in block[:sum(1 for _, l in order if l.startswith(CHILD))])})
+        v = view_state()
+        wants = wanted_windows()
+        allrecs = [r for r in records() if r.get("id") and r.get("mode") != "track"]
+        tabs = _all_tabs(herdr, wss)
+        by_tab = _tab_panes_by_tab(herdr)
+        states = _agent_states(herdr)
+        parent = next((w for w, label in wss.items() if label in (PARENT, OLD_PARENT)), None)
+        checks.append({"check": "Stella's space is first", "ok": parent is not None and list(wss).index(parent) == 0})
+        slugs = sorted({w["project"] for w in wants if w["project"]} | set(v["spaces"]))
+        for slug in slugs:
+            ws = v["spaces"].get(slug)
+            members = [w for w in wants if w["project"] == slug]
+            closed = ws not in wss and slug in v["closed"]
+            first = v["firsts"].get(slug)
+            checks.append({"check": f"space {slug}", "workspace": ws, "closed_by_kohen": closed,
+                           "label_ok": closed or wss.get(ws) == slug,
+                           "first_window_ok": closed or (first in tabs and tabs[first][0] == slug),
+                           "ok": closed or (wss.get(ws) == slug and first in tabs and tabs[first][0] == slug)})
+            _ = members
+        claude_n = {"awaiting": 0, "working": 0, "completed": 0}
+        herdr_n = {"yellow": 0, "blue": 0, "green/hollow": 0}
+        me = stella_row()
+        every = list(wants)
+        if me:
+            every.append({"sid": me["id"], "name": "stella", "rec": None, "project": None, "row": me,
+                          "_tab": next((t for t, (label, w) in tabs.items() if w == parent and label.lower() == "stella"), None)})
+        for w in every:
+            hold = _holder(w) if w["name"] != "stella" or w["rec"] else {}
+            tab = w.get("_tab") or hold.get("tab")
+            want_space = (v["spaces"].get(w["project"]) if w["project"] else parent)
+            cstate = claude_state(w["sid"], {w["sid"]: w["row"]}) if w["row"] else claude_state(w["sid"])
+            expected = dot_of(cstate)
+            if hold.get("closed"):
+                continue  # Kohen closed that window: it counts on neither side
+            claude_n["awaiting" if cstate == "blocked" else "working" if cstate == "working" else "completed"] += 1
+            pane = (by_tab.get(tab) or [None])[0] if tab else None
+            actual = states.get(pane) if pane else None
+            if actual:
+                herdr_n["yellow" if actual == YELLOW else "blue" if actual == BLUE else "green/hollow"] += 1
+            where = tabs.get(tab) if tab else None
+            chk = {"crewmate": w["name"], "session": w["sid"], "claude": cstate, "expected_herdr": expected,
+                   "herdr": actual, "window": tab, "label": where[0] if where else None,
+                   "space_ok": bool(where) and where[1] == want_space,
+                   "state_ok": actual == expected or (expected == "idle" and actual in ("done", "idle")),
+                   "legacy_workspace": hold.get("crew_ws")}
+            chk["ok"] = chk["space_ok"] and chk["state_ok"] and not chk["legacy_workspace"]
+            checks.append(chk)
+        checks.append({"check": "no `└` space is left", "left": [l for l in wss.values() if l.startswith(CHILD)],
+                       "ok": not any(l.startswith(CHILD) for l in wss.values())})
         checks.append({"check": "old `crew` workspace gone", "ok": OLD_CREW_WORKSPACE not in wss.values()})
+        pid = follower_pid()
+        checks.append({"check": "the reporter (`stella crew follow`) runs", "pid": pid, "ok": pid is not None})
+        mark = read_json(VIEW_MARK)
+        fresh = time.time() - mark.get("at", 0) < 3 * VIEW_EVERY
+        checks.append({"check": "the agent view is set (by the reporter, recently)", "ok": fresh,
+                       "age_s": round(time.time() - mark["at"]) if mark.get("at") else None})
+        nowin = [a for a in agents(bool(v.get("all"))) if a.get("kind", "background") == "background"
+                 and a.get("state") in v["no_window"] and a.get("id") not in {w["sid"] for w in wants}]
+        parity = (f"Claude {claude_n['awaiting']} awaiting · {claude_n['working']} working · {claude_n['completed']} completed"
+                  f" = herdr {herdr_n['yellow']} yellow · {herdr_n['blue']} blue · {herdr_n['green/hollow']} green/hollow"
+                  + (f" (+{len(nowin)} stopped, no window)" if nowin else ""))
+        checks.append({"check": "parity: Claude's counts equal herdr's dots", "line": parity,
+                       "ok": (claude_n["awaiting"], claude_n["working"], claude_n["completed"]) ==
+                             (herdr_n["yellow"], herdr_n["blue"], herdr_n["green/hollow"])})
     cfg = HOME / ".config/herdr/config.toml"
-    out = {"raw": raw, "checks": checks, "config": str(cfg.resolve()) if cfg.exists() else None}
+    out = {"raw": raw, "checks": checks, "parity": parity, "config": str(cfg.resolve()) if cfg.exists() else None}
     if as_json:
         print(json.dumps(out, indent=1))
         return
     print("herdr:", raw.get("version", {}).get("stdout") if isinstance(raw.get("version"), dict) else raw.get("version"))
-    print("workspaces (in order):")
+    print("spaces (in order):")
     for w, label in (wss or {}).items():
-        print(f"  {w}  {label}  tabs: {', '.join(_herdr_tabs(herdr, w).values()) or '-'}")
+        print(f"  {w}  {label}  windows: {', '.join(_herdr_tabs(herdr, w).values()) or '-'}")
     print("checks:")
     for c in checks:
-        print("  " + ("ok " if c.get("ok") else "BAD") + "  " + json.dumps({k: v for k, v in c.items() if k != "ok"}))
+        print("  " + ("ok " if c.get("ok") else "BAD") + "  " + json.dumps({k: x for k, x in c.items() if k != "ok"}))
+    if parity:
+        print(parity)
     print("(use `stella crew doctor --json` for the raw herdr output)")
 
 
@@ -1494,7 +1796,7 @@ def rm(name: str) -> None:
         die(f"{name} not removed: {why}", 1)
     if SHORT_ID.match(rec.get("id") or ""):
         claude("rm", rec["id"])
-    close_tab(rec)
+    _close_window(_herdr(), rec.get("tab")) if _herdr() else None
     rec.pop("tab", None)
     wt = HOME / "github" / f"{rec.get('repo')}-wt" / (rec.get("branch") or name)
     if rec.get("repo") and REPO.match(rec["repo"]) and wt.is_dir():  # as `wtr` does; the branch is kept
@@ -1510,6 +1812,143 @@ def rm(name: str) -> None:
     save(name, rec)
     print(f"removed {name}")
     sync_quietly()
+
+
+# ------------------------------------------------------------------ project, window and pane verbs (the chords' plain words)
+
+def norm_name(raw: str) -> str:
+    """A name Kohen typed, made a valid one: lowercase, runs of anything else joined by dashes. Said in one line."""
+    name = re.sub(r"[^a-z0-9-]+", "-", raw.strip().lower()).strip("-")[:41]
+    if not NAME.match(name):
+        die(f"bad name {raw!r} (lowercase letters, digits and dashes, at most 41)")
+    if name != raw:
+        print(f"(using the name {name})")
+    return name
+
+
+def project_new(slug: str, ask: bool = False) -> None:
+    """Register a project (a stub section in projects.md) and open its space with the first window, a shell in
+    the project's directory. `ask` prompts for the name (the Cmd+Shift+N popup)."""
+    if ask:
+        try:
+            slug = input("New project name: ")
+        except EOFError:
+            die("no name given")
+    slug = check_project(norm_name(slug))
+    if slug in project_notes() or any(r.get("project") == slug for r in records()):
+        die(f"there is already a project {slug}")
+    p = STELLA_HOME / "projects.md"
+    old = p.read_text() if p.exists() else "# Projects\n"
+    p.write_text(old.rstrip("\n") + f"\n\n## {slug}\n- status: new\n")
+    herdr = _herdr()
+    if not herdr:
+        print(f"project {slug} registered (herdr is not installed: no space)")
+        return
+    wss = _workspaces(herdr)
+    if wss is None:
+        print(f"project {slug} registered (herdr is not running: its space opens at the next sync)")
+        return
+    v = view_state()
+    v["spaces"][slug] = ""  # remembered as one of ours even with no session in it
+    ctx = {"view": v, "wss": wss, "recs": records(), "tabs": {}}
+    v["spaces"].pop(slug)
+    ws = ensure_space(herdr, ctx, slug, [])
+    save_view_state(v)
+    print(f"project {slug}: space {ws or 'not opened'}")
+    if ws:
+        _herdr_run(herdr, "workspace", "focus", ws)
+        sync_quietly()
+
+
+def project_close(slug: str) -> None:
+    """Close a project's space in herdr. The sessions keep running; the space stays closed until one of its
+    sessions awaits input again or another joins it."""
+    check_project(slug)
+    herdr = _herdr()
+    v = view_state()
+    ws = v["spaces"].get(slug)
+    if not herdr or not ws:
+        die(f"project {slug} has no open space")
+    members = sorted(w["sid"] for w in wanted_windows() if w["project"] == slug)
+    blocked = any(claude_state(sid) == "blocked" for sid in members)
+    _herdr_run(herdr, "workspace", "close", ws)
+    v["closed"][slug] = {"state": "blocked" if blocked else "ok", "members": members}
+    save_view_state(v)
+    print(f"project {slug}: space closed (its sessions keep running)")
+
+
+def assign(name: str, slug: str) -> None:
+    """Put a crewmate under a project (or `--none`), and move its window to that project's space."""
+    set_project(name, slug)
+    sync_quietly()
+
+
+def _space_of(slug: str) -> tuple[str, str]:
+    herdr = _herdr()
+    if not herdr:
+        die("herdr is not installed", 1)
+    check_project(slug)
+    ws = view_state()["spaces"].get(slug) or next((w for w, l in (_workspaces(herdr) or {}).items() if l == slug), None)
+    if not ws:
+        die(f"project {slug} has no open space")
+    return herdr, ws
+
+
+def _window_in(herdr: str, ws: str, label: str) -> str:
+    tabs = [t for t, l in _herdr_tabs(herdr, ws).items() if l == label]
+    if len(tabs) != 1:
+        die(f"{'no' if not tabs else 'several'} window called {label}")
+    return tabs[0]
+
+
+def window_new(slug: str, label: str | None) -> None:
+    """A new shell window of Kohen's own in a project's space (sync never touches it)."""
+    herdr, ws = _space_of(slug)
+    label = norm_name(label) if label else f"shell-{len(_herdr_tabs(herdr, ws)) + 1}"
+    r = _herdr_run(herdr, "tab", "create", "--workspace", ws, "--label", label, "--cwd",
+                   str(project_dir(slug, records())), "--no-focus")
+    if r.returncode != 0 or not _tab_id(r.stdout):
+        die(f"could not open a window: {(r.stderr or r.stdout).strip()[-200:]}", 1)
+    print(f"{slug}: window {label} opened")
+
+
+def window_rename(slug: str, old: str, new: str) -> None:
+    herdr, ws = _space_of(slug)
+    new = norm_name(new)
+    _herdr_run(herdr, "tab", "rename", _window_in(herdr, ws, old), new)
+    print(f"{slug}: window {old} is now {new}")
+
+
+def window_close(slug: str, label: str) -> None:
+    """Close a window. A session's window closes without stopping the session; it stays closed until the
+    session awaits input again (or `stella view <name>`)."""
+    herdr, ws = _space_of(slug)
+    tab = _window_in(herdr, ws, label)
+    v = view_state()
+    if v["firsts"].get(slug) == tab:
+        die(f"{label} is the first window of {slug}: close the project instead (`stella project close {slug}`)")
+    for rec in records():
+        if rec.get("tab") == tab:
+            save(rec["name"], {**load(rec["name"]), "closed": "blocked" if claude_state(rec.get("id") or "") == "blocked" else "ok",
+                               "tab": None, "space": None})
+            save(rec["name"], {k: x for k, x in load(rec["name"]).items() if x is not None})
+    w = read_json(WINDOWS)
+    for sid, x in w.items():
+        if x.get("tab") == tab:
+            w[sid] = {k: y for k, y in {**x, "closed": "blocked" if claude_state(sid) == "blocked" else "ok",
+                                       "tab": None, "space": None}.items() if y is not None}
+    WINDOWS.write_text(json.dumps(w, indent=1))
+    _herdr_run(herdr, "tab", "close", tab)
+    print(f"{slug}: window {label} closed (a session in it keeps running)")
+
+
+def pane_rename(slug: str, window: str, number: int, new: str) -> None:
+    herdr, ws = _space_of(slug)
+    panes = _tab_panes(herdr, _window_in(herdr, ws, window))
+    if not 1 <= number <= len(panes):
+        die(f"{window} has {len(panes)} pane(s), not {number}")
+    _herdr_run(herdr, "pane", "rename", panes[number - 1], new)
+    print(f"{slug}/{window}: pane {number} is now {new}")
 
 
 # ------------------------------------------------------------------ main
@@ -1555,8 +1994,28 @@ def main(argv: list[str]) -> None:
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,80}", target):
             die(f"bad session name or id {target!r}")
         adopt(target, opts.get("team"), opts.get("project"))
-    elif cmd == "project" and len(rest) == 2:
-        set_project(check_name(rest[0]), rest[1])
+    elif cmd == "project" and rest[:1] == ["new"] and len(rest) in (2, 2) and rest[1] == "--ask":
+        project_new("", ask=True)
+    elif cmd == "project" and rest[:1] == ["new"] and len(rest) == 2:
+        project_new(rest[1])
+    elif cmd == "project" and rest[:1] == ["rename"] and len(rest) == 3:
+        rename_project(check_project(rest[1]), check_project(norm_name(rest[2])), source="verb")
+        sync_quietly()
+    elif cmd == "project" and rest[:1] == ["close"] and len(rest) == 2:
+        project_close(rest[1])
+    elif cmd == "project" and len(rest) == 2:  # the old `project <crewmate> <slug>`, kept for two weeks
+        print("(`stella project <name> <slug>` is now `stella assign <name> <slug>`)", file=sys.stderr)
+        assign(check_name(rest[0]), rest[1])
+    elif cmd == "assign" and len(rest) == 2:
+        assign(check_name(rest[0]), rest[1])
+    elif cmd == "window" and rest[:1] == ["new"] and len(rest) in (2, 3):
+        window_new(rest[1], rest[2] if len(rest) == 3 else None)
+    elif cmd == "window" and rest[:1] == ["rename"] and len(rest) == 4:
+        window_rename(rest[1], rest[2], rest[3])
+    elif cmd == "window" and rest[:1] == ["close"] and len(rest) == 3:
+        window_close(rest[1], rest[2])
+    elif cmd == "pane" and rest[:1] == ["rename"] and len(rest) >= 5 and rest[3].isdigit():
+        pane_rename(rest[1], rest[2], int(rest[3]), " ".join(rest[4:]))
     elif cmd == "projects" and not rest:
         projects_report()
     elif cmd == "crew" and rest in ([], ["--watch"]):
@@ -1603,7 +2062,7 @@ def main(argv: list[str]) -> None:
     elif cmd in ("-h", "--help", "help"):
         print(__doc__.split("\n\n")[1])
     else:
-        die("usage: stella [open|start|restart|id|agents|launch|adopt|project|projects|crew|allow|track-pr|untrack|view|hide|tab|stop|respawn|logs|rm|live-check] ...")
+        die("usage: stella [open|start|restart|id|agents|launch|adopt|project|assign|window|pane|projects|crew|allow|track-pr|untrack|view|hide|tab|stop|respawn|logs|rm|live-check] ...")
 
 
 if __name__ == "__main__":
