@@ -16,7 +16,6 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  (was `stella project <name> <slug>`, still accepted for two weeks)
     stella project new <slug>|--ask      register a project and open its space (`--ask`: prompt for the name, the
                                  Cmd+Shift+N popup); `project rename <old> <new>`; `project close <slug>` closes the space
-    stella project main --all    start the main Claude session in the first window of each project that has none
     stella window new <project> [<name>] | rename <project> <a> <b> | close <project> <a>   windows of a space
     stella prefs scan [YYYY-MM-DD]   Kohen's answers to crewmates since a date (question and his words), one JSON line each
     stella prefs propose         patterns in preferences.md: 3 or more same answers to a kind of question, none against
@@ -32,6 +31,7 @@ runs outside the command sandbox, so every argument is validated and nothing is 
                                  crew records expect; read-only, for debugging the sidebar
     stella crew doctor --spike [<session-id>]   the Workspace 4.0 spike in a throwaway herdr session `ws4-spike`
                                  (never the default one); prints every raw reply and a verdict per question
+    stella crew empties [<since>]   read-only: sessions started by hand in a project's first window that hold no work
     stella crew follow [--ensure|--once]   the dot reporter: one detached process copying Claude's own state of
                                  each session onto its herdr window (yellow = awaiting input, blue = working);
                                  `--ensure` starts it when none runs (`tw` and `crew sync` do), `--once` is one cycle
@@ -767,7 +767,7 @@ def _retire_old_crew_workspace(herdr: str, wss: dict[str, str], names: set[str])
 FOLLOW_EVERY = float(os.environ.get("STELLA_FOLLOW_EVERY", "2"))  # seconds between two reads of the job states
 FOLLOW_SYNC = float(os.environ.get("STELLA_FOLLOW_SYNC", "30"))  # at most this often: sync, when the sessions changed
 VIEW_EVERY = float(os.environ.get("STELLA_VIEW_EVERY", "60"))  # the agent view is transient: set it again this often
-FOLLOW_VERSION = 4  # bump when the reporter changes: `crew sync` and `follow --ensure` replace one running an older version
+FOLLOW_VERSION = 5  # bump when the reporter changes: `crew sync` and `follow --ensure` replace one running an older version
 REFIX_EVERY = float(os.environ.get("STELLA_REFIX_EVERY", "10"))  # a pane herdr shows differently is reported again, at most this often
 FOLLOW_PID = STELLA_HOME / "follow.pid"
 FOLLOW_LOG = STELLA_HOME / "follow.log"
@@ -1062,8 +1062,32 @@ def wanted_windows(rows: list[dict] | None = None) -> list[dict]:
             continue
         rec = recs.get(sid)
         out.append({"sid": sid, "name": rec["name"] if rec else session_name(row), "rec": rec,
-                    "project": (rec or {}).get("project") or None, "row": row})
+                    "project": (rec or {}).get("project") or None, "row": row, "main": False})
     return out
+
+
+def _started_epoch(want: dict) -> float:
+    rec = want["rec"] or {}
+    for key in ("launched_at", "adopted_at"):
+        if rec.get(key):
+            try:
+                return time.mktime(time.strptime(rec[key][:19], "%Y-%m-%dT%H:%M:%S"))
+            except ValueError:
+                pass
+    return float((want.get("row") or {}).get("startedAt") or 0) / 1000
+
+
+def pick_main(slug: str, group: list[dict]) -> dict | None:
+    """The project's main session, whose window is the project's first window: the one named like the project,
+    else one that is blocked or working, else the most recently started; adopted ones count; a stopped one
+    never. None when the project has no such session."""
+    live = [w for w in group if (w.get("row") or {}).get("state") != "stopped" and claude_state(w["sid"]) != "stopped"]
+    if not live:
+        return None
+    named = [w for w in live if w["name"] == slug]
+    busy = [w for w in live if claude_state(w["sid"], {w["sid"]: w["row"]}) in ("blocked", "working")]
+    pool = named or busy or live
+    return max(pool, key=lambda w: (_started_epoch(w), w["name"]))
 
 
 def project_dir(slug: str, recs: list[dict]) -> Path:
@@ -1120,31 +1144,10 @@ def _first_window(herdr: str, ws: str, slug: str) -> str | None:
     return next(iter(tabs), None)
 
 
-MAIN_CMD = "cy"  # the shell function that starts a Claude session on the personal token
-
-
-def start_main_sessions() -> None:
-    """Start the main Claude session in the first window of every project that has none yet: a window that is
-    still a shell at its prompt gets `cy` typed into it, once (`stella project main --all`)."""
-    herdr = _herdr()
-    if not herdr:
-        die("herdr is not installed", 1)
-    v = view_state()
-    done = v.setdefault("main_started", [])
-    for slug, tab in v["firsts"].items():
-        panes = _tab_panes(herdr, tab)
-        if slug in done or not panes:
-            continue
-        if pane_is_shell(herdr, panes[0]):
-            _herdr_run(herdr, "pane", "run", panes[0], MAIN_CMD)
-            print(f"{slug}: main session started")
-        done.append(slug)
-    save_view_state(v)
-
-
-def ensure_space(herdr: str, ctx: dict, slug: str, wants: list[dict]) -> str | None:
+def ensure_space(herdr: str, ctx: dict, slug: str, wants: list[dict], main: dict | None = None) -> str | None:
     """The workspace of project `slug`: the one view.json names, else one Kohen made with that label, else a new
-    one whose first window is a shell in the project's directory. A space Kohen closed stays closed until one of
+    one whose first window is the project's main session (`claude attach`), or a shell in the project's directory
+    when it has no session. A space Kohen closed stays closed until one of
     its sessions turns awaiting input again or a session joins it. None when it stays closed."""
     v, wss = ctx["view"], ctx["wss"]
     ws = v["spaces"].get(slug)
@@ -1177,9 +1180,12 @@ def ensure_space(herdr: str, ctx: dict, slug: str, wants: list[dict]) -> str | N
         return None
     _herdr_run(herdr, "tab", "rename", tab, slug)
     pane = _herdr_pane(r.stdout)
-    if pane:  # the project's first window is its main Claude session, in the project's directory
-        _herdr_run(herdr, "pane", "run", pane, MAIN_CMD)
-        v.setdefault("main_started", []).append(slug)
+    if main and pane and not _holder(main).get("tab") and not _holder(main).get("crew_ws"):
+        # the project's first window IS its main session: the attach loop, in this new window (a main session that
+        # already has a window gets the first place from the designation step in sync instead)
+        _herdr_run(herdr, "pane", "run", pane, _attach_cmd(main["sid"], _is_finished(main["sid"])))
+        _remember(main, space=ws, tab=tab, label=slug, attach=ATTACH_VERSION, crew_ws=None,
+                  dormant_ok=True if _is_finished(main["sid"]) else None)
     v["spaces"][slug] = ws
     v["firsts"][slug] = tab
     ctx["wss"][ws] = slug
@@ -1193,7 +1199,8 @@ def _is_finished(sid: str) -> bool:
 
 def _new_window(herdr: str, space: str, want: dict, cwd: str) -> tuple[str, str] | None:
     """A new window in `space` named after the session, running the attach loop. (tab id, pane id)."""
-    r = _herdr_run(herdr, "tab", "create", "--workspace", space, "--label", want["name"], "--cwd", cwd, "--no-focus")
+    r = _herdr_run(herdr, "tab", "create", "--workspace", space, "--label", want.get("label") or want["name"], "--cwd", cwd,
+                   "--no-focus")
     tab, pane = _tab_id(r.stdout), _herdr_pane(r.stdout)
     if r.returncode != 0 or not tab or not pane:
         print(f"{want['name']}: could not open its window: {(r.stderr or r.stdout).strip()[-200:]}", file=sys.stderr)
@@ -1220,6 +1227,7 @@ def ensure_window(herdr: str, ctx: dict, want: dict, space: str) -> None:
     tabs = ctx["tabs"]  # {tab id: (label, workspace id)}
     hold = _holder(want)
     tab, state = hold.get("tab"), claude_state(want["sid"])
+    lbl = want.get("label") or want["name"]  # the main session's window carries the project's name
     if hold.get("closed"):
         if hold["closed"] == "blocked" and state != "blocked":
             _remember(want, closed="ok")
@@ -1232,16 +1240,16 @@ def ensure_window(herdr: str, ctx: dict, want: dict, space: str) -> None:
         label, ws = tabs[tab]
         if ws != space:  # the project changed: move the live pane, no restart
             panes = _tab_panes(herdr, tab)
-            new = _move_into(herdr, ctx, panes[0], space, label) if panes else None
+            new = _move_into(herdr, ctx, panes[0], space, lbl) if panes else None
             if new:
-                _remember(want, space=space, tab=new, crew_ws=None)
+                _remember(want, space=space, tab=new, crew_ws=None, label=lbl)
                 tabs.pop(tab, None)
-                tabs[new] = (label, space)
+                tabs[new] = (lbl, space)
         elif hold.get("space") != space:
             _remember(want, space=space)
-        if label != want["name"] and label == hold.get("label"):  # the session was renamed, and Kohen had not
-            _herdr_run(herdr, "tab", "rename", tab, want["name"])
-        if hold.get("label") != label and label == want["name"]:
+        if not want.get("main") and label != lbl and label == hold.get("label"):  # renamed, and Kohen had not
+            _herdr_run(herdr, "tab", "rename", tab, lbl)
+        if not want.get("main") and hold.get("label") != label and label == lbl:
             _remember(want, label=label)
         return
     if tab:  # recorded, and gone from herdr: Kohen closed the window
@@ -1251,14 +1259,14 @@ def ensure_window(herdr: str, ctx: dict, want: dict, space: str) -> None:
     if legacy in ctx["wss"]:  # the earlier layout: bring the live attach pane over, then drop the old workspace
         old_tabs = _herdr_tabs(herdr, legacy)
         panes = [pn for t in old_tabs for pn in _tab_panes(herdr, t)]
-        new = _move_into(herdr, ctx, panes[0], space, want["name"]) if panes else None
+        new = _move_into(herdr, ctx, panes[0], space, lbl) if panes else None
         moved = bool(new)
         if not new:  # fallback: a fresh window with the same loop; the old workspace goes, the session is untouched
             made = _new_window(herdr, space, want, hold.get("dir") or str(HOME))
             new = made[0] if made else None
         if new:
-            _remember(want, space=space, tab=new, crew_ws=None, label=want["name"], attach=ATTACH_VERSION)
-            tabs[new] = (want["name"], space)
+            _remember(want, space=space, tab=new, crew_ws=None, label=lbl, attach=ATTACH_VERSION)
+            tabs[new] = (lbl, space)
             if not moved or not any(_tab_panes(herdr, t) for t in _herdr_tabs(herdr, legacy)):
                 _herdr_run(herdr, "workspace", "close", legacy)
                 ctx["wss"].pop(legacy, None)
@@ -1266,9 +1274,9 @@ def ensure_window(herdr: str, ctx: dict, want: dict, space: str) -> None:
         return
     made = _new_window(herdr, space, want, hold.get("dir") or (want["row"] or {}).get("cwd") or str(HOME))
     if made:
-        _remember(want, space=space, tab=made[0], label=want["name"], attach=ATTACH_VERSION,
+        _remember(want, space=space, tab=made[0], label=lbl, attach=ATTACH_VERSION,
                   dormant_ok=True if _is_finished(want["sid"]) else None)
-        tabs[made[0]] = (want["name"], space)
+        tabs[made[0]] = (lbl, space)
         print(f"{want['name']}: window opened")
 
 
@@ -1343,9 +1351,15 @@ def sync_sidebar(restart_follower: bool = True) -> None:
         by_project.setdefault(w["project"] or "", []).append(w)
     for slug in ctx["view"]["spaces"]:  # a project made by hand (`project new`) has a space even with no session
         by_project.setdefault(slug, [])
+    mains: dict[str, dict] = {}  # the main session of each project: its window is the project's first window
+    for slug, group in by_project.items():
+        m = pick_main(slug, group) if slug else None
+        if m:
+            m["main"], m["label"] = True, slug
+            mains[slug] = m
     spaces: dict[str, str] = {}
     for slug in project_order(allrecs, {s for s in by_project if s}):
-        ws = ensure_space(herdr, ctx, slug, by_project[slug])
+        ws = ensure_space(herdr, ctx, slug, by_project[slug], mains.get(slug))
         if ws:
             spaces[slug] = ws
     ctx["tabs"] = _all_tabs(herdr, ctx["wss"])
@@ -1383,9 +1397,31 @@ def sync_sidebar(restart_follower: bool = True) -> None:
             space = hold.get("space") or (spaces.get(want["project"]) if want["project"] else parent)
             made = _new_window(herdr, space, want, hold.get("dir") or str(HOME)) if space else None
             if made:
-                _remember(want, tab=made[0], space=space, label=want["name"], dormant=None, dormant_ok=True)
-                ctx["tabs"][made[0]] = (want["name"], space)
+                _remember(want, tab=made[0], space=space, label=(want.get("label") or want["name"]), dormant=None, dormant_ok=True)
+                ctx["tabs"][made[0]] = (want.get("label") or want["name"], space)
                 print(f"{want['name']}: finished, its window no longer holds a host process")
+    # the project's first window is its main session's: a main session's own window takes the project's name and
+    # the first place; the window that was first before (a shell, or a session's) is renamed, never closed
+    for slug, m in mains.items():
+        space, hold = spaces.get(slug), _holder(m)
+        tab, v = hold.get("tab"), ctx["view"]
+        if not space or not tab or tab not in ctx["tabs"] or hold.get("closed") or v["firsts"].get(slug) == tab:
+            continue
+        old = v["firsts"].get(slug)
+        if old and old in ctx["tabs"]:
+            owner = next((w for w in by_project[slug] if _holder(w).get("tab") == old), None)
+            if ctx["tabs"][old][0] == slug:
+                new_label = owner["name"] if owner else "shell"
+                _herdr_run(herdr, "tab", "rename", old, new_label)
+                ctx["tabs"][old] = (new_label, ctx["tabs"][old][1])
+                if owner:
+                    _remember(owner, label=new_label)
+        _herdr_run(herdr, "tab", "rename", tab, slug)
+        ctx["tabs"][tab] = (slug, space)
+        _remember(m, label=slug)
+        _rpc(herdr, "tab.move", {"tab_id": tab, "insert_index": 0})
+        v["firsts"][slug] = tab
+        print(f"{slug}: first window is now {m['name']}")
     # a window of an earlier layout still showing 'session exited' is attached again; every crew window is checked
     for want in wants:
         tab = _holder(want).get("tab")
@@ -1598,10 +1634,10 @@ def doctor(as_json: bool) -> None:
             fpanes = by_tab.get(first) or [] if not first_gone else []
             lead = (ordered_tabs(herdr, ws) or [("", "")])[0][1] if ws in wss else ""
             checks.append({"check": f"space {slug}", "workspace": ws, "closed_by_kohen": closed,
-                           "label_ok": closed or wss.get(ws) == lead,
+                           "label_ok": closed or not lead or wss.get(ws) == lead,
                            "first_window": "closed by Kohen" if first_gone else "ok" if first_ok else "wrong label",
                            "first_window_foreground": pane_foreground(herdr, fpanes[0]) if fpanes else None,
-                           "ok": closed or (wss.get(ws) == lead and first_ok)})
+                           "ok": closed or ((not lead or wss.get(ws) == lead) and first_ok)})
             _ = members
         claude_n = {"awaiting": 0, "working": 0, "completed": 0}
         herdr_n = {"yellow": 0, "blue": 0, "green/hollow": 0}
@@ -1640,6 +1676,38 @@ def doctor(as_json: bool) -> None:
             chk["ok"] = (chk["space_ok"] and chk["state_ok"] and not chk["legacy_workspace"]
                          and not chk.get("attached_other"))
             checks.append(chk)
+        # the project's first window is its main session's window, and no session has two windows
+        groups: dict[str, list[dict]] = {}
+        for w in wants:
+            if w["project"]:
+                groups.setdefault(w["project"], []).append(w)
+        for slug, group in sorted(groups.items()):
+            m = pick_main(slug, group)
+            hold = _holder(m) if m else {}
+            first = v["firsts"].get(slug)
+            if m and not hold.get("closed") and v["spaces"].get(slug) in wss:
+                checks.append({"check": f"first window of {slug} is its main session ({m['name']})",
+                               "first": first, "main_window": hold.get("tab"), "ok": first == hold.get("tab")})
+        attached: dict[str, list[str]] = {}
+        tab_owner: dict[str, list[str]] = {}
+        for w in every:
+            t = w.get("_tab") or _holder(w).get("tab")
+            if t:
+                tab_owner.setdefault(t, []).append(w["name"])
+        for t, (label, ws) in tabs.items():
+            if ws not in set(v["spaces"].values()) | {parent}:
+                continue
+            for pn in by_tab.get(t, []):
+                try:
+                    info = json.loads(_herdr_run(herdr, "pane", "process-info", pn).stdout)
+                except ValueError:
+                    continue
+                for sid_ in set(re.findall(r"attach\s+([0-9a-f]{8})", " ".join(x for _, x in _strings(info)))):
+                    attached.setdefault(sid_, []).append(t)
+        dupes = {k: x for k, x in attached.items() if len(set(x)) > 1}
+        shared = {t: n for t, n in tab_owner.items() if len(n) > 1}
+        checks.append({"check": "one window per session", "attached_twice": dupes, "window_shared": shared,
+                       "ok": not dupes and not shared})
         checks.append({"check": "no `└` space is left", "left": [l for l in wss.values() if l.startswith(CHILD)],
                        "ok": not any(l.startswith(CHILD) for l in wss.values())})
         checks.append({"check": "old `crew` workspace gone", "ok": OLD_CREW_WORKSPACE not in wss.values()})
@@ -2179,6 +2247,45 @@ def prefs_propose() -> None:
                                               for k, r in sorted(kinds.items())) or "no answers recorded"))
 
 
+def crew_empties(since: str) -> None:
+    """Read-only: the Claude sessions that were started by hand in a project's first window (the old `cy` auto-start)
+    and hold no work: a transcript begun after `since` (ISO date or time, UTC), in a project's directory, that no crew
+    record or window names, with at most one message of the user's and two of Claude's. One JSON line each, with
+    whether `claude agents --all` lists it. Nothing is stopped or removed here."""
+    v = view_state()
+    recs = [r for r in records() if r.get("id")]
+    dirs = {str(project_dir(slug, recs)) for slug in set(v["spaces"]) | set(v["firsts"])}
+    known = {r.get("session") for r in records()} | {r.get("id") for r in records()}
+    rows = {a.get("sessionId"): a for a in agents(True)}
+    known |= {a.get("sessionId") for a in rows.values() if a.get("name") in {r.get("name") for r in records()}}
+    for f in sorted(PROJECTS_DIR.glob("*/*.jsonl")):
+        sid = f.stem
+        if sid in known or sid[:8] in known:
+            continue
+        users = bots = 0
+        first = last = cwd = ""
+        for line in f.open(errors="ignore"):
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            first = first or str(ev.get("timestamp") or "")
+            last = str(ev.get("timestamp") or last)
+            cwd = cwd or str(ev.get("cwd") or "")
+            c = (ev.get("message") or {}).get("content")
+            text = c if isinstance(c, str) else "\\n".join(
+                b.get("text", "") for b in c or [] if isinstance(b, dict) and b.get("type") == "text")
+            if ev.get("type") == "user" and text.strip() and not text.lstrip().startswith("<"):
+                users += 1
+            elif ev.get("type") == "assistant" and text.strip():
+                bots += 1
+        if first and first >= since and cwd in dirs and users <= 1 and bots <= 2:
+            row = rows.get(sid)
+            print(json.dumps({"session": sid, "id": (row or {}).get("id"), "cwd": cwd, "first": first, "last": last,
+                              "user_messages": users, "assistant_messages": bots,
+                              "listed": bool(row), "state": (row or {}).get("state"), "name": (row or {}).get("name")}))
+
+
 # ------------------------------------------------------------------ main
 
 def adopt_options(rest: list[str]) -> dict[str, str]:
@@ -2231,8 +2338,6 @@ def main(argv: list[str]) -> None:
     elif cmd == "project" and rest[:1] == ["rename"] and len(rest) == 3:
         rename_project(check_project(rest[1]), check_project(norm_name(rest[2])), source="verb")
         sync_quietly()
-    elif cmd == "project" and rest == ["main", "--all"]:
-        start_main_sessions()
     elif cmd == "project" and rest[:1] == ["close"] and len(rest) == 2:
         project_close(rest[1])
     elif cmd == "project" and len(rest) == 2:  # the old `project <crewmate> <slug>`, kept for two weeks
@@ -2256,6 +2361,8 @@ def main(argv: list[str]) -> None:
         projects_report()
     elif cmd == "crew" and rest in ([], ["--watch"]):
         crew(bool(rest))
+    elif cmd == "crew" and rest[:1] == ["empties"] and len(rest) <= 2 and re.fullmatch(r"\d{4}-\d\d-\d\d(T[0-9:.Z+-]*)?", (rest + ["0000-00-00"])[1]):
+        crew_empties(rest[1] if len(rest) == 2 else "0000-00-00")
     elif cmd == "crew" and rest in (["follow"], ["follow", "--once"]):
         follow_loop(rest == ["follow", "--once"])
     elif cmd == "crew" and rest == ["follow", "--ensure"]:
