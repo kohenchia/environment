@@ -767,7 +767,7 @@ def _retire_old_crew_workspace(herdr: str, wss: dict[str, str], names: set[str])
 FOLLOW_EVERY = float(os.environ.get("STELLA_FOLLOW_EVERY", "2"))  # seconds between two reads of the job states
 FOLLOW_SYNC = float(os.environ.get("STELLA_FOLLOW_SYNC", "30"))  # at most this often: sync, when the sessions changed
 VIEW_EVERY = float(os.environ.get("STELLA_VIEW_EVERY", "60"))  # the agent view is transient: set it again this often
-FOLLOW_VERSION = 3  # bump when the reporter changes: `crew sync` and `follow --ensure` replace one running an older version
+FOLLOW_VERSION = 4  # bump when the reporter changes: `crew sync` and `follow --ensure` replace one running an older version
 REFIX_EVERY = float(os.environ.get("STELLA_REFIX_EVERY", "10"))  # a pane herdr shows differently is reported again, at most this often
 FOLLOW_PID = STELLA_HOME / "follow.pid"
 FOLLOW_LOG = STELLA_HOME / "follow.log"
@@ -995,7 +995,7 @@ def follow_loop(once: bool = False) -> None:
             if n % 3 == 0 or once:
                 detect_project_renames(herdr)
                 mirror_space_titles(herdr)
-        except Exception as e:  # noqa: BLE001 - the reporter never dies of a herdr hiccup
+        except (Exception, SystemExit) as e:  # noqa: BLE001 - the reporter never dies of a herdr or claude hiccup (die() exits)
             print(f"{time.strftime('%H:%M:%S')} follow: {type(e).__name__}: {str(e)[:160]}", flush=True)
         n += 1
         if cycles and n >= cycles:
