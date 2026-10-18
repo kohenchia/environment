@@ -4,7 +4,7 @@ The tabs live in the JSON file $FAKE_HERDR_TABS ({id: label}): `tab create` adds
 shape herdr documents (`.result.tab`, `.result.root_pane`), `tab list [--workspace W]` prints them (a tab id
 starts with its workspace id), `tab close` removes one. Workspaces live in $FAKE_HERDR_TABS.ws ({id: label});
 `workspace create` adds one with its seeded tab. With $FAKE_HERDR_DOWN set, `workspace list` fails like a
-missing server. Metadata, renames and focus calls are only logged.
+missing server. `workspace close` drops a workspace with its tabs. Focus calls are only logged.
 """
 
 import json
@@ -23,13 +23,20 @@ if args[:2] == ["workspace", "list"]:
         sys.exit(1)
     print(json.dumps({"result": {"workspaces": [{"workspace_id": w, "label": label} for w, label in workspaces.items()]}}))
 elif args[:2] == ["workspace", "create"]:
-    wid = f"w{10 + len(workspaces)}"
+    wid = f"w{max([int(w[1:]) for w in workspaces] + [9]) + 1}"
     workspaces[wid] = args[args.index("--label") + 1]
     json.dump(workspaces, open(wspath, "w"))
     tabs[wid + ":t1"] = "seed"
     json.dump(tabs, open(path, "w"))
     print(json.dumps({"result": {"workspace": {"workspace_id": wid, "label": workspaces[wid]},
                                  "tab": {"tab_id": wid + ":t1", "label": "seed"}, "root_pane": {"pane_id": wid + ":t1:p1"}}}))
+elif args[:2] == ["workspace", "close"]:
+    workspaces.pop(args[2], None)
+    json.dump(workspaces, open(wspath, "w"))
+    tabs = {t: label for t, label in tabs.items() if not t.startswith(args[2] + ":")}
+    json.dump(tabs, open(path, "w"))
+elif args[:2] == ["session", "list"]:
+    print(json.dumps({"sessions": [{"name": "default", "default": True, "socket_path": os.environ.get("FAKE_HERDR_SOCKET", "")}]}))
 elif args[:2] == ["tab", "rename"]:
     tabs[args[2]] = args[3]
     json.dump(tabs, open(path, "w"))

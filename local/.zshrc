@@ -639,8 +639,8 @@ for s in json.load(sys.stdin):
 
 # tw: the work window. With herdr installed (Work Env 3.0): start its server if needed, build the `work`
 # workspace the first time (one `stella` tab, nothing else), and keep the sidebar the crew list
-# (`stella crew sync`: a tab per live crewmate in the `crew` workspace, which is not a tab of this window; it
-# also re-attaches any tab that lost its session), then attach. Without herdr, tmux (`twt`).
+# (`stella crew sync`: a workspace "└ <crewmate>" per live crewmate after this one, as firstmate lays it out; it
+# also re-attaches any crew tab that lost its session), then attach. Without herdr, tmux (`twt`).
 function tw() {
     if ! command -v herdr >/dev/null 2>&1; then
         twt

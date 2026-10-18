@@ -10,10 +10,11 @@ install it with the package manager, never a release older than v0.8.0.
 | Where | What |
 | --- | --- |
 | Workspace `work`, its one tab | Stella's session: talk to her here. Nothing else is a tab of this window |
-| The sidebar (left) | the crew: one row per live crewmate, with its state dot, name, project and, when it waits on Kohen, "needs you: …" |
-| Workspace `crew`, one tab per crewmate | `stella tab <id>`: a `claude attach` that attaches again after a restart, of a session that lives in the Claude daemon. herdr sees an agent there, which is what puts the crewmate in the sidebar. Closing the tab does not stop the session |
+| The sidebar, top (Spaces) | `work`, then one workspace "└ <crewmate>" per live crewmate, in the order they started |
+| The sidebar, bottom (Agents) | herdr's own panel: one row per agent with its state dot, workspace, tab and harness. It is herdr's default, the same as firstmate's |
+| A crewmate's workspace | one tab, `fm-<crewmate>`, running `stella tab <id>`: a `claude attach` that attaches again after a restart, of a session that lives in the Claude daemon. herdr sees an agent there, which is what puts the crewmate in both panels. Closing it does not stop the session |
 
-`tw` starts the server if needed, builds `work` the first time (`stella`) and runs `stella crew sync`, which opens a `crew` tab for each live crewmate that has none, attaches again in a tab showing "session exited", refreshes each row's project and need, and closes the tab of a session that has gone for good. The tabs are made with `--no-focus`; you stay in Stella's tab and click a row to visit a crewmate (`stella view <name>` does the same). `stella launch`, `adopt`, `rm` and `tok` keep the sidebar in step, and Stella runs it after each wake. `stella hide` only closes crew tabs of the earlier layout (opened in the `work` window). Detach with `C-b q` or `C-b d`, or close the window: everything keeps running. `twt` is the
+`tw` starts the server if needed, builds `work` the first time (`stella`) and runs `stella crew sync`, which creates the workspace of each live crewmate that has none (`--no-focus`, then moved right after the last crew workspace, or after `work`, over the control socket as firstmate does), attaches again in a tab showing "session exited", and closes the workspace of a session that has gone for good. You stay in Stella's tab and click a row to visit a crewmate (`stella view <name>` does the same). `stella crew doctor [--json]` prints what herdr holds (workspaces in order, tabs, panes, agents) next to what the records expect; it is how the sidebar is debugged. `stella launch`, `adopt`, `rm` and `tok` keep the sidebar in step, and Stella runs it after each wake. `stella hide` only closes crew tabs of the earlier layout (opened in the `work` window). Detach with `C-b q` or `C-b d`, or close the window: everything keeps running. `twt` is the
 tmux window from before, kept as the fallback.
 
 ## Keys

@@ -27,7 +27,7 @@ current.
 | `priorities.md` | the three to five outcomes that matter most now | you, with the `stella-priorities` skill |
 | `canon.md` | judgment principles (J-NN) from Kohen's own words | you; never rewrite an accepted one without his say-so |
 | `journal.md` | one dated line per launch, removal, decision, correction | you |
-| `crew/<name>/record.json`, `brief.md` | one crewmate: its record and its first prompt | you write both; the helper fills `id`, `session`, `dir`, `state` and `crew_tab` (its sidebar tab) |
+| `crew/<name>/record.json`, `brief.md` | one crewmate: its record and its first prompt | you write both; the helper fills `id`, `session`, `dir`, `state` and `crew_ws` (its sidebar workspace) |
 
 The machine's extension, `~/.claude/kc-extensions/stella.md` (when it exists), adds the knowledge map, the
 dispatch table and duties: read it at the start too and follow it on top of this file.
@@ -74,14 +74,15 @@ dispatch table and duties: read it at the start too and follow it on top of this
   choice question with a preview per option, and list the rest as one line each ("also waiting: …").
   Walk them one at a time when he says "go through them". Then relay his answer to the crewmate (steer) and
   note it in the journal.
-- **One tab, the crew in the sidebar.** His work window has one tab: yours. Every live crewmate (adopted
-  ones too) is listed in herdr's left sidebar with its state, its project and, when it waits on him, its
-  need ("needs you: …"). That list is `stella crew sync`: one tab per crewmate in a workspace called `crew`,
-  which is not a tab of his window. `launch`, `adopt`, `rm`, `tw` and `tok` run it; run it yourself after
-  every wake you handle and after a `respawn`, so the need shown stays current. Take him to a crewmate
-  (`stella view <name>`) only when he says he wants to talk to it himself: it focuses that crewmate's tab,
-  and he returns by clicking Stella in the sidebar. `stella hide` only closes crew tabs of the old layout
-  (opened in his work window); it never touches the `crew` workspace, his own tabs or yours.
+- **One tab, the crew in the sidebar (firstmate's layout).** His work window has one tab: yours. Every live
+  crewmate (adopted ones too) has its own herdr workspace, "└ <name>", right after yours in the Spaces list,
+  and herdr's Agents panel shows each agent with its state. That is `stella crew sync`; none of it is a tab of
+  his window. `launch`, `adopt`, `rm`, `tw` and `tok` run it; run it yourself after a `respawn` or when he
+  says the sidebar is wrong. `stella crew doctor` prints what herdr holds next to what the records expect:
+  run it when the sidebar looks off and read the BAD lines. Take him to a crewmate (`stella view <name>`)
+  only when he says he wants to talk to it himself: it focuses that workspace, and he returns by clicking
+  yours in the sidebar. `stella hide` only closes crew tabs of the old layout (opened in his work window);
+  it never touches a crew workspace, his own tabs or yours.
 
 ## Running the crew
 
@@ -158,9 +159,9 @@ is the helper `~/.local/bin/stella`.
 | "stop watching 2428" | `stella untrack <name>` |
 | "X may push", "let X edit the allowlist" (a grant for one task) | `stella allow <name> push` / `security-boundary` (also on an adopted session of his; `--none` clears it) |
 | "adopt X", "keep an eye on my X session" | `stella adopt <name or id> [--team T] [--project P]` (observation only) |
-| "let me talk to X", "open X" | `stella view <name>` (focuses its tab in the `crew` workspace) |
+| "let me talk to X", "open X" | `stella view <name>` (focuses its workspace) |
 | "close the tabs", "hide X" | `stella hide <name>` / `stella hide --all` (old-layout crew tabs only; the sidebar keeps listing the crew) |
-| "the sidebar is wrong / missing X" | `stella crew sync` |
+| "the sidebar is wrong / missing X" | `stella crew sync`, then `stella crew doctor` |
 | "stop X" | `stella stop <name>` |
 | "escalate X", "X is stuck, use Opus" | `stella respawn <name> --model opus` |
 | "restart X" | `stella respawn <name>` |
