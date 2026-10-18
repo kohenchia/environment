@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""kc-env: the complete view of this environment: every command and skill you can use to manage it, and every
+background process that is going on. Read-only; takes no arguments.
+
+Commands come from the shell files (a function or alias whose comment directly above starts with its name) and from the tools
+linked into ~/.local/bin; skills from ~/.claude/skills and the installed plugins; processes from the herdr
+server, Claude's background daemon and its sessions, Stella's routines and the leak gate.
+
+Standard library only.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+HOME = Path.home()
+RC_FILES = [HOME / ".zshrc", HOME / ".zshrc_work"]
+BIN = HOME / ".local/bin"
+STELLA_STORE = HOME / ".local/share/stella"
+
+
+def run(*cmd: str) -> str:
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        return p.stdout if p.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def section(title: str) -> None:
+    print(f"\n\033[1m{title}\033[0m")
+
+
+def first_sentence(text: str, width: int = 96) -> str:
+    text = " ".join(text.split())
+    m = re.match(r"(.+?[.:])(\s|$)", text)
+    out = (m.group(1) if m else text).rstrip(":")
+    return out if len(out) <= width else out[: width - 1] + "…"
+
+
+def shell_commands() -> list[tuple[str, str]]:
+    """(name, what) for each function or alias that has a comment right above it."""
+    found = []
+    for rc in RC_FILES:
+        try:
+            lines = rc.read_text().splitlines()
+        except OSError:
+            continue
+        for i, ln in enumerate(lines):
+            m = re.match(r"(?:function\s+(\w[\w-]*)\s*\(?\)?|alias\s+(\w[\w-]*)=)", ln)
+            if not m or i == 0 or not lines[i - 1].lstrip().startswith("#"):
+                continue
+            name = m.group(1) or m.group(2)
+            if name.startswith("_"):
+                continue
+            c = []
+            j = i - 1
+            while j >= 0 and lines[j].lstrip().startswith("#"):
+                c.insert(0, lines[j].lstrip("# ").rstrip())
+                j -= 1
+            text = " ".join(c)
+            # only a comment that opens with the command's own name documents it ("# tw: the work window.")
+            m = re.match(rf"{re.escape(name)}(?=[\s:\[]|$)[^:]*:?\s*", text)
+            if not m:
+                continue
+            text = text[m.end():]
+            found.append((name, first_sentence(text)))
+    return found
+
+
+def linked_tools() -> list[tuple[str, str]]:
+    found = []
+    if not BIN.is_dir():
+        return found
+    for p in sorted(BIN.iterdir()):
+        try:
+            target = p.resolve()
+        except OSError:
+            continue
+        if not p.is_symlink() or "/github/" not in str(target) or not target.is_file():
+            continue
+        try:
+            head = target.read_text(errors="ignore").splitlines()[:12]
+        except OSError:
+            continue
+        doc = next((ln.strip(' "#') for ln in head if re.match(r'\s*(?:"""|#\s)(?!!)\S', ln) and ":" in ln), "")
+        found.append((p.name, first_sentence(doc.split(":", 1)[1]) if ":" in doc else ""))
+    return found
+
+
+def skills() -> list[tuple[str, str]]:
+    found = []
+    roots = [HOME / ".claude/skills"] + sorted((HOME / ".claude/plugins/cache").glob("kc*/*/*/skills"))
+    for root in roots:
+        for f in sorted(root.glob("*/SKILL.md")):
+            m = re.search(r"^description:\s*(.+)$", f.read_text(errors="ignore"), re.M)
+            found.append((f.parent.name, first_sentence(m.group(1)) if m else ""))
+    seen, out = set(), []
+    for n, d in found:
+        if n not in seen:
+            seen.add(n)
+            out.append((n, d))
+    return out
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def processes() -> list[tuple[str, str]]:
+    rows = []
+    herdr = run("herdr", "status", "server").strip().splitlines()
+    rows.append(("herdr server", herdr[0] if herdr else "not running (`tw` starts it)"))
+    try:
+        d = json.loads((HOME / ".claude/daemon.status.json").read_text())
+        rows.append(("claude daemon", f"pid {d['supervisorPid']} {'running' if alive(d['supervisorPid']) else 'NOT running'}"))
+    except (OSError, ValueError, KeyError):
+        rows.append(("claude daemon", "no status file"))
+    try:
+        agents = json.loads(run("claude", "agents", "--json", "--all") or "[]")
+    except ValueError:
+        agents = []
+    bg = [a for a in agents if a.get("kind") == "background"]
+    counts: dict[str, int] = {}
+    for a in bg:
+        counts[a.get("state") or "?"] = counts.get(a.get("state") or "?", 0) + 1
+    rows.append(("claude sessions", ", ".join(f"{n} {s}" for s, n in sorted(counts.items())) or "none (or `claude` unreachable)"))
+    stella = next((a for a in bg if a.get("name") == "stella"), None)
+    rows.append(("stella", f"session {stella['id']}, {stella.get('state')}" if stella else "not running (`stella` starts her)"))
+    tasks = STELLA_STORE / ".claude/scheduled_tasks.json"
+    try:
+        for t in json.loads(tasks.read_text()).get("tasks", []):
+            rows.append(("  routine", f"{t.get('cron', '?')}  {first_sentence(t.get('prompt', ''), 70)}"))
+    except (OSError, ValueError):
+        rows.append(("  routines", "none recorded (Stella creates them at the start of her session)"))
+    hooks = run("git", "-C", str(HOME / "github/environment"), "config", "core.hooksPath").strip()
+    leak = BIN / "leakcheck"
+    rows.append(("leak gate", f"pre-push hook {'on' if hooks else 'OFF'}; check {'linked' if leak.exists() else 'MISSING'}"))
+    return rows
+
+
+def table(rows: list[tuple[str, str]]) -> None:
+    if not rows:
+        print("  (none)")
+        return
+    w = max(len(n) for n, _ in rows)
+    for n, d in rows:
+        print(f"  {n:<{w}}  {d}")
+
+
+def main() -> None:
+    section("Commands (shell)")
+    table(shell_commands())
+    section("Tools (~/.local/bin)")
+    table(linked_tools())
+    section("Skills")
+    table([("/" + n, d) for n, d in skills()])
+    section("Background processes")
+    table(processes())
+
+
+if __name__ == "__main__":
+    main()

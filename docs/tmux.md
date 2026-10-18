@@ -18,8 +18,8 @@ work                                                          14:32
 - `local/.tmux.conf` — the bindings, symlinked to `~/.tmux.conf`
 - `local/alacritty.toml` — the Cmd translation layer, symlinked to
   `~/.config/alacritty/alacritty.toml` (macOS only)
-- `local/.zshrc` — `tw`, which attaches the `work` session and builds its main window (see
-  [The main window](#the-main-window))
+- `bin/tmux-bell-notify` — posts the macOS banner when a window rings the bell, symlinked to
+  `~/.local/bin/tmux-bell-notify`
 
 ---
 
@@ -90,13 +90,6 @@ the normal way.
 | `Cmd+Shift+R` | Rename the tab |
 | `Cmd+Shift+W` | Close the tab (asks first) |
 
-In herdr (the work window, `docs/herdr.md`) the same chords mean the project layout: a tab is a *window*,
-a workspace a *space* (a project). `Cmd+Shift+N` opens a new project (a popup asks for its name),
-`Cmd+Shift+W` closes the space (herdr asks first; its sessions keep running), `Cmd+Shift+↑` / `↓` walk the
-spaces in order (a pane above or below is `C-b k` / `C-b j`), `Cmd+Shift+R` renames the window in place
-(on a project's first window it renames the project), `Cmd+W` closes a pane and a window with its last
-pane. In tmux the chords keep the meaning in the tables here.
-
 Tab names are stable by design — `allow-rename` and `automatic-rename` are both off, so a program
 can never retitle your project tab. `renumber-windows` is on, so closing a tab reflows the rest and
 `Cmd+1`…`Cmd+9` never develop gaps.
@@ -158,9 +151,6 @@ Both rely on Alacritty's **default** hint, which `local/alacritty.toml` delibera
 Declaring a `[hints]` table replaces that default outright, URL regex included, so anything added there
 has to re-state the regex or link clicking silently stops working.
 
-A machine can add link schemes through `general.import` in `local/alacritty.toml` (a missing file is
-ignored): that file's `[[hints.enabled]]` restates the default regex with the extra scheme.
-
 One limitation: **a URL that wraps across rows only matches as far as the row end.** tmux redraws each
 row independently, so Alacritty sees a hard line break rather than a wrapped line and the hint stops
 there. Widen or zoom the pane (`Cmd+Shift+Enter`) before clicking a long URL.
@@ -190,7 +180,7 @@ to restore. While off, everything passes straight through to the pane.
 Cmd+T                       # new tab, named after the current directory
 cd ~/github/notes           # or start there and Cmd+Shift+R to rename
 Cmd+D                       # split right
-cy                          # Claude Code in the right pane
+claude                      # Claude Code in the right pane
 ```
 
 Pane borders are labelled with whatever is running in them, and **`Cmd+R`** (or
@@ -281,7 +271,8 @@ strftime(3), so it's plain specifiers — `%a %b %d %I:%M:%S %p`. `%d` is zero-p
 
 **Seconds are possible, and they cost a redraw a second.** `status-interval` is how often tmux repaints
 the status line, and it's the *only* thing that advances the clock — at the 5s default the seconds would
-jump in fives. So it's set to `1`. Drop the `:%S` and it can go back to `5`.
+jump in fives. So it's set to `1`. Drop the `:%S` and it can go back to `5`. The `✳` marker is unaffected
+either way: that redraw is event-driven, not on the interval.
 
 Below the bar is a blank row, so the coloured strip doesn't sit flush against the pane under it. That's
 `status 2` to buy the row plus `status-format[1]` to paint it — and it *has* to be painted: an empty
@@ -326,36 +317,107 @@ make it read as a second, lit selection.
 
 ---
 
-## The main window
+## The ✳ "waiting on you" marker
 
-`tw` attaches the `work` session, creating it the first time with one window, `main`, split in two:
+When Claude Code finishes and you're looking at another window, it rings the terminal bell. tmux flags
+the window the bell came from, and that flag draws a red `✳` in front of the name:
 
 ```
-work  ▐ 1 main ▌                                               Fri Oct 16 09:53:05 PM
-──▌1 · claude agents▐──────────────┬── 2 · fix login redirect ─────────────────────
- Needs input                       │ > the redirect loses the query string when…
- ✻ pr-123-sam          review…  2m │
- Working                           │
- ✢ stella              Stel…   24s │
- Completed                         │
- ∙ fix-login-redirect  Fixed…  1h  │
+ notes  ▐ 1 notes ▌ 2 ✳ dashboard  3 payments                  09:53
 ```
 
-- **Left: the Claude agents view** (`cag`, which is `claude agents` with permission prompts skipped for
-  the sessions it dispatches). It lists every session, interactive and background, grouped by what
-  they need. It is how a session that is waiting on you gets your attention: there are no tab markers
-  or desktop banners.
-- **Right: the session you are working in.** Start one with `cy`, or open a background one with
-  `cw <name>` (`cw` alone picks with fzf). Ctrl+Z (or ← in the session) puts it back in the background
-  and drops you to the shell; it keeps running and stays in the agents view.
+```tmux
+set -g monitor-bell on
+set -g bell-action other        # flag only windows you are NOT in
+set -g visual-bell off          # no "Bell in window X" message
 
-Both panes are shells running Claude, never Claude as the pane's own command, so quitting Claude in
-either pane leaves you at the prompt instead of closing the pane. Other windows (`Cmd+T`) are for
-whatever else you need: logs, a server, an editor.
+set -g @bell_mark "#{?window_bell_flag,#[fg=colour196]✳ #[fg=colour232],}"
+set -g window-status-format " #I #{E:@bell_mark}#W "
+```
 
-There is no "waiting on you" marker on the tabs and no macOS notification: `monitor-bell` is off and the
-bell hook and its notifier are gone. A server that ran the old config keeps the old hooks until
-`~/.tmux.conf` is sourced again; the "Retired bindings" block at its top resets them.
+Claude has to be told to use the bell, because its terminal auto-detection has no Alacritty case — it
+handles `Apple_Terminal`, `iTerm.app`, `kitty` and `ghostty`, and everything else falls through to
+`no_method_available`, meaning no notification at all. In `~/.claude/settings.json`:
+
+```json
+"preferredNotifChannel": "terminal_bell"
+```
+
+`focus-events on` (already set above) is what lets Claude know you're looking elsewhere; it doesn't
+notify for a pane you're watching. The flag clears the moment you visit the window, so there's no marker
+to reset and no way for a stale one to linger.
+
+### Why the bell, and not a hook
+
+The obvious design — a Claude Code `Stop` hook that runs `tmux set-option` on the pane — **cannot work
+here, and it's worth knowing why before trying it again.**
+
+**Everything Claude Code spawns is denied access to the tmux socket on this machine.** A hook-driven
+version of this marker ran 117 times across 12 distinct panes; the hooks fired perfectly and `$TMUX_PANE`
+was correct every time. 116 of the 117 tmux calls came back:
+
+```
+error connecting to /private/tmp/tmux-501/default (Operation not permitted)
+```
+
+The single success was a manual `tmux` call from a Bash tool invocation. The denial persists with
+`sandbox.enabled: false` and `CLAUDE_CODE_DISABLE_SANDBOX=1`, so it isn't reachable from settings — it's
+an outer boundary, most likely the wrapper around Claude Code wrapper.
+
+The bell sidesteps it because **nothing in the chain spawns a process from Claude**. Claude writes `\a`
+in-process from its renderer (`notifyBell()`), the tmux server sets the flag, and the tmux server —
+started by your shell, not by Claude — is what runs the notifier below.
+
+### The macOS banner
+
+`bin/tmux-bell-notify` posts a Notification Center banner so the signal reaches you when Alacritty is
+hidden or on another Space:
+
+```tmux
+set-hook -g alert-bell 'run-shell -b "tmux-bell-notify \"#{window_name}\""'
+```
+
+`-b` backgrounds it, so a slow `osascript` never stalls the server. `#{window_name}` is quoted because a
+window name can contain spaces — verified with one that does. It posts as *Script Editor*, which macOS
+may need allowed once under *System Settings → Notifications*.
+
+### What this costs
+
+**The bell is window-level, so there is no per-pane marker.** `window_bell_flag` flags a window and tmux
+has no pane equivalent, so the tab dot and the banner tell you *which window*, not which pane inside it.
+Per-pane granularity would need a process talking to the tmux socket — the blocked path.
+
+Pane borders therefore carry no marker, just the label. `@pane_label` still strips a leading `✳ ` out of
+the title text, because Claude Code 1.9.0 emits a constant `✳ <title>` under a multiplexer whether it's
+working or waiting (the `tengu_static_title_under_mux` gate, on by default). Left in, every Claude pane
+would show a glyph that looks like the marker but means nothing. That constant is also why the title
+itself can't be used as the signal: it no longer distinguishes the two states at all.
+
+**The marker is bright red — `colour196` (`ff0000`).** It reads strongest against the terminal's
+near-black and against the pale tab blocks. The one weak case is a window whose own hue *is* red
+(window 1): a bright red glyph on that window's mid-red bar is close in tone. `colour124` is the darker
+alternative if that ever grates. The default `window-status-bell-style` is `reverse`, which would repaint
+the whole tab and fight its hue, so it's set to `default` and the glyph carries the signal alone.
+
+Updates are event-driven, not tied to `status-interval`.
+
+### If it stops working
+
+Test the tmux half without Claude at all — from another window, `sleep 5; printf '\a'`, then switch away
+before it fires. Then narrow down:
+
+```bash
+tmux list-windows -F '#{window_index} bell=#{window_bell_flag} mark=[#{E:@bell_mark}]'
+tmux show -gv bell-action          # expect: other
+tmux show-hooks -g | grep alert-bell
+./setup.sh --check                 # confirms tmux-bell-notify is linked
+```
+
+If the dot appears but no banner, it's the notifier — run `tmux-bell-notify test` by hand and check the
+notification permission. If neither appears, Claude isn't belling: confirm `preferredNotifChannel` is
+`terminal_bell` and that Claude Code was restarted after setting it.
+
+---
 
 ## Rearranging panes
 

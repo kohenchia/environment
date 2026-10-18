@@ -1,0 +1,19 @@
+#!/bin/sh
+# pre-push: nothing work-specific may be published from this public repo. Runs the machine's leak check over
+# exactly what the push would add (every commit's message and every file it adds or changes). The check is
+# ~/.local/bin/leakcheck, linked by the machine's own setup; a machine without it cannot push (fail closed).
+# Enabled by setup.sh with `git config core.hooksPath githooks`.
+check="$HOME/.local/bin/leakcheck"
+if [ ! -x "$check" ]; then
+    echo "pre-push: no leak check at $check; refusing to publish (link one there)" >&2
+    exit 1
+fi
+top=$(git rev-parse --show-toplevel)
+while read -r _ local_sha _ _; do
+    case "$local_sha" in 0000000*) continue ;; esac   # deleting a branch publishes nothing
+    "$check" --repo "$top" --range "$local_sha --not --remotes=$1" || {
+        echo "pre-push: the leak check found the lines above; rewrite them generically, amend, push again" >&2
+        exit 1
+    }
+done
+exit 0

@@ -612,10 +612,7 @@ if [[ -e "$HOME/.zshrc_work" ]]; then
 fi
 
 # ── Claude Code workspace ─────────────────────────────────────────────
-# One tmux session, `work`. Its first window is the main one: the Claude agents
-# view on the left, the session you are working in on the right. Both panes are
-# shells that run Claude, so quitting Claude in either one drops you back at the
-# prompt instead of closing the pane. See docs/claude-code.md.
+# Every session is a background session of Claude's daemon; herdr (`tw`) shows them. See docs/claude-code.md.
 
 # cag: the agents view. Sessions dispatched from it skip permission prompts, like `cy`.
 alias cag='claude agents --dangerously-skip-permissions'
@@ -637,48 +634,18 @@ for s in json.load(sys.stdin):
     claude attach "${pick%%$'\t'*}"
 }
 
-# tw: the work window. With herdr installed (Work Env 3.0): start its server if needed, build the `stella`
-# workspace the first time (one `stella` tab, nothing else), and keep the sidebar the crew list
-# (`stella crew sync`: a workspace "└ <crewmate>" per live crewmate after this one, as firstmate lays it out; it
-# also re-attaches any crew tab that lost its session), then attach. Without herdr, tmux (`twt`).
+# tw: the work window. Start the herdr server if needed, start Stella's session if she is not running, open a
+# space for every session that needs you, is working, or finished recently (herdr-space sync; spaces and windows
+# that exist are left alone), then attach. A new project is a new space (Cmd+N): a blank terminal.
 function tw() {
-    if ! command -v herdr >/dev/null 2>&1; then
-        twt
-        return
-    fi
     if ! herdr status server >/dev/null 2>&1; then
         (nohup herdr server >/dev/null 2>&1 &)
         local i
         for i in {1..20}; do herdr status server >/dev/null 2>&1 && break; sleep 0.25; done
     fi
-    if ! herdr workspace list 2>/dev/null | grep -q '"label": *"\(stella\|work\)"'; then
-        local pane
-        pane=$(herdr workspace create --cwd "$HOME/github" --label stella --focus 2>/dev/null \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])') \
-            && herdr pane run "$pane" "stella tab" >/dev/null
-    fi
-    # every attach: the sidebar lists the live crew (idempotent), and a tab that lost its session is
-    # re-attached; this window gets no new tab
-    stella crew sync >/dev/null 2>&1
-    stella crew follow --ensure >/dev/null 2>&1   # the dot reporter: one detached process, never Stella's child
+    stella start >/dev/null 2>&1
+    herdr-space sync >/dev/null 2>&1
     herdr
-}
-
-# twt: the Work Env 2.0 tmux window, kept as the fallback: attach the `work` session, building its main
-# window the first time (the agents view left, your session right). Alacritty starts a plain login shell
-# rather than tmux, so this is the way in, and detaching with C-b d drops you back at that shell.
-function twt() {
-    if ! tmux has-session -t work 2>/dev/null; then
-        tmux new-session -d -s work -n main -c "$HOME/github" || return 1
-        tmux split-window -h -l 62% -t work:1 -c "$HOME/github"
-        tmux send-keys -t work:1.1 cag Enter
-        tmux select-pane -t work:1.2
-    fi
-    if [[ -n "$TMUX" ]]; then
-        tmux switch-client -t work
-    else
-        tmux attach -t work
-    fi
 }
 
 # ── Git Worktree helpers ──────────────────────────────────────────────

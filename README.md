@@ -1,6 +1,6 @@
 # kohenchia/environment
 
-A comprehensive development environment for macOS, Linux, and WSL. Includes shell configuration, Python virtual environment management, git worktree workflows, Vim/VS Code setup, a Claude Code setup (instructions, skills, hooks), and productivity aliases — all installed via a single setup script.
+A comprehensive development environment for macOS, Linux, and WSL. Includes shell configuration, Python virtual environment management, git worktree workflows, Vim/VS Code setup, a Claude Code setup (instructions, skills, a leak gate, a personal assistant), and productivity aliases — all installed via a single setup script.
 
 <p align="center">
 
@@ -12,8 +12,9 @@ A comprehensive development environment for macOS, Linux, and WSL. Includes shel
 | [**Git Aliases**](docs/git-aliases.md) | Shorthand commands for everyday git operations |
 | [**Shell Aliases & Functions**](docs/shell-aliases.md) | Navigation, search, Docker, Kubernetes, system utilities, and more |
 | [**Command Tutorials**](docs/command-tutorials.md) | `h <command>` — color-coded, copy-pasteable cheat sheets in your terminal |
-| [**tmux Workspace**](docs/tmux.md) | Projects as tabs, tools as panes, single-chord `Cmd` navigation; the main window holds the Claude agents view and your session |
-| [**Claude Code**](docs/claude-code.md) | Global instructions, `kc-*` skills, hooks, and Stella, a personal assistant that is just another session |
+| [**herdr Workspace**](docs/herdr.md) | A space per project, a window per session, single-chord `Cmd` navigation |
+| [**tmux Workspace**](docs/tmux.md) | The same chords in tmux: projects as tabs, tools as panes (the fallback, and for Linux/WSL) |
+| [**Claude Code**](docs/claude-code.md) | Global instructions, `kc-*` skills, the leak gate, and Stella, a personal assistant in a permanent session |
 | [**Vim Configuration**](docs/vim.md) | Plugins, keybindings, and color scheme |
 | [**VS Code Configuration**](docs/vscode.md) | Vim keybindings and editor settings for VS Code |
 

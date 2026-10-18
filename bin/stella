@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""stella: open Stella's permanent Claude session, starting it in the background first when it is not running.
+
+    stella            attach to her session (Ctrl+Z drops back to the shell; she keeps running)
+    stella start      start her in the background if she is not running, without attaching
+    stella restart    stop her and resume the same conversation, so she reloads her manual and routines
+
+She is an ordinary background session of Claude's daemon, named `stella`, running the agent file
+~/.claude/agents/stella.md in her store ~/.local/share/stella. Nothing else is needed for her to exist.
+
+Standard library only.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+STORE = Path.home() / ".local/share/stella"
+START = "Session start: do the start-of-session steps in your manual."
+FLAGS = ["--dangerously-skip-permissions"]
+
+
+def claude(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(["claude", *args], cwd=cwd, capture_output=True, text=True, timeout=60)
+
+
+def row() -> dict | None:
+    p = claude("agents", "--json", "--all")
+    try:
+        rows = json.loads(p.stdout)
+    except ValueError:
+        sys.exit(f"stella: claude agents failed: {(p.stderr or p.stdout).strip()[-200:]}")
+    return next((a for a in rows if a.get("name") == "stella" and a.get("kind") == "background"), None)
+
+
+def start() -> str:
+    STORE.mkdir(parents=True, exist_ok=True)
+    claude("--bg", "-n", "stella", "--agent", "stella", "--model", "sonnet", *FLAGS, "--", START, cwd=STORE)
+    for _ in range(15):
+        r = row()
+        if r:
+            return r["id"]
+        time.sleep(1)
+    sys.exit("stella: started, but the session did not show up in `claude agents`")
+
+
+def restart() -> str:
+    r = row()
+    if not r:
+        return start()
+    if r.get("state") in ("working", "blocked") or r.get("pid"):
+        if claude("stop", r["id"]).returncode != 0:
+            sys.exit(f"stella: could not stop {r['id']}")
+    p = claude("--bg", "--resume", r["sessionId"], "-n", "stella", "--agent", "stella", "--model", "sonnet",
+               *FLAGS, "--", START, cwd=STORE)
+    if p.returncode != 0:
+        sys.exit(f"stella: could not resume: {(p.stderr or p.stdout).strip()[-200:]}")
+    return r["id"]
+
+
+def main() -> None:
+    cmd = sys.argv[1:]
+    if cmd not in ([], ["start"], ["restart"]):
+        sys.exit(__doc__)
+    sid = restart() if cmd == ["restart"] else (row() or {}).get("id") or start()
+    if cmd == ["start"]:
+        return
+    os.execvp("claude", ["claude", "attach", sid])
+
+
+if __name__ == "__main__":
+    main()

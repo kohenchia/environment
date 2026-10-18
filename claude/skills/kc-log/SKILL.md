@@ -1,7 +1,7 @@
 ---
 name: kc-log
 user-invocable: true
-description: Append today's work to the daily log in Kohen's Obsidian vault (Daily/YYYY-MM-DD.md). Use when asked to log the day, write up what was done, update the daily note, or at the end of a working session — e.g. "/kc-log" or "/kc-log just the parser debugging". Also handles Stella's nightly log of every session that day, and the weekly grooming pass.
+description: Append today's work to the daily log in Kohen's Obsidian vault (Daily/YYYY-MM-DD.md). Use when asked to log the day, write up what was done, update the daily note, or at the end of a working session — e.g. "/kc-log" or "/kc-log just the parser debugging". Also handles the log of every session that day, and the weekly grooming pass.
 ---
 
 # kc-log
@@ -14,7 +14,7 @@ top of this skill: it names this machine's tools for sourcing identifiers and wh
 
 Invoked as `/kc-log [what to log]`. With no argument, summarize the current session's
 work. With an argument, log only what it describes. `/kc-log day [YYYY-MM-DD]` logs the
-whole day across every session (see "The whole day", below); Stella runs it nightly.
+whole day across every session (see "The whole day", below).
 
 ## Get the date from the system
 
@@ -100,16 +100,10 @@ session's work for that day, not just this one:
    Skip sessions that only chatted.
 3. **Log only work COMPLETED that day**: merged, pushed, sent, finished, decided, learned.
    Work only started or discussed waits for the day it finishes.
-4. Follow every rule above; this run is unattended, so ask nothing. Derived content from
+4. Follow every rule above; this run may be unattended, so ask nothing. Derived content from
    chat tools keeps its data-policy tags.
-5. **Kohen's answers** (Stella's run only). Run `stella prefs scan <the day, YYYY-MM-DD>` (the helper, alone on
-   the command line): each line is a question a crewmate left for him (its NEXT FOR YOU items) and his words in
-   its window. For each, append one line to `~/.local/share/stella/preferences.md` (create it with a
-   `# Preferences` heading when missing), skipping a pair already there (same date, crewmate and answer text):
-   `- <date> | <crewmate> | kind: <kind> | answer: <answer> | Q: <the question, one line> | A: <his words, verbatim, one line>`.
-   `kind` is a short slug for the *kind* of question (`squash-merge`, `open-pr-as-draft`, `scope-of-a-fix`), reusing
-   a kind already in the file when the question is the same sort; `answer` is a slug for which way he went
-   (`yes`, `no`, `option-a`). Never summarise his words.
+5. Besides what was completed, add a line per project worked on that day with its state (in progress, waiting
+   on whom, done), so the log shows where every project stands.
 
 ## Finish
 

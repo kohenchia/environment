@@ -1,343 +1,48 @@
 #!/usr/bin/env python3
-"""Claude Code hooks for every session: `kc-hook <stop|prompt|pretool>`, the hook input as JSON on stdin.
+"""Claude Code hook for every session: `kc-hook pretool`, the hook input as JSON on stdin.
 
-stop     The final message of a turn must end with the status block (below). When it is missing or
-         malformed, block the stop once with the rule; `stop_hook_active` means that already happened.
-prompt   A message that starts with "Stella"/"S" (or ends with her name, or says "ask/tell Stella") is
-         for Stella: tell the session to relay it with the `stella` skill. Her own session (cwd
-         ~/.local/share/stella) is exempt: everything typed there is for her.
-         In Stella's own session it also blocks the stop once when crew is in flight and her watcher
-         (stella-watch) is not running, so she never ends a turn blind.
-pretool  A `git push` into ~/github/environment (or one of its worktrees) is gated by what it would
-         publish, not by who pushes: the machine's `push_check` (a command named in
-         ~/.claude/kc-extensions/stella.json) scans every commit the push adds, contents and messages.
-         No hits: allowed, no prompt. Hits: denied, listing them, so the session rewrites them and pushes
-         again. No check configured, or it cannot run: ask the owner, unless the session's record grants
-         the `push` activity.
-         A session whose crew record (~/.local/share/stella/crew/*/record.json, matched by session id)
-         lists `push` in `allow` also has its plain `git push` to any other repo allowed without a prompt.
+The leak gate for the public repo ~/github/environment is a git pre-push hook (githooks/pre-push), which
+fires for anyone who pushes, Claude or not. This hook only keeps a session from stepping around it: a Bash
+command that pushes from that repo (or one of its worktrees) with `--no-verify`, or that changes
+`core.hooksPath`, is denied. Reads and everything else pass.
 
-Standard library only, so it runs under any python3. A hook that fails must never trap a session, so every
-handler swallows its own errors.
+Standard library only. A hook that fails must never trap a session, so any error allows the command.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import shlex
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 HOME = Path.home()
-STELLA_HOME = HOME / ".local/share/stella"
-PROTECTED = HOME / "github/environment"  # pushes here are leak-checked
-EXTENSION = HOME / ".claude/kc-extensions/stella.json"  # this machine: `push_check`
-
-# ---------------------------------------------------------------- status block
-
-RULE_LINE = "━" * 40
-FORMAT = (
-    "the LAST block of your final message, nothing after it, plain markdown (not in a code fence): a line of 40 ━"
-    " characters on its own line, then exactly one of `\U0001f7e7 **NEXT FOR YOU** (N)` followed by N numbered items"
-    " `1.` `2.` ... (one thing only the owner can do or decide per item, short and imperative), `\U0001f7e9 **ALL DONE**"
-    " — nothing left for you.` (only when nothing is uncommitted, unpushed or open for the owner), or"
-    " `\U0001f7e6 **WORKING** — <what is still running>` (only when background work continues after the turn)."
-)
-_HEAD = re.compile(r"^(?:\U0001f7e7\s*\*\*NEXT FOR YOU\*\*\s*\((\d+)\)|\U0001f7e9\s*\*\*ALL DONE\*\*.*|\U0001f7e6\s*\*\*WORKING\*\*\s*—\s*\S.*)$")
-_ITEM = re.compile(r"^(\d+)\.\s+\S")
+PROTECTED = (HOME / "github/environment", HOME / "github/environment-wt")
+BYPASS = re.compile(r"git\b[^|;&\n]*\bpush\b[^|;&\n]*(--no-verify|\s-n\b)|hooksPath")
+MESSAGE = ("Pushes from ~/github/environment run a leak check (githooks/pre-push). Do not bypass it: rewrite "
+           "what it reports generically, amend, and push again.")
 
 
-def final_message(data: dict) -> str:
-    msg = data.get("last_assistant_message")
-    if isinstance(msg, str) and msg.strip():
-        return msg
-    path = data.get("transcript_path")
-    if not path:
-        return ""
-    with open(path, "rb") as f:
-        f.seek(0, os.SEEK_END)
-        f.seek(max(0, f.tell() - 400_000))
-        raw = f.read().decode("utf-8", "replace")
-    for line in reversed(raw.splitlines()):
-        try:
-            ev = json.loads(line)
-        except ValueError:
-            continue
-        if ev.get("type") != "assistant":
-            continue
-        content = (ev.get("message") or {}).get("content")
-        text = content if isinstance(content, str) else "\n".join(
-            b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text")
-        if text.strip():
-            return text
-    return ""
-
-
-def check_block(text: str) -> str | None:
-    """None when `text` ends with a well-formed status block, else what is wrong."""
-    lines = text.rstrip().splitlines()
-    try:
-        at = max(i for i, ln in enumerate(lines) if ln.strip() == RULE_LINE)
-    except ValueError:
-        return "Your final message does not end with the status block."
-    body = [ln.strip() for ln in lines[at + 1:] if ln.strip()]
-    if not body:
-        return "The status rule line is not followed by a status."
-    m = _HEAD.match(body[0])
-    if not m:
-        return "The line after the status rule is not one of the three statuses."
-    if body[0].startswith("\U0001f7e7"):
-        items = body[1:]
-        nums = [int(i.group(1)) for i in map(_ITEM.match, items) if i]
-        if len(nums) != len(items):
-            return "Something other than numbered items follows NEXT FOR YOU; the block must be the last thing."
-        if not items or nums != list(range(1, len(items) + 1)) or int(m.group(1)) != len(items):
-            return "The NEXT FOR YOU count must match its items, numbered 1..N, and there must be at least one."
-    elif len(body) > 1:
-        return "Something follows the status line; the block must be the last thing of the message."
-    return None
-
-
-def stop(data: dict) -> None:
-    # Print mode and SDK runs (`claude -p`) have no owner reading the turn; their entrypoint is sdk-*.
-    if data.get("stop_hook_active") or os.environ.get("CLAUDE_CODE_ENTRYPOINT", "").startswith("sdk"):
-        return
-    bad = check_block(final_message(data))
-    if bad:
-        print(json.dumps({"decision": "block", "reason": f"{bad} Rewrite the end of your final message: {FORMAT}"}))
-        return
-    blind = unwatched_crew(data)
-    if blind:
-        print(json.dumps({"decision": "block", "reason": blind}))
-
-
-# ---------------------------------------------------------------- Stella's turn-end guard
-
-
-def _alive(pid) -> bool:
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (TypeError, ValueError, ProcessLookupError):
-        return False
-    except PermissionError:
-        return True
-
-WATCH_STALE = 120  # seconds: the watcher beats every 20 s
-
-
-def unwatched_crew(data: dict) -> str | None:
-    """In Stella's own session only: crew in flight and no live watcher means she would end her turn blind."""
-    try:
-        if Path(data.get("cwd") or "").resolve() != STELLA_HOME.resolve():
-            return None
-        in_flight = []
-        for p in (STELLA_HOME / "crew").glob("*/record.json"):
-            rec = json.loads(p.read_text())
-            if rec.get("state") in ("working", "queued") and not rec.get("adopted"):
-                in_flight.append(rec.get("name"))
-        if not in_flight:
-            return None
-        pidfile = STELLA_HOME / "watch.pid"
-        watch = json.loads(pidfile.read_text()) if pidfile.exists() else {}
-        if time.time() - watch.get("beat", 0) < WATCH_STALE and _alive(watch.get("pid")):
-            return None
-        return (f"Crew in flight ({', '.join(sorted(in_flight)[:6])}) and stella-watch is not running. Start it as a"
-                " background command (`stella-watch`, run_in_background) before ending the turn.")
-    except Exception:  # noqa: BLE001 - outside Stella's home, or a missing file: never trap the session
-        return None
-
-
-# ---------------------------------------------------------------- addressing Stella
-
-_START = re.compile(
-    r"^\s*(?:(?:hey|hi|hello|ok|okay|and|also|please)[\s,]+)?(?:@?stella\b[\s,:;.!?-]*|s\s*[,:]|s\s+(?=\w))",
-    re.IGNORECASE,
-)
-_ASK = re.compile(r"\b(?:ask|tell)\s+stella\b", re.IGNORECASE)
-_END = re.compile(r"[,\s]stella[\s.!?]*$", re.IGNORECASE)
-
-
-def is_addressed(text: str) -> bool:
-    return bool(_START.match(text) or _ASK.search(text) or _END.search(text))
-
-
-def prompt(data: dict) -> None:
-    text = data.get("prompt") or ""
-    cwd = Path(data.get("cwd") or os.getcwd())
-    if cwd == STELLA_HOME or not is_addressed(text):
-        return
-    note = (
-        "This message is addressed to Stella, the owner's assistant, not to this session. Load the `stella` skill"
-        " and follow its \"Relaying a message\" section: send the message to Stella's own session, say in one line that"
-        " you passed it on, and do not act on it yourself."
-    )
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": note}}))
-
-
-# ---------------------------------------------------------------- the environment push prompt
-
-_PUSH = re.compile(r"\bgit\b[^;&|\n]*\bpush\b")
-
-
-def _repo_root(path: Path) -> Path | None:
-    try:
-        out = subprocess.run(["git", "-C", str(path), "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                             capture_output=True, text=True, timeout=5).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return Path(out).parent.resolve() if out else None
-
-
-def _dirs(command: str, cwd: Path) -> list[Path]:
-    """The directories a push in `command` could run in: the cwd, every `cd X` and every `git -C X`."""
-    out = [cwd]
-    try:
-        words = shlex.split(command, posix=True)
-    except ValueError:
-        words = command.split()
-    for i, w in enumerate(words[:-1]):
-        if w == "cd" or (w == "-C" and "git" in words[max(0, i - 3):i]):
-            out.append(Path(os.path.expanduser(words[i + 1])))
-    return [p if p.is_absolute() else cwd / p for p in out]
-
-
-def session_allows(session_id: str, activity: str) -> bool:
-    """True when the crew record of this session lists `activity` in `allow`: the activities the owner
-    (or one of Stella's canon principles) granted for the task."""
-    if not session_id:
-        return False
-    for rec in (STELLA_HOME / "crew").glob("*/record.json"):
-        try:
-            r = json.loads(rec.read_text())
-        except (OSError, ValueError):
-            continue
-        if r.get("session") == session_id and activity in (r.get("allow") or []):
-            return True
-    return False
-
-
-_VALUE_OPTS = {"-o", "--push-option", "--repo", "--receive-pack", "--exec", "--signed"}
-_SIMPLE = re.compile(r"^[ \t]*[^;&|$`<>\n()]*$")
-
-
-def _git(d: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(d), *args], capture_output=True, text=True, timeout=10).stdout.strip()
-
-
-def push_spec(command: str, d: Path) -> str:
-    """The rev-list arguments naming exactly what the push in `command` would add to its remote: the pushed
-    refs, minus everything the remote's tracking refs already hold (a force push or a new branch checks all
-    that the remote lacks)."""
-    seg = next((x for x in re.split(r"[;&|\n]+", command) if _PUSH.search(x)), command)
-    try:
-        words = shlex.split(seg, posix=True)
-    except ValueError:
-        words = seg.split()
-    words = words[words.index("push") + 1:] if "push" in words else []
-    pos, tips, skip = [], [], False
-    for w in words:
-        if skip:
-            skip = False
-        elif w in ("--all", "--branches"):
-            tips.append("--branches")
-        elif w == "--tags":
-            tips.append("--tags")
-        elif w == "--mirror":
-            tips.append("--all")
-        elif w in _VALUE_OPTS:
-            skip = True
-        elif not w.startswith("-"):
-            pos.append(w)
-    branch = _git(d, "branch", "--show-current")
-    remote = pos[0] if pos else (_git(d, "config", f"branch.{branch}.pushRemote")
-                                 or _git(d, "config", f"branch.{branch}.remote") or "origin")
-    for ref in pos[1:]:
-        src = ref.lstrip("+").split(":", 1)[0]
-        if src:  # `:dst` deletes a branch: it publishes nothing
-            tips.append(src)
-    if not tips and len(pos) < 2:
-        tips.append("HEAD")
-    return " ".join(shlex.quote(t) for t in tips) + f" --not --remotes={shlex.quote(remote)}"
-
-
-def push_check_argv() -> list[str] | None:
-    try:
-        argv = json.loads(EXTENSION.read_text()).get("push_check")
-    except (OSError, ValueError):
-        return None
-    if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
-        return None
-    return [os.path.expanduser(a) for a in argv]
-
-
-def _decide(decision: str, reason: str = "") -> None:
-    out = {"hookEventName": "PreToolUse", "permissionDecision": decision}
-    if reason:
-        out["permissionDecisionReason"] = reason
-    print(json.dumps({"hookSpecificOutput": out}))
-
-
-def _env_push(command: str, d: Path, session_id: str) -> None:
-    """A push into the public repo: allowed when what it publishes passes the machine's check."""
-    argv = push_check_argv()
-    if argv is None:
-        if not session_allows(session_id, "push"):
-            _decide("ask", "Push to ~/github/environment (personal, public remote), and no push_check is"
-                           " configured to scan it. Push it?")
-        return
-    try:
-        spec = push_spec(command, d)
-        p = subprocess.run([*argv, "--repo", str(d), "--range", spec], capture_output=True, text=True, timeout=120)
-    except (OSError, subprocess.SubprocessError):
-        p = None
-    if p is None or p.returncode not in (0, 1):
-        if not session_allows(session_id, "push"):
-            _decide("ask", "Push to ~/github/environment (personal, public remote): the push check could not"
-                           " run. Push it?")
-        return
-    if p.returncode == 1:
-        hits = "\n".join(p.stdout.strip().splitlines()[:40])
-        _decide("deny", "This push would publish work-specific content to the public ~/github/environment"
-                        f" remote:\n{hits}\nRewrite each hit generically, amend or rewrite the commits that"
-                        " hold it (the commit messages too), then push again.")
-    elif _SIMPLE.match(command):
-        _decide("allow", "The push check found nothing work-specific in what this push publishes.")
+def touches_protected(cmd: str, cwd: str) -> bool:
+    text = cmd.replace("~", str(HOME)).replace("$HOME", str(HOME))
+    return any(str(p) in text or cwd.startswith(str(p)) for p in PROTECTED)
 
 
 def pretool(data: dict) -> None:
-    if data.get("tool_name") != "Bash":
-        return
-    command = (data.get("tool_input") or {}).get("command") or ""
-    if not _PUSH.search(command):
-        return
-    cwd = Path(data.get("cwd") or os.getcwd())
-    protected = PROTECTED.resolve()
-    sid = data.get("session_id") or ""
-    for d in _dirs(command, cwd):
-        if d.is_dir() and _repo_root(d) == protected:
-            return _env_push(command, d, sid)
-    if _SIMPLE.match(command) and session_allows(sid, "push"):
-        _decide("allow", "This session's task grants the push activity.")
+    cmd = (data.get("tool_input") or {}).get("command") or ""
+    if BYPASS.search(cmd) and touches_protected(cmd, data.get("cwd") or ""):
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                                   "permissionDecisionReason": MESSAGE}}))
 
 
-HANDLERS = {"stop": stop, "prompt": prompt, "pretool": pretool}
-
-
-def main() -> int:
-    if len(sys.argv) != 2 or sys.argv[1] not in HANDLERS:
-        print(f"usage: kc-hook <{'|'.join(HANDLERS)}>", file=sys.stderr)
-        return 2
+def main() -> None:
     try:
-        HANDLERS[sys.argv[1]](json.load(sys.stdin))
-    except Exception as e:  # noqa: BLE001 - a broken hook must never trap a session
-        print(f"kc-hook {sys.argv[1]}: {type(e).__name__}: {e}", file=sys.stderr)
-    return 0
+        data = json.load(sys.stdin)
+        if sys.argv[1:] == ["pretool"]:
+            pretool(data)
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()

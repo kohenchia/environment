@@ -6,10 +6,9 @@ they win).
 
 ## How I work
 
-- **One terminal, one herdr server.** `tw` opens the work window: Stella's space first, then one space per
-  project with a window per session, and dots that show Claude's own state (yellow = needs me, blue = working,
-  green = completed, not yet seen; tmux stays as the fallback, `twt`). Crewmates wait for me in their own
-  window. Every session is an ordinary Claude Code session that can go to the background and come back.
+- **One terminal, one herdr server.** `tw` opens the work window: one space per project, a window per
+  session, and dots that show Claude's own state. Every session is an ordinary Claude Code session run by
+  Claude's background daemon, so the agents view (`cag`) lists all of them and which ones need me.
 - **Skills, not teams.** Work starts from a skill, and the skill decides whether a task deserves
   subagents and which ones:
 
@@ -21,13 +20,11 @@ they win).
 | `/kc-dev` | Building from a plan or instructions, straight away |
 | `/kc-tutorial` | A tutorial or explainer in the vault |
 | `/kc-log` | The daily log in the vault |
-| `/stella` | A message for Stella (also: start a message with "Stella" or "S,") |
 
-- **Stella** is my project manager and first mate: a session of her own (`stella` in a terminal). I manage
-  my projects through her; she keeps the projects, my priorities and the crew, turns a request into a brief,
-  launches it as an ordinary background session, relays my instructions to the right crewmate, and brings
-  back outcomes and the decisions that matter most. Her manual is her agent file, not this one. She is the
-  way in, not the only way: I can attach to anything she launches and start sessions myself.
+- **Stella** is my personal assistant, in a permanent session of her own (`stella`). She automates routine
+  operations (the daily log, audits of my memories and instructions, my priorities, answering a waiting
+  session from my canon) and does not manage other sessions. Her manual is her agent file, which only her
+  session loads. `kc-env` lists every command, skill and background process of this environment.
 - **Every skill reads its extension first**: `~/.claude/kc-extensions/<skill>.md`, when it exists, adds
   this machine's constraints.
 
@@ -38,37 +35,16 @@ tutorials, notes and daily logs go there, never in a repo. Read the vault's own 
 to it; it is authoritative on folders, names and frontmatter. `Notes/` is the knowledge layer, `Projects/`
 is work in progress, `Daily/` the daily logs, `Reviews/` the reviews.
 
-## Every turn ends with the status block
-
-The last block of your final message each turn, nothing after it, plain markdown (not in a code fence):
-a line of 40 `━` characters on its own line, then exactly one of:
-
-- `🟧 **NEXT FOR YOU** (N)` followed by N numbered items `1.` `2.` …: each one thing only I can do or
-  decide, short and imperative (a question, a decision, a review to post).
-- `🟩 **ALL DONE** — nothing left for you.`: only when nothing is uncommitted, unpushed or open for me.
-- `🟦 **WORKING** — <what is still running>`: only when background work continues after the turn.
-
-The Stop hook checks the form. When I answer with just a number, or "do 2" / "approve 1 and 3", I mean the
-items of your last NEXT FOR YOU block.
-
 ## Access
 
-Sessions have all the read and write access I have. Gates follow the kind of activity, never the text of a
-command:
+Sessions have all the read and write access I have. The one gate is a leak check on publishing to this
+public repo (`~/github/environment`): a git `pre-push` hook (`githooks/pre-push`) scans exactly what the push
+would publish, commits and their messages, and refuses on any hit. A session that is refused rewrites the hits
+generically, amends its commits and pushes again; it never bypasses the hook (`--no-verify`, `core.hooksPath`).
 
-- **Publishing to this public repo** (`~/github/environment`) is gated by a leak check over exactly what the
-  push would publish: commits and their messages. No hits, the push goes through without a prompt. Hits, it
-  is denied and the pushing session rewrites them generically, amends its commits and pushes again. No check
-  configured on the machine: it asks me.
-- **Granted activities.** What I explicitly allow for a task (pushing, editing the sandbox boundary) is
-  recorded on that task's session by Stella as `allow`, and the hooks then do not prompt me for it during the
-  task. Nobody grants an activity for me.
-- **Outward-facing actions** (below) are rules for the session, not hooks.
-
-If I want no writes, I use plan mode.
-
-Still ask before anything outward-facing that cannot be taken back: posting or reacting anywhere, a review,
-approval, merge or comment on someone else's work, triggering remote jobs, deleting anything of mine.
+If I want no writes, I use plan mode. Still ask before anything outward-facing that cannot be taken back:
+posting or reacting anywhere, a review, approval, merge or comment on someone else's work, triggering remote
+jobs, deleting anything of mine.
 
 ## Explaining things to me: show it, don't just say it
 

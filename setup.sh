@@ -391,16 +391,18 @@ LINKS=(
     # `h` — color-coded command tutorials. Linked into ~/.local/bin (on PATH per
     # local/.shell-common.zsh) so it's runnable as `h <command>`.
     "bin/h|$HOME/.local/bin/h"
+    # tmux-bell-notify — the tmux alert-bell hook calls this to post a macOS
+    # notification for a window that rang the bell. See docs/tmux.md.
+    "bin/tmux-bell-notify|$HOME/.local/bin/tmux-bell-notify"
     # Claude Code: the public global instructions (they import the machine's own
-    # from ~/.claude/kc-extensions/ at the end) and `stella`, which starts, opens
-    # and launches sessions. See docs/claude-code.md.
+    # from ~/.claude/kc-extensions/ at the end). See docs/claude-code.md.
     "claude/CLAUDE.md|$HOME/.claude/CLAUDE.md"
-    "claude/bin/stella|$HOME/.local/bin/stella"
-    # Stella's watcher (she runs it as a background command) and the tripwire that proves a change
-    # disturbed no running session.
-    "claude/bin/stella-watch|$HOME/.local/bin/stella-watch"
-    "claude/bin/live-check|$HOME/.local/bin/live-check"
-    # herdr, the terminal multiplexer for the work window (`tw`); tmux stays as `twt`.
+    # `stella` opens Stella's permanent session, `kc-env` lists every command, skill and background
+    # process, `herdr-space` moves a space and builds one per project (`tw` runs it).
+    "bin/stella|$HOME/.local/bin/stella"
+    "bin/kc-env|$HOME/.local/bin/kc-env"
+    "bin/herdr-space|$HOME/.local/bin/herdr-space"
+    # herdr, the terminal multiplexer for the work window (`tw`).
     "local/herdr.toml|$HOME/.config/herdr/config.toml"
 )
 
@@ -464,7 +466,11 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
             "${REPO_DIR}/vscode-user-settings.json"
     fi
 
-    # The `kc` plugin carries the hooks every session runs (claude/plugin). A
+    # The leak gate: a push from this repo runs githooks/pre-push, which calls ~/.local/bin/leakcheck (the
+    # machine's own check; a machine without it cannot push). See docs/claude-code.md.
+    git -C "${REPO_DIR}" config core.hooksPath githooks
+
+    # The `kc` plugin carries the hook every session runs (claude/plugin). A
     # directory marketplace, so the hooks.json in this repo is what gets installed;
     # after changing it, run `claude plugin update kc@kc-local`.
     if command -v claude >/dev/null 2>&1; then

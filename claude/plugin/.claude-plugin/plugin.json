@@ -1,5 +1,5 @@
 {
   "name": "kc",
-  "version": "2.1.0",
-  "description": "Hooks every session runs: the status block, messages for Stella, the push prompt for ~/github/environment"
+  "version": "3.0.0",
+  "description": "The guard that keeps a session from bypassing the leak check on pushes to ~/github/environment"
 }

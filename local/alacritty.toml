@@ -94,9 +94,8 @@ bindings = [
   { key = "0", mods = "Command", chars = "\u001B0" },          # last tab
   { key = "T", mods = "Command", chars = "\u001Bt" },          # new tab
   { key = "W", mods = "Command", chars = "\u001Bw" },          # close pane
-  { key = "W", mods = "Command|Shift", chars = "\u001BW" },    # close tab (herdr: close the space)
+  { key = "W", mods = "Command|Shift", chars = "\u001BW" },    # close tab
   { key = "R", mods = "Command|Shift", chars = "\u001BR" },    # rename tab
-  { key = "N", mods = "Command|Shift", chars = "\u001BN" },    # new project (herdr: a popup that asks for its name)
   { key = "R", mods = "Command", chars = "\u001Br" },          # rename pane
 
   # prev/next tab. Cmd+Shift+[ / ] is the iTerm chord. With Shift held, the
@@ -113,8 +112,7 @@ bindings = [
   { key = "D", mods = "Command", chars = "\u001Bd" },          # split right
   { key = "D", mods = "Command|Shift", chars = "\u001BD" },    # split down
 
-  # focus a pane sideways. Up and down: in herdr they move between spaces (projects), and a pane above or below
-  # is C-b k / C-b j; in tmux they still focus the pane above or below.
+  # focus a pane, in every direction
   { key = "ArrowLeft",   mods = "Command|Shift", chars = "\u001B[1;3D" },
   { key = "ArrowRight",  mods = "Command|Shift", chars = "\u001B[1;3C" },
   { key = "ArrowUp",     mods = "Command|Shift", chars = "\u001B[1;3A" },
@@ -126,11 +124,21 @@ bindings = [
   { key = "ArrowUp",     mods = "Command|Option", chars = "\u001B[1;6A" },
   { key = "ArrowDown",   mods = "Command|Option", chars = "\u001B[1;6B" },
 
-  # resize a pane — hold the chord to keep going (tmux binds these with -r)
+  # resize a pane — hold the chord to keep going (tmux binds these with -r). herdr resizes with C-b and the
+  # arrows instead, because Cmd+Ctrl+Up/Down walk the spaces there (below).
   { key = "ArrowLeft",  mods = "Command|Control", chars = "\u001B[1;7D" },
   { key = "ArrowRight", mods = "Command|Control", chars = "\u001B[1;7C" },
   { key = "ArrowUp",    mods = "Command|Control", chars = "\u001B[1;7A" },
   { key = "ArrowDown",  mods = "Command|Control", chars = "\u001B[1;7B" },
+
+  # ── Spaces (herdr: one per project) ─────────────────────────────────────
+  # The Ctrl layer is for spaces and Shift means "move", as for tabs: Cmd+Ctrl+Up/Down walk the spaces
+  # (above), Cmd+Ctrl+Shift+Up/Down reorder one (Left/Right reorder a tab, further up), Cmd+N opens a new
+  # one and Cmd+Ctrl+W closes it. tmux has no spaces: these do nothing there.
+  { key = "ArrowUp",   mods = "Command|Control|Shift", chars = "\u001B[1;8A" },
+  { key = "ArrowDown", mods = "Command|Control|Shift", chars = "\u001B[1;8B" },
+  { key = "N", mods = "Command", chars = "\u001Bn" },                 # new space
+  { key = "W", mods = "Command|Control", chars = "\u001B\u0017" },    # close space (Ctrl+Alt+W)
 
   { key = "Enter", mods = "Command|Shift", chars = "\u001Bz" },    # zoom
   { key = "Space", mods = "Command|Shift", chars = "\u001B " },    # next layout
@@ -159,7 +167,7 @@ bindings = [
   { key = "Enter", mods = "Command", action = "ToggleSimpleFullscreen" },
 ]
 
-# Cmd+C, Cmd+V, Cmd+N, Cmd+Q, Cmd+H, Cmd+M and the font-size chords are left
+# Cmd+C, Cmd+V, Cmd+Q, Cmd+H, Cmd+M and the font-size chords are left
 # at their Alacritty defaults. Copy-mode yanks reach the macOS clipboard via
 # OSC 52 (`terminal.osc52` defaults to "OnlyCopy") plus tmux's set-clipboard.
 #

@@ -1,0 +1,5 @@
+#!/bin/sh
+# commit-msg: the leak check over the commit message (see pre-push). Skipped on a machine that has no check.
+check="$HOME/.local/bin/leakcheck"
+[ -x "$check" ] || exit 0
+exec "$check" --message "$1"

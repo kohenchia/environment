@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""herdr-space: the two things herdr itself cannot do for the work window.
+
+    herdr-space move up|down    move the focused space one place (bound to Cmd+Ctrl+Shift+Up/Down)
+    herdr-space sync [--hours N] [--dry-run]
+                                one space per project for every Claude session that needs you, is working,
+                                or finished in the last N hours (default 48); idempotent (run by `tw`)
+
+A session belongs to a project by the first number of 3 or more digits in its name (so every session about
+PR 2398 shares one space), else by the repository of its working directory (a worktree
+~/github/<repo>-wt/<branch> counts as <repo>), else by the directory's name. Stella's own session is the
+space `stella`. A window is named after its session and runs `claude attach <id>`; a finished session's
+window shows its log first and attaches only when you press Enter (attaching starts a host process).
+Spaces and windows that already exist are left alone, never closed or renamed.
+
+Standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+HOME = Path.home()
+GITHUB = HOME / "github"
+STELLA_SPACE = "stella"
+STELLA_SESSION = "stella"
+LIVE = ("blocked", "working")  # a session in these states always gets a window
+
+
+def run(*cmd: str) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+
+
+def socket_path() -> str:
+    env = os.environ.get("HERDR_SOCKET_PATH")
+    if env:
+        return env
+    p = run("herdr", "session", "list", "--json")
+    try:
+        return next(s["socket_path"] for s in json.loads(p.stdout)["sessions"] if s.get("default"))
+    except (ValueError, KeyError, TypeError, StopIteration):
+        sys.exit("herdr-space: no herdr server answers (start it with `tw`)")
+
+
+def rpc(method: str, params: dict) -> dict:
+    req = {"id": "herdr-space", "method": method, "params": params}
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+        c.settimeout(5)
+        c.connect(socket_path())
+        c.sendall((json.dumps(req, separators=(",", ":")) + "\n").encode())
+        buf = b""
+        while b"\n" not in buf:
+            chunk = c.recv(65536)
+            if not chunk:
+                break
+            buf += chunk
+    reply = json.loads(buf.split(b"\n", 1)[0])
+    if reply.get("error") is not None:
+        sys.exit(f"herdr-space: {method}: {reply['error']}")
+    return reply.get("result") or {}
+
+
+def spaces() -> list[dict]:
+    """The workspaces in display order: each has workspace_id, label and focused."""
+    return rpc("workspace.list", {}).get("workspaces", [])
+
+
+# ---------------------------------------------------------------- move
+
+def move(direction: str) -> None:
+    ws = spaces()
+    here = next((i for i, w in enumerate(ws) if w.get("focused")), None)
+    if here is None:
+        return
+    to = here - 1 if direction == "up" else here + 1
+    if 0 <= to < len(ws):
+        rpc("workspace.move", {"workspace_id": ws[here]["workspace_id"], "insert_index": to})
+
+
+# ---------------------------------------------------------------- sync
+
+def agents() -> list[dict]:
+    p = run("claude", "agents", "--json", "--all")
+    try:
+        return [a for a in json.loads(p.stdout) if a.get("kind") == "background"]
+    except ValueError:
+        sys.exit(f"herdr-space: claude agents --json failed: {(p.stderr or p.stdout).strip()[-200:]}")
+
+
+def finished_at(sid: str) -> float:
+    try:
+        return (HOME / ".claude/jobs" / sid / "state.json").stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def project_of(a: dict) -> str:
+    name = a.get("name") or ""
+    if name == STELLA_SESSION:
+        return STELLA_SPACE
+    m = re.search(r"\d{3,}", name)
+    if m:
+        return m.group(0)
+    cwd = Path(a.get("cwd") or HOME)
+    try:
+        top = cwd.relative_to(GITHUB).parts[0]
+    except (ValueError, IndexError):
+        return cwd.name or "home"
+    return top[:-3] if top.endswith("-wt") else top
+
+
+def attach_cmd(a: dict) -> str:
+    sid = a["id"]
+    if a.get("state") in LIVE or a.get("name") == STELLA_SESSION:
+        return f"claude attach {sid}"
+    return (f"claude logs {sid} | less -R +G; printf '\\nfinished: Enter attaches (it starts a host process) '; "
+            f"read; claude attach {sid}")
+
+
+def find_ids(x, keys: tuple[str, ...]) -> dict[str, str]:
+    """{id: label} for every dict in a herdr reply that has one of `keys` as id and a label."""
+    found: dict[str, str] = {}
+
+    def walk(y):
+        if isinstance(y, dict):
+            ident = next((y[k] for k in keys if isinstance(y.get(k), str)), None)
+            label = y.get("label") or y.get("custom_name")
+            if ident and isinstance(label, str):
+                found[ident] = label
+            for v in y.values():
+                walk(v)
+        elif isinstance(y, list):
+            for v in y:
+                walk(v)
+
+    walk(x)
+    return found
+
+
+def herdr_json(*args: str) -> dict:
+    p = run("herdr", *args)
+    if p.returncode != 0:
+        sys.exit(f"herdr-space: herdr {' '.join(args)}: {(p.stderr or p.stdout).strip()[-200:]}")
+    try:
+        return json.loads(p.stdout)
+    except ValueError:
+        return {}
+
+
+def sync(hours: float, dry: bool) -> None:
+    cutoff = time.time() - hours * 3600
+    wanted: dict[str, list[dict]] = {}
+    for a in agents():
+        if a.get("state") in LIVE or a.get("name") == STELLA_SESSION or (
+                a.get("state") == "done" and finished_at(a["id"]) >= cutoff):
+            wanted.setdefault(project_of(a), []).append(a)
+    # Stella first, then the projects with sessions that need you, then the rest
+    order = sorted(wanted, key=lambda k: (k != STELLA_SPACE,
+                                          not any(a.get("state") == "blocked" for a in wanted[k]), k))
+    existing = {label: wid for wid, label in find_ids(herdr_json("workspace", "list"), ("workspace_id", "id")).items()}
+    for project in order:
+        sessions = sorted(wanted[project], key=lambda a: (a.get("name") or "", a["id"]))
+        cwd = sessions[0].get("cwd") or str(HOME)
+        wid = existing.get(project)
+        tabs = {} if not wid else {v: k for k, v in find_ids(
+            herdr_json("tab", "list", "--workspace", wid), ("tab_id", "id")).items()}
+        pending = [a for a in sessions if (a.get("name") or a["id"][:8]) not in tabs]
+        if not pending:
+            continue
+        print(f"{project}: {'+ ' + ', '.join(a.get('name') or a['id'][:8] for a in pending)}")
+        if dry:
+            continue
+        for a in pending:
+            label = a.get("name") or a["id"][:8]
+            if not wid:
+                res = herdr_json("workspace", "create", "--label", project, "--cwd", cwd, "--no-focus").get("result", {})
+                wid = res["workspace"].get("workspace_id") or res["workspace"]["id"]
+                tab = res["tab"].get("tab_id") or res["tab"]["id"]
+                pane = res["root_pane"]["pane_id"]
+                run("herdr", "tab", "rename", tab, label)
+            else:
+                res = herdr_json("tab", "create", "--workspace", wid, "--label", label, "--cwd",
+                                 a.get("cwd") or cwd, "--no-focus").get("result", {})
+                pane = res["root_pane"]["pane_id"]
+            run("herdr", "pane", "run", pane, attach_cmd(a))
+    if not dry:
+        # leave Stella's space first, in the order above, after the spaces you had already
+        labels = {w.get("label"): w["workspace_id"] for w in spaces()}
+        if STELLA_SPACE in labels:
+            rpc("workspace.move", {"workspace_id": labels[STELLA_SPACE], "insert_index": 0})
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(prog="herdr-space")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    m = sub.add_parser("move")
+    m.add_argument("direction", choices=["up", "down"])
+    s = sub.add_parser("sync")
+    s.add_argument("--hours", type=float, default=48)
+    s.add_argument("--dry-run", action="store_true")
+    args = ap.parse_args()
+    if args.cmd == "move":
+        move(args.direction)
+    else:
+        sync(args.hours, args.dry_run)
+
+
+if __name__ == "__main__":
+    main()

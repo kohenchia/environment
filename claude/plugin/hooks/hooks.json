@@ -1,8 +1,5 @@
 {
   "hooks": {
-    "Stop": [{"hooks": [{"type": "command", "command": "python3 \"$HOME/github/environment/claude/bin/kc-hook\" stop", "timeout": 15}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "python3 \"$HOME/github/environment/claude/bin/kc-hook\" prompt", "timeout": 15}]}],
     "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "python3 \"$HOME/github/environment/claude/bin/kc-hook\" pretool", "timeout": 15}]}]
-  },
-  "modules": ["./stella-calm.tsx"]
+  }
 }
