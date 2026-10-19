@@ -48,14 +48,14 @@ def chord(mods: str, key: str) -> str:
 
 
 def alacritty_bindings() -> list[tuple[str, str | None, str]]:
-    """[(chord, herdr key or None, comment)] for every binding with a Command or Control modifier that sends bytes."""
+    """[(chord, herdr key or None, comment)] for every binding that has a Command modifier and sends bytes."""
     out = []
     try:
         lines = ALACRITTY.read_text().splitlines()
     except OSError:
         return out
     for ln in lines:
-        m = re.search(r'key = "([^"]+)",\s*mods = "([^"]*(?:Command|Control)[^"]*)",\s*chars = "((?:[^"\\]|\\.)*)"\s*\},?\s*(?:#\s*(.*))?', ln)
+        m = re.search(r'key = "([^"]+)",\s*mods = "([^"]*Command[^"]*)",\s*chars = "((?:[^"\\]|\\.)*)"\s*\},?\s*(?:#\s*(.*))?', ln)
         if not m:
             continue
         chars = m.group(3).encode().decode("unicode_escape")

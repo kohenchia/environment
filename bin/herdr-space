@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """herdr-space: the one thing herdr itself cannot do for the work window.
 
-    herdr-space move up|down    move the focused space one place (bound to Ctrl+Opt+Shift+K / J)
+    herdr-space move up|down    move the focused space one place (bound to Cmd+Ctrl+Shift+K / J)
 
 herdr has actions to create, walk, rename and close spaces, but none to reorder one, so this sends herdr's
 `workspace.move_block` over its control socket. Everything else in the left column is herdr's own.

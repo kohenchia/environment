@@ -398,7 +398,7 @@ LINKS=(
     # from ~/.claude/kc-extensions/ at the end). See docs/claude-code.md.
     "claude/CLAUDE.md|$HOME/.claude/CLAUDE.md"
     # `stella` opens Stella's permanent session, `kc-env` lists every command, skill and background
-    # process, `kc-keys` every key binding, `herdr-space` moves a space (Ctrl+Opt+Shift+K / J).
+    # process, `kc-keys` every key binding, `herdr-space` moves a space (Cmd+Ctrl+Shift+K / J).
     "bin/stella|$HOME/.local/bin/stella"
     "bin/kc-env|$HOME/.local/bin/kc-env"
     "bin/kc-keys|$HOME/.local/bin/kc-keys"

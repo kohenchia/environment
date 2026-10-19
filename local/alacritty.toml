@@ -7,7 +7,7 @@
 #
 #     Cmd+1           →  ESC 1        →  tmux M-1        →  select-window 1
 #     Cmd+D           →  ESC d        →  tmux M-d        →  split-window -h
-#     Ctrl+Shift+Left →  CSI 1;3D     →  tmux M-Left     →  select-pane -L
+#     Cmd+Shift+Left →  CSI 1;3D     →  tmux M-Left     →  select-pane -L
 #
 # This is safe *because* `option_as_alt = "None"`: the physical Option key
 # never emits ESC-prefixed bytes, so an `M-<key>` arriving at tmux can only
@@ -99,45 +99,45 @@ bindings = [
   { key = "R", mods = "Command", chars = "\u001Br" },          # rename pane
 
   # ── Layers ──────────────────────────────────────────────────────────────
-  # Cmd is for doing things (new, close, rename, split, zoom, clear, copy) and for jumping straight to
-  # window N. Moving around and moving things use Ctrl, with the same keys for every component:
+  # Cmd alone does things (new, close, rename, split, zoom, clear, copy) and jumps straight to window N.
+  # Cmd+Shift goes to a pane, window or space; Cmd+Ctrl+Shift moves it. The same keys for every component:
   #
-  #                    go to (Ctrl+Shift)        move it (Ctrl+Opt+Shift)
+  #                    go to (Cmd+Shift)         move it (Cmd+Ctrl+Shift)
   #     pane           arrows: focus             arrows: swap with the neighbour
   #     window (tab)   [ previous, ] next        [ left, ] right
   #     space          k up, j down              k up, j down
   #
-  # The bytes sent are unchanged from the Cmd days, so tmux and herdr read them as before. With Shift
+  # The bytes sent are the same as before the layers were reorganised, so tmux and herdr read them unchanged. With Shift
   # held, the bracket keys report as the shifted character, so the key names are { and }.
 
   # ── Panes ───────────────────────────────────────────────────────────────
-  { key = "ArrowLeft",   mods = "Control|Shift", chars = "\u001B[1;3D" },
-  { key = "ArrowRight",  mods = "Control|Shift", chars = "\u001B[1;3C" },
-  { key = "ArrowUp",     mods = "Control|Shift", chars = "\u001B[1;3A" },
-  { key = "ArrowDown",   mods = "Control|Shift", chars = "\u001B[1;3B" },
+  { key = "ArrowLeft",   mods = "Command|Shift", chars = "\u001B[1;3D" },
+  { key = "ArrowRight",  mods = "Command|Shift", chars = "\u001B[1;3C" },
+  { key = "ArrowUp",     mods = "Command|Shift", chars = "\u001B[1;3A" },
+  { key = "ArrowDown",   mods = "Command|Shift", chars = "\u001B[1;3B" },
 
-  { key = "ArrowLeft",   mods = "Control|Option|Shift", chars = "\u001B[1;6D" },
-  { key = "ArrowRight",  mods = "Control|Option|Shift", chars = "\u001B[1;6C" },
-  { key = "ArrowUp",     mods = "Control|Option|Shift", chars = "\u001B[1;6A" },
-  { key = "ArrowDown",   mods = "Control|Option|Shift", chars = "\u001B[1;6B" },
+  { key = "ArrowLeft",   mods = "Command|Control|Shift", chars = "\u001B[1;6D" },
+  { key = "ArrowRight",  mods = "Command|Control|Shift", chars = "\u001B[1;6C" },
+  { key = "ArrowUp",     mods = "Command|Control|Shift", chars = "\u001B[1;6A" },
+  { key = "ArrowDown",   mods = "Command|Control|Shift", chars = "\u001B[1;6B" },
 
   { key = "D", mods = "Command", chars = "\u001Bd" },          # split right
   { key = "D", mods = "Command|Shift", chars = "\u001BD" },    # split down
 
   # ── Windows (tmux: tabs) ────────────────────────────────────────────────
-  { key = "{", mods = "Control|Shift", chars = "\u001B[1;4D" },
-  { key = "}", mods = "Control|Shift", chars = "\u001B[1;4C" },
-  { key = "{", mods = "Control|Option|Shift", chars = "\u001B[1;8D" },
-  { key = "}", mods = "Control|Option|Shift", chars = "\u001B[1;8C" },
+  { key = "{", mods = "Command|Shift", chars = "\u001B[1;4D" },
+  { key = "}", mods = "Command|Shift", chars = "\u001B[1;4C" },
+  { key = "{", mods = "Command|Control|Shift", chars = "\u001B[1;8D" },
+  { key = "}", mods = "Command|Control|Shift", chars = "\u001B[1;8C" },
 
   # ── Spaces (herdr: one per project; tmux has no spaces, so these do nothing there) ──
-  { key = "K", mods = "Control|Shift", chars = "\u001B[1;7A" },
-  { key = "J", mods = "Control|Shift", chars = "\u001B[1;7B" },
-  { key = "K", mods = "Control|Option|Shift", chars = "\u001B[1;8A" },
-  { key = "J", mods = "Control|Option|Shift", chars = "\u001B[1;8B" },
+  { key = "K", mods = "Command|Shift", chars = "\u001B[1;7A" },
+  { key = "J", mods = "Command|Shift", chars = "\u001B[1;7B" },
+  { key = "K", mods = "Command|Control|Shift", chars = "\u001B[1;8A" },
+  { key = "J", mods = "Command|Control|Shift", chars = "\u001B[1;8B" },
   { key = "N", mods = "Command", chars = "\u001Bn" },                 # new space
   { key = "W", mods = "Command|Control", chars = "\u001B\u0017" },    # close space (Ctrl+Alt+W)
-  { key = "R", mods = "Command|Option|Shift", chars = "\u001B\u0012" },    # rename space (Ctrl+Alt+R)
+  { key = "R", mods = "Command|Control|Shift", chars = "\u001B\u0012" },    # rename space (Ctrl+Alt+R)
 
   { key = "Enter", mods = "Command|Shift", chars = "\u001Bz" },    # zoom
   { key = "Space", mods = "Command|Shift", chars = "\u001B " },    # next layout
