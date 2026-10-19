@@ -21,11 +21,12 @@ they win).
 | `/kc-tutorial` | A tutorial or explainer in the vault |
 | `/kc-log` | The daily log in the vault |
 
-- **Stella** is my personal assistant, in a permanent session of her own (`stella`). I watch my sessions myself, so
-  she reports one number only (how many are waiting for me). She answers a waiting session from my canon when it
-  settles the question with certainty, learns my preferences, keeps the daily log, my priorities and an audit of
-  my memories and instructions in files I read when I want, and starts a session in a new space for a task I give
-  her. Her manual is her agent file, which only her session loads. `kc-env` lists every command, skill and
+- **Stella** is my personal assistant and overall agent manager, in a permanent session of her own (`stella`). I watch
+  my sessions myself, so every turn of hers ends with my priorities and a table of the sessions waiting on me with how
+  many tasks each has for me. She answers a waiting session from my canon when it settles the question with certainty,
+  tells a session that stopped on an API error to continue, learns my preferences, keeps the daily log, my priorities
+  and an audit of my memories and instructions in files I read when I want, and starts a session in a new space for
+  a task I give her. Her manual is her agent file, which only her session loads. `kc-env` lists every command, skill and
   background process of this environment.
 - **A session starts another session or space** with `kc-new`, because its own sandbox cannot run `claude` or reach
   herdr: it writes `$CLAUDE_JOB_DIR/tmp/kc-new.json` (`space`, `dir`, `name`, `prompt`) and runs
@@ -74,6 +75,21 @@ approach works and another doesn't — **show a concrete example**, don't only d
   then end with a one-line takeaway of *why* it works.
 
 Lead with the picture, keep prose short, and save `file:line` evidence for after the explanation.
+
+## End of a turn: what waits on me
+
+When a turn ends with anything for me, show it as **one table**, never two lists one after another. One row per item,
+mine first; the `Who acts` column separates what only I can do from what waits on someone else. A PR I authored is
+approved by someone else, so a review of it is never my action: it is a row for the reviewer.
+
+| # | Item | Who acts |
+|---|---|---|
+| 1 | Decide whether PR 41 may merge without the real launch its review calls blocking | You |
+| 2 | https://git.example.com/org/repo/pull/52 needs an approving review | Reviewer (none requested yet) |
+| 3 | https://git.example.com/org/repo/pull/57 waits on its checks, then merges | CI |
+
+Every PR and ticket is a full link. When nothing is open, one line says so. No block, banner or heading goes after
+the table.
 
 ## Secrets
 
