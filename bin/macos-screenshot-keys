@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""macos-screenshot-keys: make the plain screenshot shortcuts copy to the clipboard, and the Ctrl ones save a file.
+
+    macos-screenshot-keys           set the four shortcuts (run by setup.sh on macOS)
+    macos-screenshot-keys --check   report whether they are set; exit 1 if not
+
+macOS has a pair of shortcuts for each capture. By default the plain one saves a file and the Ctrl one copies to the
+clipboard. A file's path is no use to a background Claude session when the file is the floating thumbnail's temp file
+(it cannot open that folder), but a clipboard image pastes with Ctrl+V anywhere. So the pair is swapped:
+
+    Cmd+Shift+3        whole screen  -> clipboard      Cmd+Ctrl+Shift+3   whole screen  -> file
+    Cmd+Shift+4        selected area -> clipboard      Cmd+Ctrl+Shift+4   selected area -> file
+
+The shortcuts live in com.apple.symbolichotkeys (ids 28-31). A shortcut that was never changed has no entry there,
+so the defaults are written out explicitly. Standard library only.
+"""
+
+from __future__ import annotations
+
+import os
+import plistlib
+import subprocess
+import sys
+
+DOMAIN = "com.apple.symbolichotkeys"
+ACTIVATE = "/System/Library/PrivateFrameworks/SystemAdministration.framework/Resources/activateSettings"
+
+CMD, CTRL, SHIFT = 1048576, 262144, 131072
+PLAIN, WITH_CTRL = CMD | SHIFT, CMD | CTRL | SHIFT
+
+# id -> (what it does, ASCII code of the key, macOS key code, modifiers it is set to here)
+SHORTCUTS = {
+    29: ("whole screen to the clipboard", 51, 20, PLAIN),
+    31: ("selected area to the clipboard", 52, 21, PLAIN),
+    28: ("whole screen to a file", 51, 20, WITH_CTRL),
+    30: ("selected area to a file", 52, 21, WITH_CTRL),
+}
+
+
+def current() -> dict:
+    """The hotkeys macOS has written down; one never changed is absent."""
+    out = subprocess.run(["defaults", "export", DOMAIN, "-"], capture_output=True)
+    if out.returncode != 0 or not out.stdout:
+        return {}
+    return plistlib.loads(out.stdout).get("AppleSymbolicHotKeys", {})
+
+
+def drift(hotkeys: dict) -> list[int]:
+    """The ids whose entry is not what this sets: missing (it would be the default, which is the other way round),
+    disabled, or on other keys."""
+    wrong = []
+    for hid, (_, ascii_code, key_code, mods) in SHORTCUTS.items():
+        entry = hotkeys.get(str(hid)) or {}
+        params = list((entry.get("value") or {}).get("parameters") or [])
+        if not entry.get("enabled") or params != [ascii_code, key_code, mods]:
+            wrong.append(hid)
+    return wrong
+
+
+def entry_xml(hid: int) -> str:
+    _, ascii_code, key_code, mods = SHORTCUTS[hid]
+    return (f"<dict><key>enabled</key><true/><key>value</key><dict><key>parameters</key>"
+            f"<array><integer>{ascii_code}</integer><integer>{key_code}</integer><integer>{mods}</integer></array>"
+            f"<key>type</key><string>standard</string></dict></dict>")
+
+
+def apply(ids: list[int]) -> None:
+    for hid in ids:
+        subprocess.run(["defaults", "write", DOMAIN, "AppleSymbolicHotKeys", "-dict-add", str(hid), entry_xml(hid)],
+                       check=True)
+    # Without this the new keys take effect only after the next login.
+    if os.access(ACTIVATE, os.X_OK):
+        subprocess.run([ACTIVATE, "-u"], check=False)
+
+
+def main() -> int:
+    check = "--check" in sys.argv[1:]
+    if sys.argv[1:] not in ([], ["--check"]):
+        print(__doc__)
+        return 2
+    if sys.platform != "darwin":
+        print("macos-screenshot-keys: not macOS, nothing to do")
+        return 0
+    wrong = drift(current())
+    if check:
+        for hid in wrong:
+            print(f"not set: {SHORTCUTS[hid][0]}")
+        return 1 if wrong else 0
+    if not wrong:
+        print("screenshot shortcuts already set")
+        return 0
+    apply(wrong)
+    print("screenshot shortcuts set: " + ", ".join(SHORTCUTS[h][0] for h in wrong))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

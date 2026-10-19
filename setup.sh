@@ -474,6 +474,16 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
     # machine's own check; a machine without it cannot push). See docs/claude-code.md.
     git -C "${REPO_DIR}" config core.hooksPath githooks
 
+    # macOS: the plain screenshot shortcuts copy to the clipboard and the Ctrl ones save a file (bin/macos-screenshot-keys
+    # says why). Idempotent, and it only touches those four shortcuts.
+    if [[ "$OS" == macos ]]; then
+        if shot_out="$("${REPO_DIR}/bin/macos-screenshot-keys" 2>&1)"; then
+            info "$shot_out"
+        else
+            warn "Could not set the screenshot shortcuts: $shot_out"
+        fi
+    fi
+
     # The `kc` plugin carries the hook every session runs (claude/plugin). A
     # directory marketplace, so the hooks.json in this repo is what gets installed;
     # after changing it, run `claude plugin update kc@kc-local`.
@@ -573,6 +583,15 @@ if [[ $CHECK_ONLY -eq 1 ]]; then
             FAILED=1
         else
             info "zsh -i starts clean"
+        fi
+    fi
+
+    if [[ "$OS" == macos ]]; then
+        if "${REPO_DIR}/bin/macos-screenshot-keys" --check >/dev/null 2>&1; then
+            info "screenshot shortcuts: plain copies to the clipboard, Ctrl saves a file"
+        else
+            err "screenshot shortcuts not set (run ./setup.sh)"
+            FAILED=1
         fi
     fi
 

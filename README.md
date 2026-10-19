@@ -80,6 +80,8 @@ environment/bin/h            →  ~/.local/bin/h
 
 On macOS only, `local/alacritty.toml` is linked to `~/.config/alacritty/alacritty.toml` — see [tmux Workspace](docs/tmux.md). `iterm/com.googlecode.iterm2.plist` is an optional macOS extra that is never linked; load it from iTerm2 via *Settings → General → Preferences → Load preferences from a custom folder*.
 
+Also on macOS, `setup.sh` swaps the screenshot shortcuts (`bin/macos-screenshot-keys`): `Cmd+Shift+3` and `Cmd+Shift+4` copy to the clipboard, and `Cmd+Ctrl+Shift+3` and `Cmd+Ctrl+Shift+4` save a file. A clipboard image pastes into a Claude prompt with `Ctrl+V` even in a background session, where the floating thumbnail's temp file cannot be opened. `./setup.sh --check` reports whether they are set.
+
 VS Code settings are also linked, to a platform-specific path — see [VS Code Configuration](docs/vscode.md).
 
 After running `setup.sh`, open a new terminal to load the configuration. Run `p10k configure` to customize your Powerlevel10k prompt.
