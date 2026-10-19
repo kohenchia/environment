@@ -101,9 +101,22 @@ def label(action: str) -> str:
     return action.replace("_", " ").replace("workspace", "space").replace("tab", "window")
 
 
+GROUPS = ["Panes", "Windows", "Spaces", "Other"]
+
+
+def group_of(what: str) -> str:
+    """The component an action works on, from its words: a space, a window, or (zoom, layout, copy, clear) a pane."""
+    words = what.replace("(none in herdr)", "").split()
+    for name, hints in (("Spaces", ("space",)), ("Windows", ("window", "tab")),
+                        ("Panes", ("pane", "split", "zoom", "layout", "copy", "clear"))):
+        if any(w in hints or w.rstrip("s") in hints for w in words):
+            return name
+    return "Other"
+
+
 def main() -> None:
     direct, prefixed = herdr_actions()
-    rows = []
+    grouped: dict[str, list[tuple[str, str]]] = {g: [] for g in GROUPS}
     for ch, hk, comment in alacritty_bindings():
         if hk is None:
             continue  # sends bytes to the shell (line editing, word movement): not a window key
@@ -111,17 +124,25 @@ def main() -> None:
             hk_action = direct.get("alt+1..9", "")
         else:
             hk_action = direct.get(hk, "")
-        what = label(hk_action) if hk_action else f"(none in herdr){'  ' + comment if comment else ''}"
         if ch in ("Cmd+2", "Cmd+3", "Cmd+4", "Cmd+5", "Cmd+6", "Cmd+7", "Cmd+8", "Cmd+9"):
             continue
-        rows.append(("Cmd+1…9" if ch == "Cmd+1" else ch, "go to window 1…9" if ch == "Cmd+1" else what))
-    w = max([len(c) for c, _ in rows] + [10])
-    print("\033[1mChords (Cmd = what you press; herdr action = what it does)\033[0m")
-    for c, a in rows:
-        print(f"  {c:<{w}}  {a}")
-    print("\n\033[1mPrefix keys (C-b, then the key)\033[0m")
+        if ch == "Cmd+1":
+            ch, what = "Cmd+1…9", "go to window 1…9"
+        elif hk_action:
+            what = label(hk_action)
+        else:
+            what = f"(none in herdr){'  ' + label(comment) if comment else ''}"
+        grouped[group_of(what)].append((ch, what))
     for b, a in prefixed:
-        print(f"  {b:<{w}}  {label(a)}")
+        grouped[group_of(label(a))].append((b, label(a)))
+    w = max([len(c) for rows in grouped.values() for c, _ in rows] + [10])
+    print("\033[1mKeys by component\033[0m (Cmd chords reach herdr through Alacritty; C-b is herdr's prefix, then the key)")
+    for g in GROUPS:
+        if not grouped[g]:
+            continue
+        print(f"\n\033[1m{g}\033[0m")
+        for c, a in grouped[g]:
+            print(f"  {c:<{w}}  {a}")
     print("\nFiles: ~/.config/alacritty/alacritty.toml (the chords), ~/.config/herdr/config.toml (the actions)")
 
 

@@ -22,7 +22,7 @@ Starts the herdr server if needed and Stella's session if she is not running, th
 
 ## Keys
 
-`kc-keys` prints every binding, read from the config files (`local/herdr.toml`). Alacritty turns each Cmd chord into an ESC string (`local/alacritty.toml`) that herdr reads as
+`kc-keys` prints every binding grouped by component (panes, windows, spaces), read from the config files (`local/herdr.toml`). Alacritty turns each Cmd chord into an ESC string (`local/alacritty.toml`) that herdr reads as
 an `alt+…` chord, so the chords from the tmux days carry over unchanged.
 
 | What | Chord |
