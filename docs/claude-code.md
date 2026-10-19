@@ -47,7 +47,8 @@ herdr (see `herdr.md`).
 
 A personal assistant in a permanent background session named `stella`, started in `~/.local/share/stella` with the
 `stella` agent. `stella` opens it (starting it if needed), `stella start` only starts it, `stella restart` reloads
-her manual. She automates routine operations and does not manage other sessions: a daily log of every project
+her manual. She automates routine operations, starts a session in a space (through `kc-new`) for a task Kohen gives her, and does
+not otherwise manage other sessions: a daily log of every project
 worked on (`/kc-log day`), a weekly audit of memories, instructions and skills, Kohen's priorities from their Slack,
 answering a waiting session when the canon settles it, and learning preferences into proposals for skills and
 canon. Her manual, memory files and routines are in her agent file; no other session loads it. Her routines are

@@ -23,7 +23,8 @@ they win).
 
 - **Stella** is my personal assistant, in a permanent session of her own (`stella`). She automates routine
   operations (the daily log, audits of my memories and instructions, my priorities, answering a waiting
-  session from my canon) and does not manage other sessions. Her manual is her agent file, which only her
+  session from my canon), starts a session in a new space for a task I give her, and does not otherwise manage
+  other sessions. Her manual is her agent file, which only her
   session loads. `kc-env` lists every command, skill and background process of this environment.
 - **A session starts another session or space** with `kc-new`, because its own sandbox cannot run `claude` or reach
   herdr: it writes `$CLAUDE_JOB_DIR/tmp/kc-new.json` (`space`, `dir`, `name`, `prompt`) and runs
