@@ -61,7 +61,7 @@ without any prefix:
 ```
 Cmd+1         →  ESC 1      →  tmux sees M-1     →  select-window -t 1
 Cmd+D         →  ESC d      →  tmux sees M-d     →  split-window -h
-Cmd+Opt+Left  →  CSI 1;3D   →  tmux sees M-Left  →  select-pane -L
+Ctrl+Shift+Left →  CSI 1;3D  →  tmux sees M-Left  →  select-pane -L
 ```
 
 This is collision-free because `window.option_as_alt = "None"` (Alacritty's macOS default): the
@@ -84,9 +84,8 @@ the normal way.
 | `Cmd+1` … `Cmd+9` | Jump to tab 1–9 |
 | `Cmd+0` | Last used tab (not "tab 10") |
 | `Cmd+T` | New tab in the same directory, named after it |
-| `Cmd+Shift+[` / `]` | Previous / next tab |
-| `Cmd+Shift+←` / `→` | Previous / next tab (same thing, arrow form) |
-| `Cmd+Ctrl+Shift+←` / `→` | Move the current tab left / right |
+| `Ctrl+Shift+[` / `]` | Previous / next tab |
+| `Ctrl+Opt+Shift+[` / `]` | Move the current tab left / right |
 | `Cmd+Shift+R` | Rename the tab |
 | `Cmd+Shift+W` | Close the tab (asks first) |
 
@@ -100,9 +99,8 @@ can never retitle your project tab. `renumber-windows` is on, so closing a tab r
 |---|---|
 | `Cmd+D` | Split right |
 | `Cmd+Shift+D` | Split down |
-| `Cmd+Shift+←↑↓→` | Move focus between panes |
-| `Cmd+Opt+←↑↓→` | Move the pane itself in that direction |
-| `Cmd+Ctrl+←↑↓→` | Resize the pane (hold to keep resizing) |
+| `Ctrl+Shift+←↑↓→` | Move focus between panes |
+| `Ctrl+Opt+Shift+←↑↓→` | Move the pane itself in that direction |
 | `Cmd+Shift+Enter` | Zoom the pane in / out |
 | `Cmd+Shift+Space` | Cycle pane layouts |
 | `Cmd+R` | Rename the pane (sets the border label) |
@@ -421,7 +419,7 @@ notification permission. If neither appears, Claude isn't belling: confirm `pref
 
 ## Rearranging panes
 
-`Cmd+Opt+←↑↓→` swaps the current pane with its neighbour in that direction, and the focus travels
+`Ctrl+Opt+Shift+←↑↓→` swaps the current pane with its neighbour in that direction, and the focus travels
 with it, so you can walk a pane across the layout by holding the chord's direction. It's built on
 tmux's positional pane targets (`swap-pane -t '{left-of}'`), not the older `swap-pane -U`/`-D`, which
 only step through pane *index* order and so don't match what you see on screen.
@@ -483,9 +481,8 @@ Dragging a pane border with the mouse resizes it; that works out of the box with
   `M-d`, `M-k`, `M-f`, `M-w`, `M-t`, `M-z` and `M-arrows` are unavailable to programs inside tmux.
   The set avoids everything zsh, vim, and Claude Code rely on (`Shift+Tab`, `Esc`, `C-c`, `C-r`,
   `C-l` all pass through untouched).
-- **`Cmd+Shift+[` / `]`** are bound as the key names `{` and `}`, because macOS reports the *shifted*
-  character when Shift is held — the same way a letter binding uses `"D"` rather than `"d"`. The
-  arrow forms (`Cmd+Shift+←` / `→`) emit identical bytes, so both chords share one tmux binding.
+- **`Ctrl+Shift+[` / `]`** are bound as the key names `{` and `}`, because macOS reports the *shifted*
+  character when Shift is held — the same way a letter binding uses `"D"` rather than `"d"`.
 - **Nerd Font.** `alacritty.toml` sets no font family — naming a font that isn't installed is a hard
   config error. Powerlevel10k's glyphs need a Nerd Font; install one and set `font.normal.family`.
 

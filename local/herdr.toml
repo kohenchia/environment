@@ -1,8 +1,9 @@
 # herdr: the terminal multiplexer for the work window. Linked by setup.sh to ~/.config/herdr/config.toml.
 # A space (herdr: workspace) per project; a window (herdr: tab) per session or tool; panes inside a window.
 #
-# Keys: Alacritty turns each Cmd chord into an ESC byte string (local/alacritty.toml), which herdr reads as an
-# alt+... chord, so every Cmd chord from the tmux days carries over as a direct (prefix-free) binding.
+# Keys: Alacritty turns each chord into an ESC byte string (local/alacritty.toml), which herdr reads as an
+# alt+... chord, so every chord from the tmux days carries over as a direct (prefix-free) binding. Cmd does
+# things; Ctrl+Shift goes to a pane, window or space, and Ctrl+Opt+Shift moves it.
 # Cmd+0 (last window), Cmd+Shift+Space (next layout) and Cmd+Shift+B (the nested-tmux off-switch) have no
 # herdr action. docs/herdr.md has the full table.
 
@@ -17,7 +18,7 @@ manifest_check = false
 prefix = "ctrl+b"
 detach = ["prefix+q", "prefix+d"]
 
-# Windows: Cmd+1..9, Cmd+Shift+{ }, Cmd+Ctrl+Shift+Left/Right move one, Cmd+T new, Cmd+Shift+R rename.
+# Windows: Cmd+1..9, Ctrl+Shift+[ / ] previous / next, Ctrl+Opt+Shift+[ / ] move one, Cmd+T new, Cmd+Shift+R rename.
 # Cmd+W closes a pane, and a window goes with its last pane; Cmd+Shift+W closes the window outright.
 switch_tab        = "alt+1..9"
 previous_tab      = "alt+shift+left"
@@ -28,20 +29,18 @@ new_tab           = "alt+t"
 rename_tab        = "alt+shift+r"
 close_tab         = "alt+shift+w"
 
-# Spaces: the Ctrl layer, with Shift meaning "move" as for windows.
+# Spaces: Ctrl+Shift+K / J go to the space above / below, Ctrl+Opt+Shift+K / J move it (the command below).
 #   Cmd+N                 new space (a blank terminal)
-#   Cmd+Ctrl+Up / Down    go to the space above / below
-#   Cmd+Ctrl+Shift+Up/Down move this space up / down (the command below)
 #   Cmd+Ctrl+W            close this space (herdr asks first; its sessions keep running)
-#   Cmd+Ctrl+R            rename this space
+#   Cmd+Opt+Shift+R       rename this space
 new_workspace      = "alt+n"
 previous_workspace = "ctrl+alt+up"
 next_workspace     = "ctrl+alt+down"
 close_workspace    = "ctrl+alt+w"
 rename_workspace   = ["ctrl+alt+r", "prefix+shift+w"]
 
-# Panes: Cmd+D / Cmd+Shift+D split, Cmd+Shift+arrows focus, Cmd+Opt+arrows swap, Cmd+Shift+Enter zoom,
-# Cmd+R rename, Cmd+K clear, Cmd+F search. Resize is C-b and the arrows (Cmd+Ctrl+Up/Down walk the spaces).
+# Panes: Cmd+D / Cmd+Shift+D split, Ctrl+Shift+arrows focus, Ctrl+Opt+Shift+arrows swap, Cmd+Shift+Enter zoom,
+# Cmd+R rename, Cmd+K clear, Cmd+F search. Resize is C-b and the arrows.
 split_vertical    = "alt+d"
 split_horizontal  = "alt+shift+d"
 focus_pane_left   = "alt+left"

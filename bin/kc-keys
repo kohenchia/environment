@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """kc-keys: every key binding of the work window, read from the config files that define them, so it cannot drift.
 
-Alacritty (~/.config/alacritty/alacritty.toml) turns each Cmd chord into an ESC byte string, herdr
+Alacritty (~/.config/alacritty/alacritty.toml) turns each chord into an ESC byte string, herdr
 (~/.config/herdr/config.toml) reads that string as an alt+... chord and runs an action. This joins the two:
 the chord you press, and what it does. Prefix keys (C-b ...) are listed after.
 
@@ -48,14 +48,14 @@ def chord(mods: str, key: str) -> str:
 
 
 def alacritty_bindings() -> list[tuple[str, str | None, str]]:
-    """[(chord, herdr key or None, comment)] for every binding that has a Command modifier and sends bytes."""
+    """[(chord, herdr key or None, comment)] for every binding with a Command or Control modifier that sends bytes."""
     out = []
     try:
         lines = ALACRITTY.read_text().splitlines()
     except OSError:
         return out
     for ln in lines:
-        m = re.search(r'key = "([^"]+)",\s*mods = "([^"]*Command[^"]*)",\s*chars = "((?:[^"\\]|\\.)*)"\s*\},?\s*(?:#\s*(.*))?', ln)
+        m = re.search(r'key = "([^"]+)",\s*mods = "([^"]*(?:Command|Control)[^"]*)",\s*chars = "((?:[^"\\]|\\.)*)"\s*\},?\s*(?:#\s*(.*))?', ln)
         if not m:
             continue
         chars = m.group(3).encode().decode("unicode_escape")
@@ -136,7 +136,7 @@ def main() -> None:
     for b, a in prefixed:
         grouped[group_of(label(a))].append((b, label(a)))
     w = max([len(c) for rows in grouped.values() for c, _ in rows] + [10])
-    print("\033[1mKeys by component\033[0m (Cmd chords reach herdr through Alacritty; C-b is herdr's prefix, then the key)")
+    print("\033[1mKeys by component\033[0m (chords reach herdr through Alacritty; C-b is herdr's prefix, then the key)")
     for g in GROUPS:
         if not grouped[g]:
             continue
