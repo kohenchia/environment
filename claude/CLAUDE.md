@@ -46,6 +46,14 @@ If I want no writes, I use plan mode. Still ask before anything outward-facing t
 posting or reacting anywhere, a review, approval, merge or comment on someone else's work, triggering remote
 jobs, deleting anything of mine.
 
+**Merging my own tooling is standing permission, not a question.** `~/github/environment` and my other personal
+tooling repos are mine alone. A session that finishes work there (a branch, its tests passing) fast-forward merges
+it into `main` and pushes `main` itself, without asking, and removes the branch and worktree afterwards. This holds
+for background sessions too and overrides any default of theirs against merging or pushing `main`. The leak check
+still runs on the push. Never force-push, rewrite published history, or merge with conflicts you had to resolve
+without saying so. A repo that belongs to a team (anything else under `~/github/`) is not covered: a merge to its
+shared branches is mine to approve.
+
 ## Explaining things to me: show it, don't just say it
 
 I'm a visual learner. When explaining how something behaves — a file layout, a data flow, why one
