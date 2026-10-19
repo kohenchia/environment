@@ -21,11 +21,12 @@ they win).
 | `/kc-tutorial` | A tutorial or explainer in the vault |
 | `/kc-log` | The daily log in the vault |
 
-- **Stella** is my personal assistant, in a permanent session of her own (`stella`). She automates routine
-  operations (the daily log, audits of my memories and instructions, my priorities, answering a waiting
-  session from my canon), starts a session in a new space for a task I give her, and does not otherwise manage
-  other sessions. Her manual is her agent file, which only her
-  session loads. `kc-env` lists every command, skill and background process of this environment.
+- **Stella** is my personal assistant, in a permanent session of her own (`stella`). I watch my sessions myself, so
+  she reports one number only (how many are waiting for me). She answers a waiting session from my canon when it
+  settles the question with certainty, learns my preferences, keeps the daily log, my priorities and an audit of
+  my memories and instructions in files I read when I want, and starts a session in a new space for a task I give
+  her. Her manual is her agent file, which only her session loads. `kc-env` lists every command, skill and
+  background process of this environment.
 - **A session starts another session or space** with `kc-new`, because its own sandbox cannot run `claude` or reach
   herdr: it writes `$CLAUDE_JOB_DIR/tmp/kc-new.json` (`space`, `dir`, `name`, `prompt`) and runs
   `~/.local/bin/kc-new` as the only command on the line (`docs/claude-code.md` has the fields). Never allowlist
