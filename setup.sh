@@ -403,6 +403,9 @@ LINKS=(
     "bin/kc-env|$HOME/.local/bin/kc-env"
     "bin/kc-keys|$HOME/.local/bin/kc-keys"
     "bin/herdr-space|$HOME/.local/bin/herdr-space"
+    # `kc-new`: how a session, whose sandbox cannot start `claude` or reach herdr, starts another session in a
+    # space. Needs one allowlist entry, see docs/claude-code.md.
+    "bin/kc-new|$HOME/.local/bin/kc-new"
     # herdr, the terminal multiplexer for the work window (`tw`).
     "local/herdr.toml|$HOME/.config/herdr/config.toml"
 )

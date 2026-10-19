@@ -18,7 +18,7 @@ Alacritty ── herdr (tw)                                  Claude's background
 | The `stella` agent | `claude/agents/stella.md` | `~/.claude/agents/stella.md` |
 | The leak gate | `githooks/pre-push` | `core.hooksPath` of this repo |
 | The guard around it | `claude/plugin/hooks/hooks.json` → `claude/bin/kc-hook` | the `kc@kc-local` plugin |
-| `stella`, `kc-env`, `herdr-space` | `bin/` | `~/.local/bin/` |
+| `stella`, `kc-env`, `kc-keys`, `herdr-space`, `kc-new` | `bin/` | `~/.local/bin/` |
 
 `./setup.sh` links all of it and installs the plugin; re-run it after adding a skill or agent.
 
@@ -64,3 +64,32 @@ durable session crons she recreates at the start of her session.
 | `cag` | The agents view |
 | `cw [name]` | Open a background session here (no name: pick with fzf) |
 | `stella` | Open Stella's session |
+
+## Sessions starting sessions: `kc-new`
+
+A session's shell runs in Claude Code's command sandbox, where `claude` cannot start (it cannot nest a sandbox) and
+herdr's socket cannot be reached. `kc-new` does both on the session's behalf, and it is the only thing that has to
+run outside the sandbox. It takes **no arguments** and trusts nothing it reads, so the sandbox's command allowlist
+can allow it by an exact match.
+
+The session writes a request and then runs `~/.local/bin/kc-new` as the only command:
+
+```
+$CLAUDE_JOB_DIR/tmp/kc-new.json   {"space": "reports", "dir": "~/github/project", "name": "reports-docs",
+                                   "prompt": "the new session's first message"}
+```
+
+| Field | Rule |
+|---|---|
+| `space` | the herdr space for the session's window; made when no space has that name. Letters, digits, space, `.`, `-`, `_`, `#` |
+| `dir` | an existing directory under `~/github` or a directory listed in `~/.config/kc-new/roots` (symlinks resolved first) |
+| `name` | the session's name: lower-case letters, digits, dashes. Default: the space's name |
+| `prompt` | its first message, up to 20,000 characters, passed as one argument, never through a shell |
+
+It starts the session like `cy` would (`claude --bg … --dangerously-skip-permissions`, on the current default
+token), opens a window in the space running `claude attach <id>`, and prints one line. The request is deleted as it
+is read, so a refused one is never retried; the answer is also in `kc-new.result.json` next to it.
+
+The allowlist entry is the machine owner's to add, never a session's. It must be an **exact** match of
+`~/.local/bin/kc-new`: a `contains_match` entry, or an entry for `claude` or `herdr` themselves, would let any
+command containing that word run outside the sandbox.

@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""kc-new: start a new Claude session, in a herdr space, on behalf of a session that cannot do it itself.
+
+A session's shell runs in Claude Code's command sandbox, where `claude` cannot start and herdr's socket cannot be
+reached. This helper is the one thing that is allowed to run outside it (a single exact entry in the sandbox's
+command allowlist), so it takes no arguments and trusts nothing it reads. The session writes a request, then runs
+`~/.local/bin/kc-new` alone:
+
+    $CLAUDE_JOB_DIR/tmp/kc-new.json     {"space": "reports", "dir": "~/github/project",
+                                         "name": "reports-docs", "prompt": "..."}
+
+`space` is the herdr space to put the session's window in (created when none has that name), `dir` the working
+directory (it must be under ~/github or a directory listed in ~/.config/kc-new/roots), `name` the session's name (lower-case, digits, dashes;
+default: the space's), `prompt` its first message. The helper starts the background session like `cy` would,
+opens a window in the space that runs `claude attach <id>`, and prints one line; the result is also written to
+$CLAUDE_JOB_DIR/tmp/kc-new.result.json. It scans every job's tmp directory for requests, oldest first, and
+deletes each request as it reads it, so a bad one is never retried.
+
+Standard library only.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REQUEST = "kc-new.json"
+RESULT = "kc-new.result.json"
+SPACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._#-]{0,60}$")
+NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,48}$")
+MAX_PROMPT = 20_000
+
+
+def home() -> Path:
+    return Path.home()
+
+
+def roots() -> tuple[Path, ...]:
+    """~/github, plus one directory per line of ~/.config/kc-new/roots (a machine adds its own there)."""
+    extra = []
+    try:
+        extra = [Path(ln.strip()).expanduser() for ln in (home() / ".config/kc-new/roots").read_text().splitlines()
+                 if ln.strip() and not ln.lstrip().startswith("#")]
+    except OSError:
+        pass
+    return (home() / "github", *extra)
+
+
+def validate(req) -> dict:
+    """The request with every field checked and normalised, or ValueError with one sentence saying what is wrong."""
+    if not isinstance(req, dict):
+        raise ValueError("the request must be a JSON object")
+    space, name, prompt = req.get("space"), req.get("name"), req.get("prompt")
+    if not isinstance(space, str) or not SPACE.match(space):
+        raise ValueError("space must be 1-61 characters: letters, digits, space, dot, dash, underscore, #")
+    if name is None:
+        name = re.sub(r"[^a-z0-9]+", "-", space.lower()).strip("-")[:49] or "session"
+    if not isinstance(name, str) or not NAME.match(name):
+        raise ValueError("name must be lower-case letters, digits and dashes, 1-49 characters")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > MAX_PROMPT:
+        raise ValueError(f"prompt must be a non-empty string of at most {MAX_PROMPT} characters")
+    raw = req.get("dir")
+    if not isinstance(raw, str):
+        raise ValueError("dir is required")
+    directory = Path(raw).expanduser().resolve()
+    if not directory.is_dir() or not any(r.resolve() in (directory, *directory.parents) for r in roots()):
+        raise ValueError("dir must be an existing directory under ~/github or a root listed in ~/.config/kc-new/roots")
+    return {"space": space, "name": name, "prompt": prompt, "dir": str(directory)}
+
+
+def run(*cmd: str, cwd: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=60)
+
+
+def start_session(req: dict) -> str:
+    """Start the background session (the same flags as `cy`) and return its id."""
+    p = run("claude", "--bg", "-n", req["name"], "--dangerously-skip-permissions", "--", req["prompt"], cwd=req["dir"])
+    if p.returncode != 0:
+        raise RuntimeError(f"claude --bg failed: {(p.stderr or p.stdout).strip()[-200:]}")
+    for _ in range(20):
+        try:
+            rows = json.loads(run("claude", "agents", "--json").stdout)
+        except ValueError:
+            rows = []
+        row = next((r for r in rows if r.get("name") == req["name"] and r.get("kind") == "background"), None)
+        if row:
+            return row["id"]
+        time.sleep(1)
+    raise RuntimeError(f"session {req['name']} did not show up in `claude agents`")
+
+
+def find(x, key: str):
+    """The first value for `key` anywhere in a herdr reply."""
+    if isinstance(x, dict):
+        if key in x:
+            return x[key]
+        for v in x.values():
+            r = find(v, key)
+            if r is not None:
+                return r
+    elif isinstance(x, list):
+        for v in x:
+            r = find(v, key)
+            if r is not None:
+                return r
+    return None
+
+
+def herdr(*args: str) -> dict:
+    p = run("herdr", *args)
+    try:
+        return json.loads(p.stdout)
+    except ValueError:
+        raise RuntimeError(f"herdr {' '.join(args)} failed: {(p.stderr or p.stdout).strip()[-200:] or 'no reply'}")
+
+
+def space_id(label: str) -> str | None:
+    found = None
+
+    def walk(x):
+        nonlocal found
+        if isinstance(x, dict):
+            wid = x.get("workspace_id") or x.get("id")
+            if isinstance(wid, str) and x.get("label") == label and "tab_id" not in x and "pane_id" not in x:
+                found = found or wid
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(herdr("workspace", "list"))
+    return found
+
+
+def place(req: dict, sid: str) -> str:
+    """Open a window running `claude attach <sid>` in the space (made when missing); returns the pane id."""
+    wid = space_id(req["space"])
+    if wid:
+        reply = herdr("tab", "create", "--workspace", wid, "--label", req["name"], "--cwd", req["dir"], "--no-focus")
+    else:
+        reply = herdr("workspace", "create", "--label", req["space"], "--cwd", req["dir"], "--no-focus")
+        tab = find(reply.get("result", {}).get("tab"), "tab_id") or find(reply.get("result", {}).get("tab"), "id")
+        if tab:
+            run("herdr", "tab", "rename", tab, req["name"])
+    pane = find(reply.get("result", {}).get("root_pane"), "pane_id")
+    if not pane:
+        raise RuntimeError("herdr gave no pane for the new window")
+    run("herdr", "pane", "run", pane, f"claude attach {sid}")
+    return pane
+
+
+def handle(request: Path) -> tuple[bool, str]:
+    """Process one request file; returns (succeeded, the line to print). The file is deleted first."""
+    result = request.with_name(RESULT)
+    try:
+        raw = request.read_text()
+    except OSError as e:
+        return False, f"kc-new: cannot read {request}: {e}"
+    request.unlink(missing_ok=True)
+    try:
+        req = validate(json.loads(raw))
+        sid = start_session(req)
+    except (ValueError, RuntimeError) as e:
+        result.write_text(json.dumps({"ok": False, "error": str(e)}))
+        return False, f"kc-new: {e}"
+    try:
+        place(req, sid)
+    except RuntimeError as e:
+        result.write_text(json.dumps({"ok": False, "id": sid, "error": str(e)}))
+        return False, f"kc-new: session {req['name']} ({sid}) started, but no window: {e}. Attach with: claude attach {sid}"
+    result.write_text(json.dumps({"ok": True, "id": sid, "name": req["name"], "space": req["space"]}))
+    return True, f"kc-new: started session {req['name']} ({sid}) in space {req['space']}"
+
+
+def pending() -> list[Path]:
+    jobs = home() / ".claude/jobs"
+    found = [p for p in jobs.glob(f"*/tmp/{REQUEST}") if p.is_file()] if jobs.is_dir() else []
+    return sorted(found, key=lambda p: p.stat().st_mtime)
+
+
+def main() -> None:
+    if len(sys.argv) > 1:
+        sys.exit(__doc__)
+    todo = pending()
+    if not todo:
+        sys.exit("kc-new: no request found: write $CLAUDE_JOB_DIR/tmp/kc-new.json first (see `kc-new --help`)")
+    results = [handle(p) for p in todo]
+    print("\n".join(line for _, line in results))
+    sys.exit(0 if all(ok for ok, _ in results) else 1)
+
+
+if __name__ == "__main__":
+    main()
