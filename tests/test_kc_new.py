@@ -68,6 +68,18 @@ esac'''
         self.assertIn("herdr pane run p10 claude attach bbbb2222", self.calls())
         self.assertEqual(self.result(), {"ok": True, "id": "bbbb2222", "name": "new-work", "space": "new-work"})
 
+    def test_a_model_is_passed_to_the_session(self):
+        self.request(model="opus")
+        p = self.run_helper()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(self.calls()[0].startswith("claude --bg -n new-work --model opus --dangerously-skip-permissions -- do the thing"))
+
+    def test_an_unknown_model_is_refused(self):
+        self.request(model="gpt")
+        p = self.run_helper()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.calls(), [])
+
     def test_an_existing_space_gets_a_window(self):
         self.request(space="existing", name="second-task")
         p = self.run_helper()

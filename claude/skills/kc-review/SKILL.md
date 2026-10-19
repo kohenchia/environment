@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Writes a short report to the vault and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs, and the report states what was done. Writes a short report to the vault and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -8,6 +8,29 @@ description: Deep review of a PR, a branch, a worktree or a set of documents (de
 `/kc-review <subject> [focus]`. The subject is a PR (number or URL), a branch or worktree path, or one or
 more documents reviewed as a set. The focus, if given, is where to spend the most care; it never shrinks
 the review below the five questions.
+
+## Depth contract (no shortcut is allowed)
+
+Kohen wants every review to be the deepest one the code allows. Nothing below is waived by the focus, by an earlier
+review, by a small diff, or by time or budget.
+
+1. **Opus does the judging.** Look at the model you are running on (your system prompt names it). On Opus, you
+   orchestrate and judge. On anything else you are only the orchestrator: the design, the diff pass, the caller
+   trace and the verification are done by subagents with `model: "opus"`, and you never substitute your own view for
+   theirs. A review in which no Opus agent reasoned about the subject is not a review; the verdict line says so.
+2. **Every step runs, every time.** Steps 1 to 5 run in full for every subject. An earlier review of the same subject,
+   yours or anyone's, is something to compare against, never a substitute: re-derive the design, re-read the diff and
+   re-trace the callers at the current head, then say what changed and which earlier findings still hold. The modes
+   `rereview` and `delta` mean a complete review of the current head plus a "Since last review" section, not less work.
+3. **Small is not shallow.** A one-line change is traced to every consumer. Only the design debate (step 2) may be
+   inline for a small fix; the diff pass, the caller trace and the verification still run on Opus.
+4. **Say what was done.** The report carries a "How this was reviewed" table (agents, models, steps done, steps not done
+   and why), and one `Depth:` line under the verdict. A step you could not do is a stated gap and the verdict line
+   begins `INCOMPLETE:`. "Not verified" is allowed; "assumed fine" is not.
+5. **Unexamined is not clean.** Anything the change can reach that you did not look at is a named risk, with the exact
+   command that would settle it.
+6. **A limit is a reason to wait, not to skip.** On a rate limit or a slow step, wait and continue; never drop a step to
+   finish sooner.
 
 ## 0. Load what this machine adds
 
@@ -73,18 +96,26 @@ Answer each for the chosen design and for what the subject actually does:
 
 Plus question 6: is the review itself consistent with the knowledge (step 0)?
 
-## 4. Use agents when they earn it
+## 4. The review team (required)
 
-You decide whether to spawn subagents and which ones; there is no fixed team. Typical splits: the design
-debate (step 2), a cross-repo trace of callers and consumers, a correctness pass over the diff, and one
-adversarial verifier. Set `model` on every subagent: Sonnet by default, Opus only for the deepest judgment
-(designing the ideal answer, judging the debate, adversarial verification). Give each one the subject's
-path and sha, the knowledge file, and the exact question; ask for findings with file:line evidence.
+For anything beyond a typo-level change to a document, spawn these, in parallel where they are independent, every one
+with `model: "opus"` (Sonnet only for mechanical work: listing files, fetching, formatting). Give each the subject's
+path and sha, the knowledge file and the exact question, and ask for findings with `file:line` evidence.
+
+| Agent | Its one task |
+|---|---|
+| Design debate (step 2) | One advocate per credible alternative, one challenger, one judge |
+| Diff pass | Read every changed line and every changed test; find bugs, edge inputs, partial failure, missing tests |
+| Consumer trace | Find every caller and consumer of every changed or removed symbol, field, flag, default and name, across all repos involved and in open PRs; and what the change should have touched but did not (docs, registrations, migrations, tests) |
+| Break-it pass | Given the design and the diff, find a realistic input, workflow or existing user that the change breaks or silently alters; name the case and the code, or list what was tried and found nothing |
+| Verifier (step 5) | Try to disprove each finding, and each "no problem here" claim on a risky area |
+
+The extension may add more agents for its domain; none removes one of these.
 
 ## 5. Verify every finding
 
-Before anything reaches the report, check each finding against the code at the head sha (or the document
-text). Drop what you cannot confirm; label what is plausible but unproven as such. A finding Kohen
+Before anything reaches the report, an Opus verifier that did not produce the finding checks it against the code at the
+head sha (or the document text). Drop what cannot be confirmed; label what is plausible but unproven as such. A finding Kohen
 disproves in one look costs more than the ten findings that were right.
 
 ## 6. Write the report
@@ -93,7 +124,8 @@ Into the vault's `Reviews/` folder (the vault's location is in the global instru
 set the folder layout and a template), linked from `Reviews.md`. Short: a reader should get the verdict and
 every ask in under a screen.
 
-- The verdict first, in one line, then why in two or three sentences.
+- The verdict first, in one line, then why in two or three sentences, then the `Depth:` line (how many Opus agents,
+  which steps ran; or `INCOMPLETE:` and what did not).
 - One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when
   the verdict is to replace X.
 - Asks as numbered imperatives, most important first, each with its evidence and, when it is not obvious,
@@ -101,6 +133,8 @@ every ask in under a screen.
 - What is good about it, briefly, so the author knows what to keep.
 - A draft comment Kohen could post, if he wants one. Never post it.
 - Facts as facts: name the sha, the PR number, the file. No bare symbols without saying what they are.
+- A "How this was reviewed" table in the evidence section: each agent, its model, its task, and every step that was
+  not done with the reason.
 
 ## 7. Stay for questions, and learn
 
