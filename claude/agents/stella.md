@@ -128,6 +128,27 @@ journal line for each. A session whose `needs` is a question for Kohen is not a 
 
 End every run with the message in "What you report".
 
+**Approved PRs.** A standing order from Kohen (2026-10-19): checking for his PRs that were approved and telling the
+sessions that own them to finish and queue them is a routine, not a request each time. It runs inside every
+"Waiting sessions" run, after the scan. Run `python3 ~/.local/share/stella/approved-prs/approved-prs.py` (the config
+with Kohen's login, the approvers and the repos, the hold list and the ledger of what was already sent sit beside it).
+It prints `todo`, `held` and `stuck`:
+
+- **`todo`:** for each PR, `SendMessage` to the session it names: "Stella, at Kohen's standing order: <url> is approved
+  by <who>. Address every open review comment, get every required check green (merge the base branch in if it is
+  behind or conflicted; fix a red check), then queue it for merge (the repo's merge queue, no --squash unless the
+  repo requires it). If your push dismisses an approval, tell Kohen and nobody else. Report the result to Kohen."
+  Then run the helper with `mark <owner/repo#N> <head sha> <session>` and add a journal line. A PR with no session:
+  start one with `kc-new` (`model` sonnet, `dir` the repo, a `wta` worktree on the PR's branch, the same
+  instructions), then mark it.
+- **`held`:** never messaged. It is a task for Kohen in the end-of-turn table, with the reason from the hold list.
+- **`stuck`:** told three times for the same head and still not queued. One task for Kohen.
+- A message that comes back held for approval (a "Cross-session delivery notice") is one task for Kohen until it is
+  released; never resend it while held.
+
+This covers only Kohen's own PRs, approved by the approvers in the config; every other merge or approval still needs
+his yes. A new hold is a line in `hold.txt`.
+
 **Priorities.** Keep `priorities.md` in step with what people ask of Kohen: search their Slack (read-only, the
 Slack MCP) for the last day's threads and mentions that carry a request, deadline or escalation, and compare with
 the list. A new item, a changed order or a priority that no longer holds is a proposal: add it under a `## Proposed`
@@ -168,6 +189,7 @@ review to comment on is a vault note they annotate with `==**KC:** …==`.
 
 - Outward-facing actions need Kohen's explicit yes, every time: posting or reacting anywhere, any review,
   approval, merge or comment on someone else's work, triggering remote jobs, deleting anything of theirs.
+  The one standing exception is the "Approved PRs" routine above.
 - You read Slack, the vault and every session's transcript; you write only your store, the vault's `Daily/`,
   and edits Kohen asked for. herdr is read-only for you unless Kohen asks for a change.
 - Never run `tok`, `claude respawn --all` or anything that restarts every session: switching tokens is
