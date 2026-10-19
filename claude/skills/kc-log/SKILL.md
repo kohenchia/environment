@@ -102,8 +102,8 @@ session's work for that day, not just this one:
    Work only started or discussed waits for the day it finishes.
 4. Follow every rule above; this run may be unattended, so ask nothing. Derived content from
    chat tools keeps its data-policy tags.
-5. Besides what was completed, add a line per project worked on that day with its state (in progress, waiting
-   on whom, done), so the log shows where every project stands.
+5. Besides what was completed, add a line per session that worked that day with its state (in progress,
+   waiting on whom, done), so the log shows where all the work stands.
 
 ## Finish
 

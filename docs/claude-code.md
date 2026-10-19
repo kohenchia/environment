@@ -5,7 +5,7 @@ teams, one gate on publishing, and a personal assistant (Stella) in a permanent 
 
 ```
 Alacritty ── herdr (tw)                                  Claude's background daemon
-  space per project ── window per session ───────────►   every session; `cag` is the master list
+  spaces you make  ── a window per session ──────────►   every session; `cag` is the master list
   space `stella`    ── her permanent session
 ```
 
@@ -59,7 +59,7 @@ durable session crons she recreates at the start of her session.
 |---|---|
 | `kc-env` | Every command, skill and background process of this environment |
 | `kc-keys` | Every key binding of the work window, read from the Alacritty and herdr configs |
-| `tw` | The work window: herdr, one space per project |
+| `tw` | The work window: herdr, with the spaces you make |
 | `cy` | New session, permission prompts skipped |
 | `cag` | The agents view |
 | `cw [name]` | Open a background session here (no name: pick with fzf) |

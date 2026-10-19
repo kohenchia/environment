@@ -634,9 +634,8 @@ for s in json.load(sys.stdin):
     claude attach "${pick%%$'\t'*}"
 }
 
-# tw: the work window. Start the herdr server if needed, start Stella's session if she is not running, open a
-# space for every session that needs you, is working, or finished recently (herdr-space sync; spaces and windows
-# that exist are left alone), start the dot reporter, then attach. A new project is a new space (Cmd+N): a blank terminal.
+# tw: the work window. Start the herdr server if needed and Stella's session if she is not running, then attach.
+# A space is yours to make (Cmd+N, a blank terminal) and to delete (Cmd+Ctrl+W).
 function tw() {
     if ! herdr status server >/dev/null 2>&1; then
         (nohup herdr server >/dev/null 2>&1 &)
@@ -644,8 +643,6 @@ function tw() {
         for i in {1..20}; do herdr status server >/dev/null 2>&1 && break; sleep 0.25; done
     fi
     stella start >/dev/null 2>&1
-    herdr-space sync >/dev/null 2>&1
-    herdr-space follow --ensure   # the dot reporter: one detached process
     herdr
 }
 

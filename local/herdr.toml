@@ -33,7 +33,7 @@ close_tab         = "alt+shift+w"
 #   Cmd+Ctrl+Up / Down    go to the space above / below
 #   Cmd+Ctrl+Shift+Up/Down move this space up / down (the command below)
 #   Cmd+Ctrl+W            close this space (herdr asks first; its sessions keep running)
-#   Cmd+Ctrl+R            rename this space (the project's name; the project keeps its slug)
+#   Cmd+Ctrl+R            rename this space
 new_workspace      = "alt+n"
 previous_workspace = "ctrl+alt+up"
 next_workspace     = "ctrl+alt+down"
@@ -62,7 +62,7 @@ rename_pane       = "alt+r"
 clear_pane        = "alt+k"
 copy_mode         = ["prefix+[", "alt+/"]
 
-# herdr has no action for moving a space, so two detached commands do it over its socket.
+# herdr has no action for moving a space, so two detached commands do it over its socket (bin/herdr-space).
 [[keys.command]]
 key = "ctrl+alt+shift+up"
 type = "shell"
@@ -75,28 +75,11 @@ command = "herdr-space move down"
 
 [ui]
 tab_bar_position = "top"
-sidebar_start_collapsed = false   # the sidebar is the live view of every agent's state
 prompt_new_tab_name = false
 prompt_new_workspace_name = false # a new space starts as a blank terminal; rename it when you like
 mouse_capture = true
-status_indicators = "dots"
-
-# The dots are Claude's own state, drawn from `dot_*` tokens that `herdr-space follow` (started by `tw`) sets on
-# each window and space: herdr's own dots can only show four fixed states, so the rows below leave out
-# `state_icon` and draw these instead. Exactly one token has a value, and each has its own colour:
-#   red     a prompt waits for you          yellow  finished, next steps for you
-#   blue    running                         green   finished, nothing for you: filled until looked at, then hollow
-[ui.sidebar.spaces]
-rows = [[{ token = "$dot_prompt", fg = "#f38ba8" }, { token = "$dot_next", fg = "#f9e2af" },
-         { token = "$dot_working", fg = "#89b4fa" }, { token = "$dot_new", fg = "#a6e3a1" },
-         { token = "$dot_read", fg = "#a6e3a1" }, "workspace"], ["branch", "git_status"]]
-
-[ui.sidebar.agents]
-rows = [[{ token = "$dot_prompt", fg = "#f38ba8" }, { token = "$dot_next", fg = "#f9e2af" },
-         { token = "$dot_working", fg = "#89b4fa" }, { token = "$dot_new", fg = "#a6e3a1" },
-         { token = "$dot_read", fg = "#a6e3a1" }, "workspace", "tab"], ["agent"]]
 
 # A herdr restart must not resume agent panes into their own conversation: the sessions belong to Claude's
-# background daemon, and each window re-attaches with `claude attach`.
+# background daemon, so a window that showed one comes back as a shell (`cw` attaches it again).
 [session]
 resume_agents_on_restore = false

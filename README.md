@@ -12,7 +12,7 @@ A comprehensive development environment for macOS, Linux, and WSL. Includes shel
 | [**Git Aliases**](docs/git-aliases.md) | Shorthand commands for everyday git operations |
 | [**Shell Aliases & Functions**](docs/shell-aliases.md) | Navigation, search, Docker, Kubernetes, system utilities, and more |
 | [**Command Tutorials**](docs/command-tutorials.md) | `h <command>` — color-coded, copy-pasteable cheat sheets in your terminal |
-| [**herdr Workspace**](docs/herdr.md) | A space per project, a window per session, single-chord `Cmd` navigation |
+| [**herdr Workspace**](docs/herdr.md) | Spaces and windows for Claude sessions, single-chord `Cmd` navigation |
 | [**tmux Workspace**](docs/tmux.md) | The same chords in tmux: projects as tabs, tools as panes (the fallback, and for Linux/WSL) |
 | [**Claude Code**](docs/claude-code.md) | Global instructions, `kc-*` skills, the leak gate, and Stella, a personal assistant in a permanent session |
 | [**Vim Configuration**](docs/vim.md) | Plugins, keybindings, and color scheme |
