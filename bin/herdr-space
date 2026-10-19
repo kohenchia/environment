@@ -4,7 +4,7 @@
     herdr-space move up|down    move the focused space one place (bound to Cmd+Ctrl+Shift+Up/Down)
 
 herdr has actions to create, walk, rename and close spaces, but none to reorder one, so this sends herdr's
-`workspace.move` over its control socket. Everything else in the left column is herdr's own.
+`workspace.move_block` over its control socket. Everything else in the left column is herdr's own.
 
 Standard library only.
 """
@@ -54,13 +54,22 @@ def spaces() -> list[dict]:
 
 
 def move(direction: str) -> None:
+    """Move the focused space one place. `workspace.move_block` names the space to go before (none = the end),
+    so the target is explicit; `workspace.move`'s insert_index cannot be trusted to mean "after the removal"
+    (moving down by index did nothing)."""
     ws = spaces()
     here = next((i for i, w in enumerate(ws) if w.get("focused")), None)
     if here is None:
         return
-    to = here - 1 if direction == "up" else here + 1
-    if 0 <= to < len(ws):
-        rpc("workspace.move", {"workspace_id": ws[here]["workspace_id"], "insert_index": to})
+    if direction == "up":
+        if here == 0:
+            return
+        before = ws[here - 1]["workspace_id"]
+    else:
+        if here == len(ws) - 1:
+            return
+        before = ws[here + 2]["workspace_id"] if here + 2 < len(ws) else None
+    rpc("workspace.move_block", {"workspace_ids": [ws[here]["workspace_id"]], "before_workspace_id": before})
 
 
 def main() -> None:
