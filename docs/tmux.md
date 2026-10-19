@@ -85,7 +85,7 @@ the normal way.
 | `Cmd+0` | Last used tab (not "tab 10") |
 | `Cmd+T` | New tab in the same directory, named after it |
 | `Cmd+Shift+[` / `]` | Previous / next tab |
-| `Cmd+Ctrl+Shift+[` / `]` | Move the current tab left / right |
+| `Cmd+Ctrl+[` / `]` | Move the current tab left / right |
 | `Cmd+Shift+R` | Rename the tab |
 | `Cmd+Shift+W` | Close the tab (asks first) |
 
@@ -100,7 +100,7 @@ can never retitle your project tab. `renumber-windows` is on, so closing a tab r
 | `Cmd+D` | Split right |
 | `Cmd+Shift+D` | Split down |
 | `Cmd+Shift+←↑↓→` | Move focus between panes |
-| `Cmd+Ctrl+Shift+←↑↓→` | Move the pane itself in that direction |
+| `Cmd+Ctrl+←↑↓→` | Move the pane itself in that direction |
 | `Cmd+Shift+Enter` | Zoom the pane in / out |
 | `Cmd+Shift+Space` | Cycle pane layouts |
 | `Cmd+R` | Rename the pane (sets the border label) |
@@ -419,7 +419,7 @@ notification permission. If neither appears, Claude isn't belling: confirm `pref
 
 ## Rearranging panes
 
-`Cmd+Ctrl+Shift+←↑↓→` swaps the current pane with its neighbour in that direction, and the focus travels
+`Cmd+Ctrl+←↑↓→` swaps the current pane with its neighbour in that direction, and the focus travels
 with it, so you can walk a pane across the layout by holding the chord's direction. It's built on
 tmux's positional pane targets (`swap-pane -t '{left-of}'`), not the older `swap-pane -U`/`-D`, which
 only step through pane *index* order and so don't match what you see on screen.
@@ -452,7 +452,7 @@ Dragging a pane border with the mouse resizes it; that works out of the box with
   both as `undefined-key`. Because of this, `.tmux.conf` must leave `M-b` and `M-f` unbound — that's
   why scrollback search sits on `M-/` (`Cmd+F`) rather than the more obvious `M-f`.
 - **Arrow chords are layered by modifier**, which is worth internalising: bare `Cmd` edits the line,
-  `Opt` moves by word, `Cmd+Shift` moves pane focus, and `Cmd+Ctrl+Shift` moves the pane itself.
+  `Opt` moves by word, `Cmd+Shift` moves pane focus, and `Cmd+Ctrl` moves the pane itself.
 - **Alacritty does not start tmux for you.** `terminal.shell` is deliberately unset, so a window opens
   on a plain login shell. Attach when you want the workspace:
 

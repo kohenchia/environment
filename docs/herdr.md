@@ -28,24 +28,24 @@ an `alt+…` chord, so the chords from the tmux days carry over unchanged.
 | What | Chord |
 | --- | --- |
 | Focus a pane | `Cmd+Shift+←↑↓→` |
-| Move a pane | `Cmd+Ctrl+Shift+←↑↓→` |
+| Move a pane | `Cmd+Ctrl+←↑↓→` |
 | Split right / down | `Cmd+D` / `Cmd+Shift+D` |
 | Zoom, rename, clear, search a pane | `Cmd+Shift+Enter`, `Cmd+R`, `Cmd+K`, `Cmd+F` |
 | Resize a pane | `C-b` then an arrow |
 | New window / close a pane (a window goes with its last pane) / close the window | `Cmd+T` / `Cmd+W` / `Cmd+Shift+W` |
 | Window 1–9 / previous / next | `Cmd+1…9` / `Cmd+Shift+[` / `Cmd+Shift+]` |
-| Move a window left / right | `Cmd+Ctrl+Shift+[` / `]` |
+| Move a window left / right | `Cmd+Ctrl+[` / `]` |
 | Rename the window | `Cmd+Shift+R` |
 | **New space** | `Cmd+N` |
 | **Go to the space above / below** | `Cmd+Shift+K` / `J` |
-| **Move the space up / down** | `Cmd+Ctrl+Shift+K` / `J` |
+| **Move the space up / down** | `Cmd+Ctrl+K` / `J` |
 | **Delete the space** (herdr asks first; its sessions keep running) | `Cmd+Ctrl+W` |
 | **Rename the space** | `Cmd+Ctrl+Shift+R` (or `C-b` then `Shift+W`) |
 
 The layers are the same for every component. `Cmd` does things (new, close, rename, split, zoom, clear, search, and
 `Cmd+1…9` to jump to a window). `Cmd+Shift` goes to one: arrows for panes, `[` `]` for windows, `K` `J` for spaces
-(up, down). `Cmd+Ctrl+Shift` moves it with the same keys. The renames follow the same order: `Cmd+R` a pane,
+(up, down). `Cmd+Ctrl` moves it with the same keys. The renames follow the same order: `Cmd+R` a pane,
 `Cmd+Shift+R` a window, `Cmd+Ctrl+Shift+R` a space. herdr has no action for moving a space, so
-`Cmd+Ctrl+Shift+K` / `J` run `herdr-space move up|down` over its socket.
+`Cmd+Ctrl+K` / `J` run `herdr-space move up|down` over its socket.
 Missing in herdr: `Cmd+0` (last window), `Cmd+Shift+Space` (next layout), `Cmd+Shift+B` (the nested-tmux
 off-switch). Detach with `C-b q` or `C-b d`: everything keeps running.

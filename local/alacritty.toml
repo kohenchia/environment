@@ -100,15 +100,17 @@ bindings = [
 
   # ── Layers ──────────────────────────────────────────────────────────────
   # Cmd alone does things (new, close, rename, split, zoom, clear, copy) and jumps straight to window N.
-  # Cmd+Shift goes to a pane, window or space; Cmd+Ctrl+Shift moves it. The same keys for every component:
+  # Cmd+Shift goes to a pane, window or space; Cmd+Ctrl moves it. The same keys for every component:
   #
-  #                    go to (Cmd+Shift)         move it (Cmd+Ctrl+Shift)
+  #                    go to (Cmd+Shift)         move it (Cmd+Ctrl)
   #     pane           arrows: focus             arrows: swap with the neighbour
   #     window (tab)   [ previous, ] next        [ left, ] right
   #     space          k up, j down              k up, j down
   #
-  # The bytes sent are the same as before the layers were reorganised, so tmux and herdr read them unchanged. With Shift
-  # held, the bracket keys report as the shifted character, so the key names are { and }.
+  # The bytes sent are the same as before the layers were reorganised, so tmux and herdr read them unchanged.
+  # Go-to holds Shift, so its bracket keys report as the shifted characters { and }; moving has no Shift, so [ and ].
+  # Moving has no Shift on purpose: a Shift that landed late made the chord miss and fall back to Ctrl+J / Ctrl+K,
+  # which the shell reads as a newline.
 
   # ── Panes ───────────────────────────────────────────────────────────────
   { key = "ArrowLeft",   mods = "Command|Shift", chars = "\u001B[1;3D" },
@@ -116,10 +118,10 @@ bindings = [
   { key = "ArrowUp",     mods = "Command|Shift", chars = "\u001B[1;3A" },
   { key = "ArrowDown",   mods = "Command|Shift", chars = "\u001B[1;3B" },
 
-  { key = "ArrowLeft",   mods = "Command|Control|Shift", chars = "\u001B[1;6D" },
-  { key = "ArrowRight",  mods = "Command|Control|Shift", chars = "\u001B[1;6C" },
-  { key = "ArrowUp",     mods = "Command|Control|Shift", chars = "\u001B[1;6A" },
-  { key = "ArrowDown",   mods = "Command|Control|Shift", chars = "\u001B[1;6B" },
+  { key = "ArrowLeft",   mods = "Command|Control", chars = "\u001B[1;6D" },
+  { key = "ArrowRight",  mods = "Command|Control", chars = "\u001B[1;6C" },
+  { key = "ArrowUp",     mods = "Command|Control", chars = "\u001B[1;6A" },
+  { key = "ArrowDown",   mods = "Command|Control", chars = "\u001B[1;6B" },
 
   { key = "D", mods = "Command", chars = "\u001Bd" },          # split right
   { key = "D", mods = "Command|Shift", chars = "\u001BD" },    # split down
@@ -127,14 +129,14 @@ bindings = [
   # ── Windows (tmux: tabs) ────────────────────────────────────────────────
   { key = "{", mods = "Command|Shift", chars = "\u001B[1;4D" },
   { key = "}", mods = "Command|Shift", chars = "\u001B[1;4C" },
-  { key = "{", mods = "Command|Control|Shift", chars = "\u001B[1;8D" },
-  { key = "}", mods = "Command|Control|Shift", chars = "\u001B[1;8C" },
+  { key = "[", mods = "Command|Control", chars = "\u001B[1;8D" },
+  { key = "]", mods = "Command|Control", chars = "\u001B[1;8C" },
 
   # ── Spaces (herdr: one per project; tmux has no spaces, so these do nothing there) ──
   { key = "K", mods = "Command|Shift", chars = "\u001B[1;7A" },
   { key = "J", mods = "Command|Shift", chars = "\u001B[1;7B" },
-  { key = "K", mods = "Command|Control|Shift", chars = "\u001B[1;8A" },
-  { key = "J", mods = "Command|Control|Shift", chars = "\u001B[1;8B" },
+  { key = "K", mods = "Command|Control", chars = "\u001B[1;8A" },
+  { key = "J", mods = "Command|Control", chars = "\u001B[1;8B" },
   { key = "N", mods = "Command", chars = "\u001Bn" },                 # new space
   { key = "W", mods = "Command|Control", chars = "\u001B\u0017" },    # close space (Ctrl+Alt+W)
   { key = "R", mods = "Command|Control|Shift", chars = "\u001B\u0012" },    # rename space (Ctrl+Alt+R)
