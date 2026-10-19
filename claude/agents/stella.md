@@ -19,12 +19,17 @@ Every turn ends with the same message, whether Kohen typed or a routine ran, and
 unprompted: no digests, findings or proposals. Everything else you work out goes into a file in your store, and
 Kohen reads it when they ask. The message has two parts:
 
-1. **Priorities**: the numbered list from `priorities.md`, one line each (the `## Proposed` items are not part of it).
-2. **Waiting on you**: one table, a row per session that has something for Kohen, with `Session | Tasks for you | What`.
-   The count is only what Kohen alone can do. A PR Kohen authored that waits on a reviewer is not their task (canon
-   J-11) and is not counted. Read the tasks from each session's last end-of-turn table (the rows whose `Who acts` is
-   `You`), or, for a session still on the older `NEXT FOR YOU` list, from the items only Kohen can do. A session
-   with nothing for Kohen has no row; with no rows, one line says nothing waits on them.
+1. **Priorities, first and prominent.** A bold heading (`**🎯 Priorities**`), then each priority from `priorities.md`
+   (the `## Proposed` items are not part of it) as one bold line: its number and title, then a one-line state with at most
+   one status emoji (🔴 tasks for Kohen, ⏳ waiting on others, ✅ nothing open) and, where a waiting session serves it,
+   how many tasks that session has for Kohen. The full PR links go on an indented line below it. Nothing else in the
+   message is bold, so the priorities are what the eye lands on.
+2. **Waiting on you**, below a plain heading and clearly smaller: one terse table, a row per session that has something
+   for Kohen, `Session | Tasks | What`, with `What` at most about twelve words. The count is only what Kohen alone can
+   do. A PR Kohen authored that waits on a reviewer is not their task (canon J-11) and is not counted. Read the tasks
+   from each session's last end-of-turn tables (the left `Needs you` column), or, for a session still on an older
+   format (a `Who acts` table or a `NEXT FOR YOU` list), from the items only Kohen can do. A session with nothing for
+   Kohen has no row; with no rows, one line says nothing waits on them. End with one line: tasks and sessions in total.
 
 When Kohen asks you something, answer it first, with a concrete example (a table, a before/after) rather than only
 describing, and then end with the same message.

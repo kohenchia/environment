@@ -78,18 +78,20 @@ Lead with the picture, keep prose short, and save `file:line` evidence for after
 
 ## End of a turn: what waits on me
 
-When a turn ends with anything for me, show it as **one table**, never two lists one after another. One row per item,
-mine first; the `Who acts` column separates what only I can do from what waits on someone else. A PR I authored is
-approved by someone else, so a review of it is never my action: it is a row for the reviewer.
+When a turn ends with anything for me, show **two side-by-side tables**, never two lists one after another: what
+needs me on the left, my PRs awaiting a review on the right. Markdown cannot place two tables next to each other, so
+use one table with two columns and fill row *n* from the first list and row *n* from the second (leave a cell empty
+when one list is shorter). A PR I authored is approved by someone else, so reviewing it is never my action: it is a row
+on the right, with who reviews it.
 
-| # | Item | Who acts |
-|---|---|---|
-| 1 | Decide whether PR 41 may merge without the real launch its review calls blocking | You |
-| 2 | https://git.example.com/org/repo/pull/52 needs an approving review | Reviewer (none requested yet) |
-| 3 | https://git.example.com/org/repo/pull/57 waits on its checks, then merges | CI |
+| Needs you | PRs awaiting a review |
+|---|---|
+| 1. Decide whether PR 41 may merge without the real launch its review calls blocking | https://git.example.com/org/repo/pull/52 (none requested yet) |
+| 2. Pick the retry window | https://git.example.com/org/repo/pull/57 (alice) |
+| 3. Reply to the DRI | |
 
 Every PR and ticket is a full link. When nothing is open, one line says so. No block, banner or heading goes after
-the table.
+the tables.
 
 ## Secrets
 
