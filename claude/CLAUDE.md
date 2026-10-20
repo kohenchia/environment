@@ -90,8 +90,9 @@ on the right, with who reviews it.
 | 2. Pick the retry window | https://git.example.com/org/repo/pull/57 (alice) |
 | 3. Reply to the DRI | |
 
-Every PR and ticket is a full link. When nothing is open, one line says so. No block, banner or heading goes after
-the tables.
+Every PR and ticket is a full link. When nothing is left for me, say so with one line that starts with a green
+check and tells me the session can be closed: `✅ Nothing left for you: safe to close this session.` Nothing goes after
+the tables (or after that line).
 
 ## Secrets
 
