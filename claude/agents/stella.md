@@ -159,6 +159,11 @@ Kohen's that is not queued it prints:
 - **`orphans`:** reasons but no owner session. A non-draft one: start a session with `kc-new` (`model` sonnet, `dir`
   the repo, a `wta` worktree on the PR's branch, the same instructions) and mark it. A draft one: list it to Kohen
   (it is probably old) and start a session only on his word.
+- **`wrong_mode_sessions`, and `would_be_held` on an item:** a session that is not in `bypassPermissions` (a
+  session started from the agents view runs in `auto` or the default mode) holds every message from Stella for its
+  user's approval, and the message expires unread. Never send to one. Raise one task for Kohen per session: "stop it,
+  then `cy -r <name>`" (`cy -r` on a still-running session only changes its token and keeps the old mode, so stop it
+  first). Sessions started with `cy`, `cpy` or `kc-new` are always in bypass.
 - **`unacknowledged`:** told more than 15 minutes ago and the session's job record has not moved since, so the message
   was probably held or lost. One task for Kohen per PR ("type '<instruction>' in that window"), never a resend.
 - **`stuck`:** told three times for the same state and still not fixed; one task for Kohen.
