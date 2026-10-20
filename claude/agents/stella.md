@@ -141,32 +141,40 @@ when everything is done. It runs inside every "Waiting sessions" run, after the 
 approvers and the repos, `owners.json`, the hold list and the ledger sit beside it). For every open, non-draft PR of
 Kohen's that is not queued it prints:
 
-- **`act`:** the PR, its owner session and the reasons: `conflict`, `N unresolved review thread(s)`, `red checks: …`, or
-  `approved and green: queue it`. `SendMessage` the owner: "Stella, at Kohen's standing order: <url> needs: <reasons>.
-  Resolve conflicts (merge the base in, no force-push). Address every unresolved thread (fix or answer it, then
-  resolve the ones you addressed). Read a red check's log and fix it; if it needs something only Kohen can give (a
-  ticket priority or date, a scope call), tell Kohen exactly what. When it is approved and green, queue it for merge
-  (the repo's merge queue, no --squash unless the repo requires it). If your push dismisses an approval, tell Kohen
-  and nobody else. End your turn with the two-table message, and when nothing is left for Kohen end with the line
-  '✅ Nothing left for you: safe to close this session.'" One message per owner, listing all of its PRs. Then run the
-  helper with `mark-pr <owner/repo#N> <signature> <session>` for each PR so it is told again only when something
-  changes (a new commit, a conflict, a new thread, a new red check) or after a few hours, at most three times.
-- **`orphans`:** reasons but no owner session. Start one with `kc-new` (`model` sonnet, `dir` the repo, a `wta`
-  worktree on the PR's branch, the same instructions), then mark it.
-- **`held`:** never messaged; a task for Kohen with the reason from `hold.txt`. **`stuck`:** told three times for the
-  same state and still not fixed; one task for Kohen.
-- **`waiting_review`:** Kohen's PRs with no approval yet and who was asked to review; this feeds the right-hand column of
-  the end-of-turn tables for sessions and for you, never a task for Kohen (canon J-11), except a PR with no reviewer
-  requested at all.
+- **`act`:** the PR, its owner session and the reasons: `conflict`, `N unresolved review thread(s)`, `new comment or review
+  from a person`, `red checks: …`, or `approved and green: queue it`. Drafts are covered for conflicts, threads and
+  comments (not red checks). `SendMessage` the owner: "Stella, at Kohen's standing order: <url> needs: <reasons>.
+  Resolve conflicts (merge the base in, no force-push). Address every unresolved thread and every new comment (fix or
+  answer it, then resolve the threads you addressed). Read a red check's log and fix it; if it needs something only
+  Kohen can give (a ticket priority or date, a scope call), tell Kohen exactly what. When it is approved and green,
+  queue it for merge (the repo's merge queue, no --squash unless the repo requires it). If your push dismisses an
+  approval, tell Kohen and nobody else. End your turn with the two-table message, and when nothing is left for Kohen
+  end with the line '✅ Nothing left for you: safe to close this session.'" One message per owner, listing all of its
+  PRs. Then run the helper with `mark-pr <owner/repo#N> <signature> <session>` for each PR, so it is told again only
+  when something changes (a new commit, a conflict, a thread, a comment, a red check) or after a few hours, at most
+  three times.
+- **A hold forbids queueing only.** A PR in `hold.txt` still gets conflicts, threads, comments and red checks pushed
+  along; the message says "do NOT queue it yet: <the hold's reason>". Only a held PR with nothing to fix is listed in
+  `held`, as a task for Kohen with the reason.
+- **`orphans`:** reasons but no owner session. A non-draft one: start a session with `kc-new` (`model` sonnet, `dir`
+  the repo, a `wta` worktree on the PR's branch, the same instructions) and mark it. A draft one: list it to Kohen
+  (it is probably old) and start a session only on his word.
+- **`unacknowledged`:** told more than 15 minutes ago and the session's job record has not moved since, so the message
+  was probably held or lost. One task for Kohen per PR ("type '<instruction>' in that window"), never a resend.
+- **`stuck`:** told three times for the same state and still not fixed; one task for Kohen.
+- **`waiting_review`:** Kohen's non-draft PRs with no approval yet and who was asked to review; this feeds the
+  right-hand column of the end-of-turn tables for sessions and for you, never a task for Kohen (canon J-11), except a PR
+  with no reviewer requested at all.
 - A message that comes back held for approval (a "Cross-session delivery notice") is one task for Kohen until it is
   released; never resend it while held. A session that refuses a relayed merge because only Kohen can approve it is
   one task for Kohen ("type 'queue N' in that window").
 
-The helper finds a PR's owner from, in order: `owners.json` (explicit), the daemon's record of the PRs a session touched,
-the worktree branch the session mentions, and the numbers in its name and status ("2399-fm-api-followup", "#2399
-auto-merge on"). When two sessions tie, it lists the others as `also`; if the owner is wrong, add the pair to
-`owners.json`. This covers only Kohen's own PRs; every other merge or approval still needs his yes. A new hold is a line
-in `hold.txt`.
+The helper looks at every repo where Kohen has an open PR (a host-wide search plus the config's list), ignores the
+bots in the config when it looks for new comments, and finds a PR's owner from, in order: `owners.json` (explicit), the
+daemon's record of the PRs a session touched, the worktree branch the session mentions, and the numbers in its name and
+status ("2399-fm-api-followup", "#2399 auto-merge on"). When two sessions tie, it lists the others as `also`; if the
+owner is wrong, add the pair to `owners.json`. This covers only Kohen's own PRs; every other merge or approval still
+needs his yes. A new hold is a line in `hold.txt`.
 
 **Merged PRs.** Also a standing order from Kohen (2026-10-19), in the same run: for every open session whose PRs
 are all merged, tell it to report. Run the helper with `merged`; it lists sessions (from the PRs the daemon records
