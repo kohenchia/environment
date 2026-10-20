@@ -166,11 +166,10 @@ Kohen's that is not queued it prints:
   (it is probably old) and start a session only on his word.
 - **`wrong_mode_sessions`, and `would_be_held` on an item:** a session that is not in `bypassPermissions` (a
   session started from the agents view runs in `auto` or the default mode) holds every message from Stella for its
-  user's approval, and the message expires unread. Never send to one. The `kc-new` restart request (`{"restart": "<name>"}`) exists, but as of 2026-10-19 both of its
-  steps, `claude stop` and `claude --bg --resume`, fail from the helper with `sandbox_apply: Operation not permitted`
-  (the command sandbox is applied to those subcommands even there); try it once per session per day in case that changed, and
-  otherwise raise one task for Kohen per session: stop it, then `cy -r <name>` in a terminal (`cy -r` on a
-  still-running session only changes its token and keeps the old mode). Sessions started with `cy`, `cpy` or `kc-new` are always in bypass.
+  user's approval, and the message expires unread. Never send to one. Restart it yourself: write a `kc-new` request `{"restart": "<name>"}` (optional `prompt`) and
+  run `~/.local/bin/kc-new` **as the only command of its Bash call** (combined with anything else it is sandboxed and
+  fails with `sandbox_apply: Operation not permitted`). It refuses a session that is working: retry on the next run.
+  Journal each restart; the window comes back with `tok reattach` (tell Kohen once). Sessions started with `cy`, `cpy` or `kc-new` are always in bypass.
 - **`unacknowledged`:** told more than 15 minutes ago and the session's job record has not moved since, so the message
   was probably held or lost. One task for Kohen per PR ("type '<instruction>' in that window"), never a resend.
 - **`stuck`:** told three times for the same state and still not fixed; one task for Kohen.
