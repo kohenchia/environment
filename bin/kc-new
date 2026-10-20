@@ -211,7 +211,7 @@ def restart_session(req: dict) -> tuple[bool, str, dict]:
     if not sid or not Path(cwd).is_dir():
         raise ValueError(f"{name} has no resumable conversation")
     p = run("claude", "stop", job_id)
-    if p.returncode != 0:
+    if p.returncode != 0 and st.get("state") != "done":  # a finished session has nothing to stop: resuming it is enough
         raise RuntimeError(f"claude stop {job_id} failed: {(p.stderr or p.stdout).strip()[-200:]}")
     p = run("claude", "--bg", "--resume", sid, "-n", name, "--dangerously-skip-permissions", "--", prompt, cwd=cwd)
     if p.returncode != 0:

@@ -20,7 +20,7 @@ class KcNew(unittest.TestCase):
         (self.home / "agents.json").write_text("[]")
         self.tool("claude", f'''case "$1" in
   agents) cat {self.home}/agents.json ;;
-  stop) echo "claude $*" >> {self.log} ;;
+  stop) echo "claude $*" >> {self.log}; [ -f {self.home}/stop-fails ] && exit 1 ;;
   --bg) echo "claude $*" >> {self.log}
         n=""; while [ $# -gt 0 ]; do if [ "$1" = -n ]; then n="$2"; fi; shift; done
         echo "[{{\\"kind\\":\\"background\\",\\"id\\":\\"bbbb2222\\",\\"name\\":\\"$n\\"}}]" > {self.home}/agents.json ;;
@@ -100,6 +100,15 @@ esac'''
         self.assertEqual(self.calls()[0], "claude stop cccc3333")
         self.assertTrue(self.calls()[1].startswith("claude --bg --resume sess-cccc3333 -n slow-one --dangerously-skip-permissions --"))
         self.assertIn("restarted slow-one (bbbb2222) in bypass-permissions mode (was auto)", p.stdout)
+
+    def test_restart_of_a_finished_session_survives_a_failing_stop_but_a_blocked_one_does_not(self):
+        (self.home / "stop-fails").write_text("")
+        self.job("aaaa9999", "done-one", ["--permission-mode", "auto"], state="done")
+        p = self.restart(restart="done-one")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.job("bbbb9999", "waiting-one", ["--permission-mode", "auto"], state="blocked")
+        p = self.restart(restart="waiting-one")
+        self.assertNotEqual(p.returncode, 0)
 
     def test_restart_refuses_a_bypass_session_a_working_one_and_stella(self):
         self.job("dddd4444", "fine", ["--dangerously-skip-permissions"])
