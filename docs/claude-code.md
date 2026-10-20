@@ -99,7 +99,8 @@ A request with `restart` instead of `space`/`dir`/`name`/`prompt` restarts a nam
 session in any other mode holds a peer's messages for its user's approval, and they expire unread. It refuses `stella`,
 a session already in bypass mode, and a session that is working (retry when idle); otherwise it stops the session
 (`claude stop <job id>`) and resumes its conversation with `--dangerously-skip-permissions`. Without `space` it prints a
-hint to run `tok reattach` for the window.
+hint to run `tok reattach` for the window. Known limit (2026-10-19): `claude stop` and `claude --bg --resume` fail from the
+helper with `sandbox_apply: Operation not permitted`, so until that changes the restart only works by hand (`cy -r`).
 
 The allowlist entry is the machine owner's to add, never a session's. It must be an **exact** match of
 `~/.local/bin/kc-new`: a `contains_match` entry, or an entry for `claude` or `herdr` themselves, would let any
