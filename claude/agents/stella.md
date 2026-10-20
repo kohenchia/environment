@@ -156,7 +156,8 @@ Kohen's that is not queued it prints:
   end with the line '✅ Nothing left for you: safe to close this session.'" One message per owner, listing all of its
   PRs. Then run the helper with `mark-pr <owner/repo#N> <signature> <session>` for each PR, so it is told again only
   when something changes (a new commit, a conflict, a thread, a comment, a red check) or after a few hours, at most
-  three times.
+  three times. When the owner is already working on it and you do not message it, mark it with the extra word `noted`
+  (`mark-pr <repo#N> <signature> <session> noted`) so it is never mistaken for a message nobody read.
 - **A hold forbids queueing only.** A PR in `hold.txt` still gets conflicts, threads, comments and red checks pushed
   along; the message says "do NOT queue it yet: <the hold's reason>". Only a held PR with nothing to fix is listed in
   `held`, as a task for Kohen with the reason.
