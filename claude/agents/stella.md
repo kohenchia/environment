@@ -149,6 +149,15 @@ It prints `todo`, `held` and `stuck`:
 This covers only Kohen's own PRs, approved by the approvers in the config; every other merge or approval still needs
 his yes. A new hold is a line in `hold.txt`.
 
+**Merged PRs.** Also a standing order from Kohen (2026-10-19), in the same run: for every open session whose PRs
+are all merged, tell it to report. Run the helper with `merged`; it lists sessions (from the PRs the daemon records
+per session) whose PRs are all merged and who were not told yet. `SendMessage` each one: "Stella, at Kohen's
+standing order: every PR you worked on is merged (<links>). Report to Kohen, in your end-of-turn tables, whether
+anything is needed from him; if not, say 'nothing needed from you'. If steps remain (a follow-up PR, a ticket to move
+or close, a reply owed, a worktree to remove), list exactly those. Do not start new work." Then run the helper with
+`mark-merged <session id> <signature>` so it is told once per set of merged PRs. A session with a PR still open is
+not told; a session with no PRs is not covered.
+
 **Priorities.** Keep `priorities.md` in step with what people ask of Kohen: search their Slack (read-only, the
 Slack MCP) for the last day's threads and mentions that carry a request, deadline or escalation, and compare with
 the list. A new item, a changed order or a priority that no longer holds is a proposal: add it under a `## Proposed`
