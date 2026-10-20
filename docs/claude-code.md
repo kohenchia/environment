@@ -94,6 +94,13 @@ It starts the session like `cy` would (`claude --bg … --dangerously-skip-permi
 token), opens a window in the space running `claude attach <id>`, and prints one line. The request is deleted as it
 is read, so a refused one is never retried; the answer is also in `kc-new.result.json` next to it.
 
+A request with `restart` instead of `space`/`dir`/`name`/`prompt` restarts a named session in bypass-permissions mode:
+`{"restart": "<session name>", "prompt": "optional first message", "space": "optional herdr space"}`. It exists because a
+session in any other mode holds a peer's messages for its user's approval, and they expire unread. It refuses `stella`,
+a session already in bypass mode, and a session that is working (retry when idle); otherwise it stops the session
+(`claude stop <job id>`) and resumes its conversation with `--dangerously-skip-permissions`. Without `space` it prints a
+hint to run `tok reattach` for the window.
+
 The allowlist entry is the machine owner's to add, never a session's. It must be an **exact** match of
 `~/.local/bin/kc-new`: a `contains_match` entry, or an entry for `claude` or `herdr` themselves, would let any
 command containing that word run outside the sandbox.

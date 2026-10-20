@@ -17,6 +17,15 @@ opens a window in the space that runs `claude attach <id>`, and prints one line;
 $CLAUDE_JOB_DIR/tmp/kc-new.result.json. It scans every job's tmp directory for requests, oldest first, and
 deletes each request as it reads it, so a bad one is never retried.
 
+A second kind of request restarts a named session in bypass-permissions mode, so the sessions Stella messages are
+never in a mode that makes them hold her messages for approval:
+
+    $CLAUDE_JOB_DIR/tmp/kc-new.json     {"restart": "2332-include-consistency", "prompt": "optional first message",
+                                         "space": "optional herdr space to put a window in"}
+
+It refuses the session called stella, a session already in bypass mode, and a session that is working (retry when
+it is idle). Otherwise it stops the session and resumes its conversation with `--dangerously-skip-permissions`.
+
 Standard library only.
 """
 
@@ -160,6 +169,73 @@ def place(req: dict, sid: str) -> str:
     return pane
 
 
+def restart_session(req: dict) -> tuple[bool, str, dict]:
+    """Stop a named, idle session that is not in bypass mode and resume it in bypass mode."""
+    name = req.get("restart")
+    if not isinstance(name, str) or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$", name):
+        raise ValueError("restart must be the name of a session")
+    if name == "stella":
+        raise ValueError("stella is not restarted by this helper")
+    prompt = req.get("prompt") or "Continue where you left off. The session was restarted in bypass-permissions mode."
+    if not isinstance(prompt, str) or len(prompt) > MAX_PROMPT:
+        raise ValueError(f"prompt must be a string of at most {MAX_PROMPT} characters")
+    space = req.get("space")
+    if space is not None and (not isinstance(space, str) or not SPACE.match(space)):
+        raise ValueError("space must be 1-61 characters: letters, digits, space, dot, dash, underscore, #")
+    rows = []
+    for p in (home() / ".claude/jobs").glob("*/state.json"):
+        try:
+            st = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        if st.get("name") == name:
+            rows.append((p.parent.name, st))
+    if len(rows) != 1:
+        raise ValueError(f"expected exactly one session named {name}, found {len(rows)}")
+    job_id, st = rows[0]
+    flags = st.get("respawnFlags")
+    try:
+        flags = json.loads(flags) if isinstance(flags, str) else (flags or [])
+    except ValueError:
+        flags = []
+    mode = "default"
+    if "--dangerously-skip-permissions" in flags:
+        mode = "bypassPermissions"
+    if "--permission-mode" in flags and flags.index("--permission-mode") + 1 < len(flags):
+        mode = flags[flags.index("--permission-mode") + 1]
+    if mode == "bypassPermissions":
+        raise ValueError(f"{name} is already in bypass-permissions mode")
+    if st.get("state") == "working":
+        raise ValueError(f"{name} is working; retry when it is idle")
+    sid, cwd = st.get("sessionId"), st.get("cwd") or str(home())
+    if not sid or not Path(cwd).is_dir():
+        raise ValueError(f"{name} has no resumable conversation")
+    p = run("claude", "stop", job_id)
+    if p.returncode != 0:
+        raise RuntimeError(f"claude stop {job_id} failed: {(p.stderr or p.stdout).strip()[-200:]}")
+    p = run("claude", "--bg", "--resume", sid, "-n", name, "--dangerously-skip-permissions", "--", prompt, cwd=cwd)
+    if p.returncode != 0:
+        raise RuntimeError(f"claude --bg --resume failed after the stop: {(p.stderr or p.stdout).strip()[-200:]}")
+    new_id = None
+    for _ in range(20):
+        try:
+            agents = json.loads(run("claude", "agents", "--json").stdout)
+        except ValueError:
+            agents = []
+        row = next((r for r in agents if r.get("name") == name and r.get("kind") == "background"), None)
+        if row:
+            new_id = row["id"]
+            break
+        time.sleep(1)
+    if not new_id:
+        raise RuntimeError(f"{name} did not show up in `claude agents` after the restart")
+    info = {"ok": True, "restarted": name, "id": new_id, "was": mode}
+    if space:
+        place({"space": space, "name": name, "dir": cwd}, new_id)
+        info["space"] = space
+    return True, f"kc-new: restarted {name} ({new_id}) in bypass-permissions mode (was {mode})" + ("" if space else "; run `tok reattach` to put its window back"), info
+
+
 def handle(request: Path) -> tuple[bool, str]:
     """Process one request file; returns (succeeded, the line to print). The file is deleted first."""
     result = request.with_name(RESULT)
@@ -169,7 +245,19 @@ def handle(request: Path) -> tuple[bool, str]:
         return False, f"kc-new: cannot read {request}: {e}"
     request.unlink(missing_ok=True)
     try:
-        req = validate(json.loads(raw))
+        loaded = json.loads(raw)
+    except ValueError:
+        loaded = None
+    if isinstance(loaded, dict) and "restart" in loaded:
+        try:
+            ok, line, info = restart_session(loaded)
+        except (ValueError, RuntimeError) as e:
+            result.write_text(json.dumps({"ok": False, "error": str(e)}))
+            return False, f"kc-new: {e}"
+        result.write_text(json.dumps(info))
+        return ok, line
+    try:
+        req = validate(loaded)
         sid = start_session(req)
     except (ValueError, RuntimeError) as e:
         result.write_text(json.dumps({"ok": False, "error": str(e)}))

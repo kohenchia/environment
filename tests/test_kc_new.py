@@ -20,8 +20,10 @@ class KcNew(unittest.TestCase):
         (self.home / "agents.json").write_text("[]")
         self.tool("claude", f'''case "$1" in
   agents) cat {self.home}/agents.json ;;
+  stop) echo "claude $*" >> {self.log} ;;
   --bg) echo "claude $*" >> {self.log}
-        echo "[{{\\"kind\\":\\"background\\",\\"id\\":\\"bbbb2222\\",\\"name\\":\\"$3\\"}}]" > {self.home}/agents.json ;;
+        n=""; while [ $# -gt 0 ]; do if [ "$1" = -n ]; then n="$2"; fi; shift; done
+        echo "[{{\\"kind\\":\\"background\\",\\"id\\":\\"bbbb2222\\",\\"name\\":\\"$n\\"}}]" > {self.home}/agents.json ;;
 esac''')
         self.herdr_fail = ""
         self.write_herdr()
@@ -78,6 +80,34 @@ esac'''
         self.request(model="gpt")
         p = self.run_helper()
         self.assertNotEqual(p.returncode, 0)
+        self.assertEqual(self.calls(), [])
+
+    def job(self, jid, name, flags, state="done"):
+        d = self.home / ".claude/jobs" / jid
+        d.mkdir(parents=True, exist_ok=True)
+        (self.home / "github/proj").mkdir(parents=True, exist_ok=True)
+        (d / "state.json").write_text(json.dumps({"name": name, "state": state, "sessionId": "sess-" + jid,
+                                                  "cwd": str(self.home / "github/proj"), "respawnFlags": json.dumps(flags)}))
+
+    def restart(self, **kw):
+        (self.home / ".claude/jobs/aaaa1111/tmp/kc-new.json").write_text(json.dumps(kw))
+        return self.run_helper()
+
+    def test_restart_moves_a_session_into_bypass_mode(self):
+        self.job("cccc3333", "slow-one", ["--permission-mode", "auto"])
+        p = self.restart(restart="slow-one")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.calls()[0], "claude stop cccc3333")
+        self.assertTrue(self.calls()[1].startswith("claude --bg --resume sess-cccc3333 -n slow-one --dangerously-skip-permissions --"))
+        self.assertIn("restarted slow-one (bbbb2222) in bypass-permissions mode (was auto)", p.stdout)
+
+    def test_restart_refuses_a_bypass_session_a_working_one_and_stella(self):
+        self.job("dddd4444", "fine", ["--dangerously-skip-permissions"])
+        self.job("eeee5555", "busy", ["--permission-mode", "auto"], state="working")
+        self.job("ffff6666", "stella", ["--permission-mode", "auto"])
+        for name in ("fine", "busy", "stella", "nobody"):
+            p = self.restart(restart=name)
+            self.assertNotEqual(p.returncode, 0, name)
         self.assertEqual(self.calls(), [])
 
     def test_an_existing_space_gets_a_window(self):
