@@ -16,8 +16,9 @@ review, by a small diff, or by time or budget.
 
 1. **Opus does the judging.** Look at the model you are running on (your system prompt names it). On Opus, you
    orchestrate and judge. On anything else you are only the orchestrator: the design, the diff pass, the caller
-   trace and the verification are done by subagents with `model: "opus"`, and you never substitute your own view for
-   theirs. A review in which no Opus agent reasoned about the subject is not a review; the verdict line says so.
+   trace and the verification are done by subagents with `model: "opus"` and `effort: "high"`, and you never
+   substitute your own view for theirs. Every judging subagent gets both settings, set explicitly: without `effort` it
+   runs at the default, which is not the depth Kohen wants. A review in which no Opus agent reasoned about the subject is not a review; the verdict line says so.
 2. **Every step runs, every time.** Steps 1 to 5 run in full for every subject. An earlier review of the same subject,
    yours or anyone's, is something to compare against, never a substitute: re-derive the design, re-read the diff and
    re-trace the callers at the current head, then say what changed and which earlier findings still hold. The modes
@@ -99,7 +100,7 @@ Plus question 6: is the review itself consistent with the knowledge (step 0)?
 ## 4. The review team (required)
 
 For anything beyond a typo-level change to a document, spawn these, in parallel where they are independent, every one
-with `model: "opus"` (Sonnet only for mechanical work: listing files, fetching, formatting). Give each the subject's
+with `model: "opus"` and `effort: "high"` (Sonnet only for mechanical work: listing files, fetching, formatting). Give each the subject's
 path and sha, the knowledge file and the exact question, and ask for findings with `file:line` evidence.
 
 | Agent | Its one task |

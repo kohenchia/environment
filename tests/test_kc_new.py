@@ -76,6 +76,16 @@ esac'''
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(self.calls()[0].startswith("claude --bg -n new-work --model opus --dangerously-skip-permissions -- do the thing"))
 
+    def test_an_effort_is_passed_to_the_session(self):
+        self.request(model="opus", effort="high")
+        p = self.run_helper()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertTrue(self.calls()[0].startswith("claude --bg -n new-work --model opus --effort high --dangerously-skip-permissions -- do the thing"))
+
+    def test_an_unknown_effort_is_refused(self):
+        self.request(effort="ultra")
+        self.assertNotEqual(self.run_helper().returncode, 0)
+
     def test_an_unknown_model_is_refused(self):
         self.request(model="gpt")
         p = self.run_helper()

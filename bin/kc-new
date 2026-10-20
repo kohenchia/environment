@@ -12,7 +12,7 @@ command allowlist), so it takes no arguments and trusts nothing it reads. The se
 `space` is the herdr space to put the session's window in (created when none has that name), `dir` the working
 directory (it must be under ~/github or a directory listed in ~/.config/kc-new/roots), `name` the session's name (lower-case, digits, dashes;
 default: the space's), `prompt` its first message, and the optional `model` (opus, sonnet or haiku; default: the
-machine's default model) the session runs on. The helper starts the background session like `cy` would,
+machine's default model) and `effort` (low, medium, high, xhigh or max) the session runs on. The helper starts the background session like `cy` would,
 opens a window in the space that runs `claude attach <id>`, and prints one line; the result is also written to
 $CLAUDE_JOB_DIR/tmp/kc-new.result.json. It scans every job's tmp directory for requests, oldest first, and
 deletes each request as it reads it, so a bad one is never retried.
@@ -44,6 +44,7 @@ SPACE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._#-]{0,60}$")
 NAME = re.compile(r"^[a-z0-9][a-z0-9-]{0,48}$")
 MAX_PROMPT = 20_000
 MODELS = ("opus", "sonnet", "haiku")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 def home() -> Path:
@@ -83,7 +84,10 @@ def validate(req) -> dict:
     model = req.get("model")
     if model is not None and model not in MODELS:
         raise ValueError(f"model, when given, must be one of {', '.join(MODELS)}")
-    return {"space": space, "name": name, "prompt": prompt, "dir": str(directory), "model": model}
+    effort = req.get("effort")
+    if effort is not None and effort not in EFFORTS:
+        raise ValueError(f"effort, when given, must be one of {', '.join(EFFORTS)}")
+    return {"space": space, "name": name, "prompt": prompt, "dir": str(directory), "model": model, "effort": effort}
 
 
 def run(*cmd: str, cwd: str | None = None) -> subprocess.CompletedProcess:
@@ -93,6 +97,7 @@ def run(*cmd: str, cwd: str | None = None) -> subprocess.CompletedProcess:
 def start_session(req: dict) -> str:
     """Start the background session (the same flags as `cy`) and return its id."""
     model = ["--model", req["model"]] if req.get("model") else []
+    model += ["--effort", req["effort"]] if req.get("effort") else []
     p = run("claude", "--bg", "-n", req["name"], *model, "--dangerously-skip-permissions", "--", req["prompt"], cwd=req["dir"])
     if p.returncode != 0:
         raise RuntimeError(f"claude --bg failed: {(p.stderr or p.stdout).strip()[-200:]}")

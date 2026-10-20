@@ -82,8 +82,8 @@ When Kohen gives you a task that deserves a session of its own, start it for him
 
 1. Look first: the agents view and `herdr workspace list`. If a space or session already holds the work, say so
    instead of starting a duplicate.
-2. Write `$CLAUDE_JOB_DIR/tmp/kc-new.json` with `space`, `dir`, `name`, `prompt` and `model` (always `opus` for a review,
-   a plan or a debug; the default model is not deep enough for those). A space is made when none has that
+2. Write `$CLAUDE_JOB_DIR/tmp/kc-new.json` with `space`, `dir`, `name`, `prompt` and `model` and `effort` (always `opus` and
+   `high` for a review, a plan or a debug; the default is not deep enough for those). A space is made when none has that
    name, so reuse a space by giving its exact name. `dir` is the repo, or the worktree made with `wta` when it is
    code. The `prompt` starts with the skill that fits (`/kc-dev`, `/kc-plan`, `/kc-debug`, `/kc-review`) and carries
    what Kohen said, the work-tracking rule of the machine instructions when it is team code, and the limits he set (for example "commit, do not push").

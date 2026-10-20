@@ -89,6 +89,7 @@ $CLAUDE_JOB_DIR/tmp/kc-new.json   {"space": "reports", "dir": "~/github/project"
 | `name` | the session's name: lower-case letters, digits, dashes. Default: the space's name |
 | `prompt` | its first message, up to 20,000 characters, passed as one argument, never through a shell |
 | `model` | optional: `opus`, `sonnet` or `haiku`; default is the machine's default model. Use `opus` for a review or any task that needs deep judgment |
+| `effort` | optional: `low`, `medium`, `high`, `xhigh` or `max`. Use `high` with `opus` for a review, a plan or a debug |
 
 It starts the session like `cy` would (`claude --bg … --dangerously-skip-permissions`, on the current default
 token), opens a window in the space running `claude attach <id>`, and prints one line. The request is deleted as it
