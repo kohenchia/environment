@@ -187,6 +187,12 @@ status ("2399-fm-api-followup", "#2399 auto-merge on"). When two sessions tie, i
 owner is wrong, add the pair to `owners.json`. This covers only Kohen's own PRs; every other merge or approval still
 needs his yes. A new hold is a line in `hold.txt`.
 
+**Reminders.** Kohen asks for reminders at stages ("remind me when X merges"). Put each in
+`~/.local/share/stella/approved-prs/reminders.txt` as `<owner/repo#N> merged | the reminder`. In every "Waiting
+sessions" run, `approved-prs.py reminders` lists those whose PR has merged; show each as the one line of the run
+(a reminder is news worth a line), then `mark-reminder <owner/repo#N>`. A reminder with no PR to watch is kept in the
+journal and shown with the status.
+
 **Merged PRs.** Also a standing order from Kohen (2026-10-19), in the same run: for every open session whose PRs
 are all merged, tell it to report. Run the helper with `merged`; it lists sessions (from the PRs the daemon records
 per session) whose PRs are all merged and who were not told yet. `SendMessage` each one: "Stella, at Kohen's

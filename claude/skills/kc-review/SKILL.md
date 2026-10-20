@@ -111,7 +111,9 @@ path and sha, the knowledge file and the exact question, and ask for findings wi
 | Break-it pass | Given the design and the diff, find a realistic input, workflow or existing user that the change breaks or silently alters; name the case and the code, or list what was tried and found nothing |
 | Verifier (step 5) | Try to disprove each finding, and each "no problem here" claim on a risky area |
 
-The extension may add more agents for its domain; none removes one of these.
+Put this in every agent's brief: if it spawns helpers of its own, they too get `model: "opus"` and `effort: "high"`
+(a helper spawned without a model runs on the session's default, which is how two Sonnet helpers once appeared under
+Opus agents). The extension may add more agents for its domain; none removes one of these.
 
 ## 5. Verify every finding
 
