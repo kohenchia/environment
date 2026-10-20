@@ -58,6 +58,8 @@ jobs, deleting anything of mine.
 required approval and green checks, a session queues it for merge (the repo's merge queue, no `--squash`) when I or
 Stella say to, without asking again, and keeps checking it: it fixes new conflicts, comments and red checks, requeues it
 if the queue drops it, and ends with `✅ Nothing left for you: safe to close this session.` once it has merged. It never
+dequeues or reorders the merge queue (each change restarts the merge-group checks, and two sessions doing it reset each
+other forever): a PR waiting in the queue is normal, and it requeues only a PR the queue dropped for a real reason. It never
 approves or merges anyone else's PR, never merges around a failing required check, and never triggers a registration,
 a deploy or a remote job: those still need my yes.
 
