@@ -98,7 +98,7 @@ is read, so a refused one is never retried; the answer is also in `kc-new.result
 A request with `restart` instead of `space`/`dir`/`name`/`prompt` restarts a named session in bypass-permissions mode:
 `{"restart": "<session name>", "prompt": "optional first message", "space": "optional herdr space"}`. It exists because a
 session in any other mode holds a peer's messages for its user's approval, and they expire unread. It refuses `stella`,
-a session already in bypass mode, and a session that is working (retry when idle); otherwise it stops the session
+a session already in bypass mode (unless `"force": true`, which restarts it anyway so it reloads its instruction files), and a session that is working (retry when idle); otherwise it stops the session
 (`claude stop <job id>`) and resumes its conversation with `--dangerously-skip-permissions`. Without `space` it prints a
 hint to run `tok reattach` for the window. Run `kc-new` as the only command of its Bash call: combined with another command it runs in the sandbox, where
 `claude stop` and `claude --bg --resume` fail with `sandbox_apply: Operation not permitted`.

@@ -120,6 +120,13 @@ esac'''
         p = self.restart(restart="waiting-one")
         self.assertNotEqual(p.returncode, 0)
 
+    def test_force_restarts_a_session_already_in_bypass(self):
+        self.job("gggg7777", "reload-me", ["--dangerously-skip-permissions"])
+        self.assertNotEqual(self.restart(restart="reload-me").returncode, 0)
+        p = self.restart(restart="reload-me", force=True)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("claude stop gggg7777", self.calls())
+
     def test_restart_refuses_a_bypass_session_a_working_one_and_stella(self):
         self.job("dddd4444", "fine", ["--dangerously-skip-permissions"])
         self.job("eeee5555", "busy", ["--permission-mode", "auto"], state="working")

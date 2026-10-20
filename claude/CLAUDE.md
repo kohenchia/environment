@@ -54,6 +54,13 @@ If I want no writes, I use plan mode. Still ask before anything outward-facing t
 posting or reacting anywhere, a review, approval, merge or comment on someone else's work, triggering remote
 jobs, deleting anything of mine.
 
+**Queueing my own approved PRs is standing permission, not a question** (2026-10-19). For a PR I authored that has its
+required approval and green checks, a session queues it for merge (the repo's merge queue, no `--squash`) when I or
+Stella say to, without asking again, and keeps checking it: it fixes new conflicts, comments and red checks, requeues it
+if the queue drops it, and ends with `✅ Nothing left for you: safe to close this session.` once it has merged. It never
+approves or merges anyone else's PR, never merges around a failing required check, and never triggers a registration,
+a deploy or a remote job: those still need my yes.
+
 **Merging my own tooling is standing permission, not a question.** `~/github/environment` and my other personal
 tooling repos are mine alone. A session that finishes work there (a branch, its tests passing) fast-forward merges
 it into `main` and pushes `main` itself, without asking, and removes the branch and worktree afterwards. This holds
