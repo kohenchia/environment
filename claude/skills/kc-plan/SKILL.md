@@ -20,6 +20,12 @@ the vault's own `CLAUDE.md` first, it is authoritative on folders, names and fro
 this already exists, revise it rather than starting another, and preserve Kohen's inline
 `==**KC:** …==` comments verbatim.
 
+**Revising a plan is re-planning, not editing.** Its Provenance names the sha it was measured against: list
+everything that merged since then in the code the plan touches (`git log <sha>..origin/main -- <paths>`), and
+re-check every claim in it against today's `main`. A plan measured two weeks ago may describe a problem that
+is already fixed. A review of the plan (its findings are asks, not suggestions) is an input to the revision:
+each ask is applied or answered in the plan.
+
 ## 2. Research until no question is left that the code can answer
 
 - Trace every relevant code path across every repo involved, to the implementations, not the
@@ -27,6 +33,18 @@ this already exists, revise it rather than starting another, and preserve Kohen'
 - Use parallel subagents for multi-repo research (set `model`: Sonnet by default), then synthesize.
 - Resolve ambiguity by reading code. The only open questions a plan may carry are ones that need Kohen's
   judgment.
+- **Check it is not already solved.** Before designing, search merged and open PRs, and the tickets, for the
+  same symptom and the same code (`gh pr list --state all --search …`, `git log origin/main -- <paths>`).
+  Work already landed or in flight changes the problem; a plan that duplicates it is the wrong plan.
+- **A subagent's claim is a lead, not a fact.** Every fact the plan's argument rests on (what broke, which
+  run, what a system does today, what another repo pins) is checked against its primary source by someone
+  other than the agent that reported it: the code at `origin/main`, the live record (a run's status, an
+  object's fields), a grep across every repo named. Drop what cannot be confirmed, or label it unverified.
+- **Evidence is durable.** Data the plan relies on (queries, exports, sampled outputs) is saved next to the
+  plan in the vault, never only in `/tmp` or a session directory, so a reviewer can check it later.
+- **Test a rule before proposing it.** Any rule, threshold or heuristic the plan introduces (a check that
+  fails a step, a limit, a classifier) is run offline against real known-good and known-bad cases, and the
+  plan records the numbers. A rule that fails a healthy case is not proposed.
 
 ## 3. Debate the approach
 
@@ -51,7 +69,18 @@ Work items (numbered table), how we know it is right (acceptance bar and exact c
 (numbered, each with the alternative and why it lost), Risks (with structural mitigations), Open
 questions, Provenance.
 
-## 5. Finish
+Every command in "how we know it is right" is real: run it, or at least parse it (`--help`, `--dry-run`),
+against `origin/main`. A command naming a path or option that does not exist is a defect in the plan.
+
+## 5. Review it before handing it over
+
+Run `/kc-review <plan path>` on the finished plan (it reviews documents at full depth) and treat its asks
+as the next revision: apply each one, or answer it in the plan, then review again. Stop when the verdict is
+`Adopt as written`, or `Adopt after changes` with no ask tagged `blocks adoption` left. If a decision only
+Kohen can make blocks the verdict, stop and put it to him rather than choosing for him.
+
+## 6. Finish
 
 Link the plan from the project's index note and `Projects.md` if the vault keeps one. Report the path,
-the decisions taken, and the open questions for Kohen. `/kc-dev <plan path>` builds it.
+the review verdict and its report, the decisions taken, and the open questions for Kohen.
+`/kc-dev <plan path>` builds it.

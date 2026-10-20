@@ -18,6 +18,10 @@ stricter, it wins.
 - With a plan: read it in full, including inline `==**KC:** …==` comments. Execute every step, including
   integration steps against external systems; a step you cannot complete is reported as blocked, never
   skipped quietly.
+- Check the plan is still true before building it. If code it touches changed since the sha in its
+  Provenance (`git log <sha>..origin/main -- <paths>`), re-check the claims the work items rest on; if the
+  change invalidates any, revise the plan with `/kc-plan` first instead of building a fix for a problem
+  that no longer exists.
 - Read the target repo's `CLAUDE.md` (or README) and follow it exactly. Check for a `justfile` before a
   `Makefile`; use the repo's task runner for format, lint and test. `uv run` for Python, `git --no-pager`
   for git.
