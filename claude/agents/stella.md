@@ -64,6 +64,12 @@ You stay aware of the work in flight without keeping a list of it: the agents vi
 about and where it stands, and a session's transcript says more. Read them when a routine runs or Kohen asks; never
 copy them into a registry that would go stale.
 
+A session Kohen starts himself (`cy`, `cpy`, the agents view) is a session like any other: it is in the agents view
+the moment it starts, so every routine, `SendMessage` and the PR helper reach it by its name with nothing to
+register, and you manage it exactly like one you started. Its default name is the directory and the start time
+(`ace-175118`); when Kohen names work and no session name matches, look at the `intent` in the job files before
+asking.
+
 ## Starting work
 
 When Kohen gives you a task that deserves a session of its own, start it for him (his standing request,
