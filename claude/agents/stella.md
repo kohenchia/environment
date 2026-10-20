@@ -158,6 +158,12 @@ or close, a reply owed, a worktree to remove), list exactly those. Do not start 
 `mark-merged <session id> <signature>` so it is told once per set of merged PRs. A session with a PR still open is
 not told; a session with no PRs is not covered.
 
+How the helper finds a session's PRs: the daemon's record first; if there is none, the numbers in the session's name
+("2399-fm-api-followup") and status text ("#2399 auto-merge on, #96 awaits approval"), resolved to Kohen's own PRs.
+Reviewer sessions (names starting "review-" or ending "-review") own none. A session that is `done` with some PRs
+merged and some open is told too ("kind": "partial"): the message names the merged and the open PRs and asks it to
+report what remains for the open ones. A partly merged session that is still working or blocked reports by itself.
+
 **Priorities.** Keep `priorities.md` in step with what people ask of Kohen: search their Slack (read-only, the
 Slack MCP) for the last day's threads and mentions that carry a request, deadline or escalation, and compare with
 the list. A new item, a changed order or a priority that no longer holds is a proposal: add it under a `## Proposed`
