@@ -28,7 +28,7 @@ class World:
         self.dir = self.home / "fake"
         self.dir.mkdir()
         self.world_file = self.dir / "world.json"
-        self.world = {"pid": 20000, "next": 0, "jobs": {}, "workers": {}, "workspaces": {}, "tabs": {}, "panes": {}}
+        self.world = {"pid": 20000, "next": 0, "jobs": {}, "workers": {}, "workspaces": {}, "tabs": {}, "panes": {}, "late_exit": 0.3}
         self.wrapper = wrapper
         self.extra_env = extra_env or {}
         for name in ("claude", "herdr"):
@@ -64,9 +64,14 @@ class World:
     def load(self) -> dict:
         return json.loads(self.world_file.read_text())
 
+    def _fresh(self) -> dict:
+        """The world as the fake tools left it (they change it while a test runs)."""
+        self.world = self.load()
+        return self.world
+
     def job(self, name: str, *, state: str = "done", running: bool = False, flags: list | None = None, jid: str | None = None,
             cwd: str | None = None, tempo: str = "idle", created: str | None = None, in_flight: dict | None = None) -> str:
-        w = self.world
+        w = self._fresh()
         w["next"] += 1
         jid = jid or f"{w['next']:08x}"
         sid = f"{jid}-0000-4000-8000-000000000000"
@@ -88,18 +93,19 @@ class World:
 
     def pane(self, pane: str, tab: str | None = None, *, attach: str | None = None, ws: str = "w1", ws_label: str = "work",
              tab_label: str | None = None, fg: str | None = None, screen: list | None = None) -> str:
-        w = self.world
+        w = self._fresh()
         tab = tab or f"{ws}:t{len(w['tabs']) + 1}"
         w["workspaces"].setdefault(ws, {"label": ws_label})
         w["tabs"].setdefault(tab, {"ws": ws, "label": tab_label or pane})
-        w["panes"][pane] = {"tab": tab, "cwd": str(self.home / "github"),
+        w["pid"] += 1
+        w["panes"][pane] = {"tab": tab, "cwd": str(self.home / "github"), "attach_pid": w["pid"],
                             "fg": fg or (f"attach:{attach}" if attach else "shell"),
                             "screen": screen or (["claude attach " + attach] if attach else ["kohen@mac ~ %"])}
         self.save()
         return pane
 
     def opt(self, key: str, value) -> None:
-        self.world[key] = value
+        self._fresh()[key] = value
         self.save()
 
     # ── running tools ────────────────────────────────────────────────────────────────────────────────────────

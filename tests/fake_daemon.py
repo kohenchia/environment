@@ -73,17 +73,16 @@ def render(w: dict) -> None:
 
 
 def tick(w: dict) -> None:
-    """Every herdr call is one unit of time: attach clients that are slow to exit finish exiting."""
+    """An attach client whose worker was killed keeps running for `late_exit` seconds (the real one exits 0.3-0.5 s late)."""
     for p in w["panes"].values():
-        if p.get("exiting"):
-            p["exiting"] -= 1
-            if p["exiting"] <= 0:
-                p["exiting"] = 0
-                end_attach(p, p.pop("exit_job", ""))
+        if p.get("exit_at") and time.time() >= p["exit_at"]:
+            p.pop("exit_at")
+            end_attach(p, p.pop("exit_job", ""))
 
 
 def end_attach(p: dict, job: str) -> None:
     p["fg"] = "shell"
+    p.pop("attach_pid", None)
     p["screen"] = [f"Session {job} has exited.", SHELL_PROMPT]
 
 
@@ -93,7 +92,7 @@ def kill_worker(w: dict, jid: str) -> None:
         if p["fg"] == f"attach:{jid}":
             late = w.get("late_exit", 0)
             if late:
-                p["exiting"] = late
+                p["exit_at"] = time.time() + late
                 p["exit_job"] = jid
             else:
                 end_attach(p, jid)
@@ -109,6 +108,10 @@ def spawn(w: dict, jid: str, launch: list[str]) -> None:
     wrapper = os.environ.get("FAKE_WRAPPER")
     if wrapper:
         env = dict(os.environ, FAKE_WORKER_PID=str(pid), FAKE_REPL_PID=str(repl), FAKE_SESSION_ID=j["sessionId"])
+        stale = w.get("stale_state", {})
+        if jid in stale:  # a spawn that read the state directory before it was changed (a race)
+            env["CLAUDE_TOKEN_STATE"] = stale.pop(jid)
+            save(w)
         subprocess.run(shlex.split(wrapper) + ["/x/claude", *launch], env=env, capture_output=True, text=True)
 
 
@@ -156,6 +159,13 @@ def claude(argv: list[str]) -> int:
             print("respawn failed", file=sys.stderr)
             return 1
         kill_worker(w, jid)
+        if w.get("respawn_forks"):  # the daemon gives the session a new id (the binary's "old -> new" path)
+            old = w["jobs"][jid]
+            new = new_job(w, old["name"], old["flags"], old["cwd"], session_from=jid)
+            save(w)
+            spawn(w, new, ["--resume", w["jobs"][new]["transcript"], *w["jobs"][new]["flags"]])
+            print(f"respawned {jid} \u2192 {new}")
+            return 0
         save(w)
         spawn(w, jid, ["--resume", w["jobs"][jid]["transcript"], *w["jobs"][jid]["flags"]])
         w = load()
@@ -231,7 +241,7 @@ def herdr(argv: list[str]) -> int:
         p = w["panes"][argv[argv.index("--pane") + 1]]
         procs = [{"pid": 1, "argv": ["-zsh"]}]
         if p["fg"].startswith("attach:"):
-            procs.append({"pid": 2, "argv": ["claude", "attach", p["fg"].split(":")[1]]})
+            procs.append({"pid": p.get("attach_pid", 2), "argv": ["claude", "attach", p["fg"].split(":")[1]]})
         elif p["fg"].startswith("other:"):
             procs.append({"pid": 3, "argv": p["fg"].split(":", 1)[1].split()})
         return reply({"type": "pane_process_info", "foreground_processes": procs})
@@ -257,6 +267,8 @@ def herdr(argv: list[str]) -> int:
                     spawn(w, jid, ["--resume", w["jobs"][jid]["transcript"], *w["jobs"][jid]["flags"]])
                     w = load()
                 p = w["panes"][pid]
+                w["pid"] += 1
+                p["attach_pid"] = w["pid"]
                 p["fg"] = f"attach:{jid}"
                 p["screen"] = ["claude attach " + jid]
             else:

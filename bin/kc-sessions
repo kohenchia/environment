@@ -20,6 +20,7 @@ back, and says what is wrong when something already is.
                                               sessions not in bypass mode. Exit 1 when anything is wrong
     kc-sessions repair                        give the windows this tool detached their attach back
     kc-sessions windows                       every window and what it attaches to
+    kc-sessions snapshot / diff BEFORE AFTER  the state a restart must not change, and what differs between two of them
 
 TARGET is a job id or a session name. A name must resolve to exactly one session: the only one with a running worker,
 else the only one, else the newest when the others are superseded by a recorded fork; anything else is an error that
@@ -33,6 +34,8 @@ panes this tool saw attached to the job it restarted. Standard library only; rea
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -102,10 +105,11 @@ class Job:
 
     @property
     def busy(self) -> bool:
-        """Doing something now: a turn is running, or subagents / a wake are in flight."""
+        """In the middle of work: a turn is running, or subagents / background commands are in flight. A session that only
+        waits for a wake or a cron is idle between turns, and restarting it loses nothing."""
         inflight = self.in_flight or {}
-        return (self.state == "working" or self.tempo == "active" or bool(inflight.get("tasks"))
-                or bool(inflight.get("wake")))
+        kinds = [k for k in (inflight.get("kinds") or []) if k != "session_cron"]
+        return self.tempo == "active" or bool(kinds) or bool(inflight.get("queued"))
 
     @property
     def mode(self) -> str:
@@ -159,6 +163,34 @@ def write_json_atomic(path: Path, data) -> None:
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=1))
     os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def state_lock(timeout: float = 60.0):
+    """One lock for the small files this tool and kc-new / stella write (the ledger and the lineage)."""
+    state_dir().mkdir(parents=True, exist_ok=True)
+    f = open(state_dir() / "lock", "w")
+    deadline = time.time() + timeout
+    while True:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError:
+            if time.time() > deadline:
+                raise Failure("another kc-sessions operation holds the state lock")
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        fcntl.flock(f, fcntl.LOCK_UN)
+        f.close()
+
+
+def lineage_set(old: str, new: str) -> None:
+    with state_lock():
+        link = lineage()
+        link[old] = {"new": new, "at": now()}
+        write_json_atomic(state_dir() / "lineage.json", link)
 
 
 def superseded_by(job: Job, jobs: list[Job]) -> Job | None:
@@ -326,17 +358,30 @@ def dot(pane: str) -> str | None:
     return None
 
 
-def attachments() -> dict[str, str]:
-    """{pane id: job id} for every pane that runs `claude attach`."""
+def attach_pid(info) -> int | None:
+    """The pid of the `claude attach` process in a process-info reply."""
+    for d in walk_dicts(info):
+        argv = d.get("argv")
+        if isinstance(argv, list) and argv and all(isinstance(i, str) for i in argv) and ATTACH.search(" ".join(argv)):
+            return d.get("pid")
+    return None
+
+
+def attachments() -> dict[str, tuple]:
+    """{pane id: (job id, pid of the attach process)} for every pane that runs `claude attach`."""
     out = {}
     for p in panes():
-        job = attached_job(process_info(p.id))
+        info = process_info(p.id)
+        job = attached_job(info)
         if job:
-            out[p.id] = job
+            out[p.id] = (job, attach_pid(info))
     return out
 
 
 # ── detached ledger ──────────────────────────────────────────────────────────────────────────────────────────
+
+LEDGER_TTL = 30 * 60  # a window that lost its attach is only ever repaired within this long
+
 
 def ledger() -> dict:
     try:
@@ -345,47 +390,98 @@ def ledger() -> dict:
         return {}
 
 
-def ledger_write(data: dict) -> None:
-    write_json_atomic(state_dir() / "detached.json", data)
+def ledger_add(entries: dict) -> None:
+    with state_lock():
+        data = ledger()
+        data.update(entries)
+        write_json_atomic(state_dir() / "detached.json", data)
 
 
-def give_back(pane: str, job: str, log) -> bool:
-    """Type the attach into a pane that lost it. Returns True when the pane shows the attach (and a dot) after."""
+def ledger_drop(pane: str) -> None:
+    with state_lock():
+        data = ledger()
+        data.pop(pane, None)
+        write_json_atomic(state_dir() / "detached.json", data)
+
+
+def entry_for(pane: str, job: str, pid) -> dict:
+    return {"job": job, "since": now(), "pid": pid}
+
+
+def age_seconds(stamp: str) -> float:
+    try:
+        return time.time() - datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def give_back(pane: str, entry: dict, log) -> bool:
+    """Type the attach into a pane that lost it. True when the pane shows a NEW attach to the job (and a dot). The attach
+    that was there when the session was restarted takes a moment to exit: it is waited for, never counted."""
+    jobs = load_jobs()
+    target = lineage().get(entry["job"], {}).get("new", entry["job"])
+    live = next((j for j in jobs if j.id == target), None)
+    if live is None or not live.running:
+        log(f"{pane}: {target} has no running worker; not reviving it for a window")
+        return False
     deadline = time.time() + scaled(40)
     typed = False
+    seen_shell = False
     while time.time() < deadline:
         info = process_info(pane)
         if info is None:
             time.sleep(poll())
             continue
-        if attached_job(info) == job:
-            if dot(pane) not in (None, "unknown") or time.time() > deadline - scaled(20):
-                log(f"{pane}: attached to {job}")
-                return True
-            time.sleep(poll())
-            continue
-        if attached_job(info):  # attached to another job: not ours to touch
-            log(f"{pane}: shows {attached_job(info)}, left alone")
+        cur, pid = attached_job(info), attach_pid(info)
+        if cur:
+            dying = (pid is not None and pid == entry.get("pid")) or (entry.get("pid") is None and cur == entry["job"] and not seen_shell)
+            if dying:
+                time.sleep(poll())
+                continue
+            if cur == target:
+                if dot(pane) not in (None, "unknown") or time.time() > deadline - scaled(20):
+                    log(f"{pane}: attached to {target}")
+                    return True
+                time.sleep(poll())
+                continue
+            log(f"{pane}: shows {cur}, left alone")
             return False
-        if only_shell(info) and not typed and screen_still(pane):
-            run("herdr", "pane", "run", pane, f"claude attach {job}", timeout=15)
-            typed = True
-            time.sleep(poll())
-            continue
+        if only_shell(info):
+            seen_shell = True
+            if not typed and screen_still(pane):
+                run("herdr", "pane", "run", pane, f"claude attach {target}", timeout=15)
+                typed = True
         time.sleep(poll())
-    log(f"{pane}: could not give back the attach to {job} (not a quiet shell); `kc-sessions repair` retries")
+    log(f"{pane}: could not give back the attach to {target} (not a quiet shell); `kc-sessions repair` retries")
     return False
 
 
-def restore_ledger(log) -> int:
-    """Give every window in the ledger its attach back. Returns how many remain."""
-    data = ledger()
-    for pane, entry in list(data.items()):
-        job = lineage().get(entry["job"], {}).get("new", entry["job"])
-        if give_back(pane, job, log):
-            del data[pane]
-            ledger_write(data)
-    return len(data)
+def restore_ledger(log, jobs: set | None = None) -> int:
+    """Give the windows in the ledger their attach back (only those of `jobs`, when given). Entries for windows herdr no
+    longer has, older than half an hour, or whose job has no worker are dropped. Returns how many remain."""
+    try:
+        known = {p.id for p in panes()}
+    except Failure:
+        known = None
+    left = 0
+    for pane, entry in list(ledger().items()):
+        if jobs is not None and entry["job"] not in jobs and lineage().get(entry["job"], {}).get("new") not in jobs:
+            continue  # another session's window: its own restart gives it back
+        if known is not None and pane not in known:
+            ledger_drop(pane)
+            log(f"{pane}: the window is gone; forgotten")
+            continue
+        if age_seconds(entry["since"]) > LEDGER_TTL:
+            ledger_drop(pane)
+            log(f"{pane}: lost its attach more than half an hour ago; forgotten (type `claude attach {entry['job']}` there if you want it)")
+            continue
+        if give_back(pane, entry, log):
+            ledger_drop(pane)
+        elif not next((j for j in load_jobs() if j.id == lineage().get(entry["job"], {}).get("new", entry["job"]) and j.running), None):
+            ledger_drop(pane)  # nothing running to attach: the problem is the session, reported elsewhere
+        else:
+            left += 1
+    return left
 
 
 # ── restarts ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -410,18 +506,19 @@ def respawn(targets: list[str], wait_idle: float, log) -> int:
     except Failure:
         before = {}
         log("herdr is not answering: windows are not tracked, check them with `kc-sessions check`")
-    data = ledger()
-    for pane, job in before.items():
-        if job in {j.id for j in chosen}:
-            data[pane] = {"job": job, "since": now()}
-    ledger_write(data)
+    ids = {j.id for j in chosen}
+    ledger_add({pane: entry_for(pane, job, pid) for pane, (job, pid) in before.items() if job in ids})
     deadline = time.time() + wait_idle
     pending = sorted(chosen, key=lambda j: j.busy)  # idle sessions first
+    last_waiting = ""
     while pending:
         fresh = {j.id: j for j in load_jobs()}
         ready = [j for j in pending if not fresh.get(j.id, j).busy or time.time() >= deadline]
         if not ready:
-            log(f"waiting for {', '.join(j.name for j in pending)} to go idle")
+            waiting = ", ".join(j.name for j in pending)
+            if waiting != last_waiting:
+                log(f"waiting for {waiting} to go idle")
+                last_waiting = waiting
             time.sleep(max(poll(), min(5.0, poll() * 5)))
             continue
         job = ready[0]
@@ -432,19 +529,26 @@ def respawn(targets: list[str], wait_idle: float, log) -> int:
             log(f"{job.name} ({job.id}): claude respawn failed: {(p.stderr or p.stdout).strip()[-160:]}")
             problems += 1
             continue
+        target_id = job.id
         m = RESPAWNED.search(p.stdout + p.stderr)
         if m and m.group(1) == job.id and m.group(2) != job.id:
-            log(f"{job.name}: the daemon gave it a new id {m.group(2)}; recording the link")
-            link = lineage()
-            link[job.id] = {"new": m.group(2), "at": now()}
-            write_json_atomic(state_dir() / "lineage.json", link)
-        if not wait_restarted(job.id, was):
-            log(f"{job.name} ({job.id}): no new worker seen after the respawn")
-            problems += 1
+            target_id = m.group(2)
+            log(f"{job.name}: the daemon gave it a new id {target_id}; recording the link")
+            lineage_set(job.id, target_id)
+            was = None
+        if not wait_restarted(target_id, was):
+            # a stopped job may not answer `respawn`: a bare resume (no flags) continues the same job in place
+            if target_id == job.id and not any(j.running for j in load_jobs() if j.id == job.id):  # never beside a live worker: that forks
+                run("claude", "--bg", "--resume", job.session_id, "--", "Resumed: carry on where you left off.", cwd=job.cwd or None)
+            if not wait_restarted(target_id, was):
+                log(f"{job.name} ({job.id}): no new worker seen after the respawn")
+                problems += 1
+                continue
+            log(f"{job.name} ({job.id}): revived with a bare resume")
         else:
             log(f"{job.name} ({job.id}): restarted")
-    problems += restore_ledger(log)
-    return problems
+        problems += restore_ledger(log, {job.id, target_id})  # this session's windows now, not after the others
+    return problems + restore_ledger(log)
 
 
 def restart_with_prompt(target: str, prompt: str, log) -> int:
@@ -452,18 +556,12 @@ def restart_with_prompt(target: str, prompt: str, log) -> int:
     (no flags, so the daemon continues the same job with its saved flags). If the daemon forks anyway, the fork is
     recorded and the windows follow it."""
     job = resolve(target)
-    if job.busy:
-        raise Failure(f"{job.name} is busy (state {job.state}); try again when it is idle")
     try:
         before = attachments()
     except Failure:
         before = {}
         log("herdr is not answering: windows are not tracked, check them with `kc-sessions check`")
-    data = ledger()
-    for pane, j in before.items():
-        if j == job.id:
-            data[pane] = {"job": job.id, "since": now()}
-    ledger_write(data)
+    ledger_add({pane: entry_for(pane, j, pid) for pane, (j, pid) in before.items() if j == job.id})
     known = {j.id for j in load_jobs()}
     if job.running:
         if run("claude", "stop", job.id).returncode != 0:
@@ -485,9 +583,7 @@ def restart_with_prompt(target: str, prompt: str, log) -> int:
             break
         if copy:
             log(f"{job.name}: the daemon continued it as {copy.id} (a fork); recording the link")
-            link = lineage()
-            link[job.id] = {"new": copy.id, "at": now()}
-            write_json_atomic(state_dir() / "lineage.json", link)
+            lineage_set(job.id, copy.id)
             break
         time.sleep(poll())
     else:
@@ -504,18 +600,30 @@ def transcript_size(job: Job) -> int:
 
 
 def last_model(job: Job) -> str | None:
-    """opus, sonnet or haiku: the model of the last assistant message in the transcript."""
+    """opus, sonnet or haiku: the model of the last main-thread assistant message in the transcript (subagent and
+    tool lines also carry model names, so the lines are parsed, not searched)."""
     try:
         with open(job.transcript, "rb") as f:
             f.seek(0, 2)
-            f.seek(max(0, f.tell() - 400_000))
-            tail = f.read().decode("utf-8", "replace")
+            f.seek(max(0, f.tell() - 2_000_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
     except OSError:
         return None
-    found = re.findall(r'"model"\s*:\s*"([^"]+)"', tail)
-    for m in reversed(found):
+    for line in reversed(lines):
+        if '"model"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if obj.get("isSidechain"):
+            continue
+        message = obj.get("message")
+        model = message.get("model") if isinstance(message, dict) else None
+        if not isinstance(model, str):
+            continue
         for name in MODELS:
-            if name in m:
+            if name in model:
                 return name
     return None
 
@@ -584,11 +692,8 @@ def fork(target: str, prompt: str, log) -> int:
         before = attachments()
     except Failure:
         before = {}
-    panes_of_old = [p for p, j in before.items() if j == old.id]
-    data = ledger()
-    for p in panes_of_old:
-        data[p] = {"job": old.id, "since": now()}
-    ledger_write(data)
+    ledger_add({pane: entry_for(pane, j, pid) for pane, (j, pid) in before.items() if j == old.id})
+    known = {j.id for j in jobs}
     size = transcript_size(old)
     flags = ["--dangerously-skip-permissions", *copied_flags(old)]
     p = run("claude", "--bg", "--resume", old.session_id, "-n", old.name, *flags, "--", prompt, cwd=old.cwd)
@@ -597,15 +702,12 @@ def fork(target: str, prompt: str, log) -> int:
     new = None
     deadline = time.time() + scaled(40)
     while time.time() < deadline and new is None:
-        new = next((j for j in load_jobs() if j.name == old.name and j.id != old.id and j.running
-                    and j.id not in lineage()), None)
+        new = next((j for j in load_jobs() if j.name == old.name and j.id not in known and j.running), None)
         if new is None:
             time.sleep(poll())
     if new is None:
         raise Failure(f"the continuation of {old.name} did not appear; the old session is untouched")
-    link = lineage()
-    link[old.id] = {"new": new.id, "at": now()}
-    write_json_atomic(state_dir() / "lineage.json", link)
+    lineage_set(old.id, new.id)
     log(f"{old.name}: continued as {new.id} (was {old.id}, mode {old.mode} -> bypassPermissions)")
     retire(old.id, log, remove=True, grown_since=size)
     return restore_ledger(log)
@@ -628,7 +730,7 @@ def check(files_only: bool) -> list[dict]:
         return issues
     try:
         table = {p.id: p for p in panes()}
-        att = attachments()
+        att = {p: j for p, (j, _) in attachments().items()}
     except Failure as e:
         return issues + [{"kind": "herdr-unreachable", "detail": str(e)}]
     by_id = {j.id: j for j in jobs}
@@ -661,6 +763,77 @@ def describe(issue: dict) -> str:
     return f"{k}: {issue.get('detail', '')}"
 
 
+# ── the invariant: what a restart must not change ────────────────────────────────────────────────────────────
+
+def normalised_flags(flags: list) -> list:
+    """The flags without the daemon's --settings blob (it is rebuilt at every start)."""
+    out, i = [], 0
+    while i < len(flags):
+        if flags[i] == "--settings":
+            i += 2
+            continue
+        out.append(flags[i])
+        i += 1
+    return out
+
+
+def snapshot(with_herdr: bool = True) -> dict:
+    """Everything a restart must leave alone: the jobs (id, name, session id, cwd, flags, transcript), which of them have a
+    worker, and every herdr window (ids, labels, order, cwd, focus) with the job its pane attaches. Pids, times, states
+    and counters are left out on purpose: they change by themselves."""
+    jobs = load_jobs()
+    snap = {
+        "jobs": {j.id: {"name": j.name, "sessionId": j.session_id, "cwd": j.cwd, "flags": normalised_flags(j.flags),
+                        "transcript": j.transcript, "template": j.template} for j in jobs},
+        "workers": sorted(j.id for j in jobs if j.running),
+    }
+    if with_herdr:
+        try:
+            snap["panes"] = [{"id": p.id, "tab_id": p.tab_id, "workspace": p.workspace, "tab": p.tab, "cwd": p.cwd,
+                              "focused": p.focused, "attach": attached_job(process_info(p.id)),
+                              "shell": only_shell(process_info(p.id))} for p in panes()]
+        except Failure:
+            snap["panes"] = None
+    return snap
+
+
+def diff(before: dict, after: dict, workers: set | None = None) -> list[str]:
+    """Differences that are not allowed. Empty means the restart changed nothing but the workers' processes. Focus, new
+    windows and new jobs are not damage (the user works while a restart runs); `workers` names the jobs that must still
+    have a worker (the ones a restart touched; an idle one may be retired by the daemon at any time)."""
+    out = []
+    for jid, b in before["jobs"].items():
+        a = after["jobs"].get(jid)
+        if a is None:
+            out.append(f"job {jid} ({b['name']}) is gone")
+            continue
+        for k in b:
+            if b[k] != a[k]:
+                out.append(f"job {jid} ({b['name']}): {k} changed from {b[k]!r} to {a[k]!r}")
+    for jid in (workers or ()):
+        if jid in before["workers"] and jid not in after["workers"] and jid in before["jobs"]:
+            out.append(f"{before['jobs'][jid]['name']} ({jid}) had a worker and has none now")
+    bp, ap = before.get("panes"), after.get("panes")
+    if bp is not None and ap is None:
+        out.append("herdr stopped answering")
+    elif bp is not None:
+        by_id = {p["id"]: p for p in ap}
+        for p in bp:
+            q = by_id.get(p["id"])
+            if q is None:
+                out.append(f"window {p['workspace']}/{p['tab']} ({p['id']}) is gone")
+                continue
+            for k in ("tab_id", "workspace", "tab", "cwd"):
+                if p[k] != q[k]:
+                    out.append(f"window {p['workspace']}/{p['tab']} ({p['id']}): {k} changed from {p[k]!r} to {q[k]!r}")
+            if p["attach"] != q["attach"]:
+                out.append(f"window {p['workspace']}/{p['tab']} ({p['id']}) attached {p['attach']} and now shows {q['attach']}")
+        kept = [p["id"] for p in ap if p["id"] in {x["id"] for x in bp}]
+        if [p["id"] for p in bp if p["id"] in by_id] != kept:
+            out.append("the windows changed order")
+    return out
+
+
 # ── command line ─────────────────────────────────────────────────────────────────────────────────────────────
 
 def say(line: str) -> None:
@@ -687,6 +860,11 @@ def main(argv: list[str] | None = None) -> int:
     q = sub.add_parser("restart")
     q.add_argument("target")
     q.add_argument("--prompt", required=True)
+    s = sub.add_parser("snapshot")
+    s.add_argument("--no-herdr", action="store_true")
+    d = sub.add_parser("diff")
+    d.add_argument("before")
+    d.add_argument("after")
     sub.add_parser("repair")
     sub.add_parser("windows")
     a = ap.parse_args(argv)
@@ -720,11 +898,20 @@ def main(argv: list[str] | None = None) -> int:
                 if not issues:
                     say("ok: nothing to fix")
             return 1 if any(not i.get("info") for i in issues) else 0
+        if a.cmd == "snapshot":
+            say(json.dumps(snapshot(not a.no_herdr), indent=1))
+            return 0
+        if a.cmd == "diff":
+            b4 = json.loads(Path(a.before).read_text())
+            lines = diff(b4, json.loads(Path(a.after).read_text()), workers=set(b4["workers"]))
+            for ln in lines:
+                say("changed: " + ln)
+            return 1 if lines else 0
         if a.cmd == "repair":
             left = restore_ledger(say)
             return 1 if left else 0
         if a.cmd == "windows":
-            att = attachments()
+            att = {p: j for p, (j, _) in attachments().items()}
             for p in panes():
                 say(f"{p.id:8} {p.workspace[:24]:24} {p.tab[:30]:30} {att.get(p.id, '-')}")
             return 0

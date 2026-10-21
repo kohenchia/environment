@@ -2,6 +2,7 @@
 
 import json
 import unittest
+from pathlib import Path
 
 from fakeworld import World
 
@@ -24,15 +25,46 @@ class Respawn(unittest.TestCase):
             self.assertEqual(w.claude_calls(), [f"respawn {job}"])
             self.assertEqual(w.typed(), [f"TYPED p1 claude attach {job}"])
 
-    def test_a_slow_exiting_attach_is_waited_for_not_typed_over(self):
+    def test_an_attach_that_exits_late_is_not_taken_for_the_new_one(self):
+        # the real attach client exits 0.3-0.5 s AFTER the new worker is up (daemon log, 21:09): it must be waited for,
+        # and the window must end up with a NEW attach, not an empty shell
         with World() as w:
             job = w.job("backlog", state="blocked", running=True)
             w.pane("p1", attach=job)
-            w.opt("late_exit", 6)
+            w.opt("late_exit", 1.2)
+            old_pid = w.load()["panes"]["p1"]["attach_pid"]
             p = w.run("kc-sessions", "respawn", job)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-            self.assertEqual(attach_of(w, "p1"), f"attach:{job}")
+            w.run("kc-sessions", "windows")  # any herdr call lets the fake's clock run
+            pane = w.load()["panes"]["p1"]
+            self.assertEqual(pane["fg"], f"attach:{job}")
+            self.assertNotEqual(pane["attach_pid"], old_pid)
+            self.assertEqual(w.run("kc-sessions", "check", "--files-only").returncode, 0)  # nothing left in the ledger
             self.assertFalse([c for c in w.calls() if "TYPED-INTO-PROGRAM" in c])
+
+    def test_each_sessions_windows_come_back_before_the_next_session_is_restarted(self):
+        with World() as w:
+            a = w.job("a-idle", state="blocked", running=True)
+            b = w.job("b-busy", state="working", tempo="active", running=True)
+            w.pane("pa", attach=a)
+            w.pane("pb", attach=b)
+            p = w.run("kc-sessions", "respawn", a, b, "--wait-idle", "1.5")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            calls = w.calls()
+            typed_a = next(i for i, c in enumerate(calls) if c.startswith("TYPED pa"))
+            respawn_b = next(i for i, c in enumerate(calls) if c == f"claude respawn {b}")
+            self.assertLess(typed_a, respawn_b)  # a's window was back while b was still waited for
+
+    def test_a_respawn_that_gives_a_new_id_is_followed_and_the_old_one_is_not_resumed(self):
+        with World() as w:
+            old = w.job("backlog", state="blocked", running=True)
+            w.pane("p1", attach=old)
+            w.opt("respawn_forks", True)
+            p = w.run("kc-sessions", "respawn", old)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            new = json.loads((w.home / "kcs/lineage.json").read_text())[old]["new"]
+            self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{new}")
+            self.assertFalse([c for c in w.claude_calls() if c.startswith("--bg")])  # never resumed beside a live worker
 
     def test_a_window_that_was_a_shell_all_along_is_not_typed_into(self):
         with World() as w:
@@ -130,6 +162,59 @@ class Respawn(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn(job, w.load()["workers"])
             self.assertEqual(list(w.load()["jobs"]), [job])
+
+
+class Ledger(unittest.TestCase):
+    def write(self, w, entries):
+        (w.home / "kcs").mkdir(exist_ok=True)
+        (w.home / "kcs/detached.json").write_text(json.dumps(entries))
+
+    def test_an_old_entry_is_forgotten_not_acted_on(self):
+        with World() as w:
+            job = w.job("a", state="done", running=True)
+            w.pane("p1", fg="shell")
+            self.write(w, {"p1": {"job": job, "since": "2020-01-01T00:00:00Z", "pid": 1}})
+            p = w.run("kc-sessions", "repair")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("forgotten", p.stdout)
+            self.assertEqual(w.typed(), [])
+            self.assertEqual(json.loads((w.home / "kcs/detached.json").read_text()), {})
+
+    def test_an_entry_for_a_window_that_is_gone_is_dropped(self):
+        with World() as w:
+            job = w.job("a", state="blocked", running=True)
+            w.pane("other", attach=job)
+            self.write(w, {"p-gone": {"job": job, "since": "2099-01-01T00:00:00Z", "pid": 1}})
+            p = w.run("kc-sessions", "repair")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("the window is gone", p.stdout)
+
+    def test_a_finished_job_is_never_revived_to_fill_a_window(self):
+        with World() as w:
+            job = w.job("a", state="done")  # no worker
+            w.pane("p1", fg="shell")
+            self.write(w, {"p1": {"job": job, "since": "2099-01-01T00:00:00Z", "pid": 1}})
+            p = w.run("kc-sessions", "repair")
+            self.assertIn("not reviving", p.stdout)
+            self.assertEqual(w.typed(), [])
+            self.assertNotIn(job, w.load()["workers"])
+
+
+class Model(unittest.TestCase):
+    def test_the_fork_takes_the_model_of_the_main_thread_not_of_a_subagent_or_a_tool_result(self):
+        with World() as w:
+            old = w.job("review", state="blocked", running=True)
+            tr = w.load()["jobs"][old]["transcript"]
+            lines = [
+                json.dumps({"type": "assistant", "message": {"model": "claude-sonnet-5-5", "content": []}}),
+                json.dumps({"type": "assistant", "isSidechain": True, "message": {"model": "claude-opus-5-5"}}),
+                json.dumps({"type": "user", "message": {"content": [{"type": "tool_result", "content": 'model": "claude-opus-5-5"'}]}}),
+            ]
+            Path(tr).write_text("\n".join(lines) + "\n")
+            p = w.run("kc-sessions", "fork", "review")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            bg = [c for c in w.claude_calls() if c.startswith("--bg")][0]
+            self.assertIn("--model sonnet", bg)
 
 
 class Names(unittest.TestCase):
@@ -282,6 +367,65 @@ class Check(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertEqual(attach_of(w, "p1"), f"attach:{job}")
             self.assertEqual(w.run("kc-sessions", "check", "--files-only").returncode, 0)
+
+
+class Invariant(unittest.TestCase):
+    def snap(self, w):
+        p = w.run("kc-sessions", "snapshot")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return json.loads(p.stdout)
+
+    def diff(self, w, a, b):
+        fa, fb = w.home / "a.json", w.home / "b.json"
+        fa.write_text(json.dumps(a))
+        fb.write_text(json.dumps(b))
+        p = w.run("kc-sessions", "diff", str(fa), str(fb))
+        return p.returncode, p.stdout
+
+    def test_a_respawn_changes_nothing_the_snapshot_covers(self):
+        with World() as w:
+            a = w.job("a", state="blocked", running=True)
+            w.job("b", state="working", tempo="active", running=True, flags=["--permission-mode", "auto"])
+            w.job("c", state="done")  # no worker
+            w.pane("p1", attach=a, tab_label="a")
+            w.pane("mine", tab_label="notes")
+            before = self.snap(w)
+            self.assertEqual(w.run("kc-sessions", "respawn", "a", "b").returncode, 0)
+            rc, out = self.diff(w, before, self.snap(w))
+            self.assertEqual((rc, out), (0, ""))
+
+    def test_focus_new_windows_and_new_jobs_are_not_damage(self):
+        with World() as w:
+            a = w.job("a", state="blocked", running=True)
+            w.pane("p1", attach=a)
+            before = self.snap(w)
+            w.job("brand-new", state="blocked", running=True)
+            w.pane("p2", attach=None, tab_label="opened meanwhile")
+            world = w.load()
+            world["panes"]["p1"]["focused"] = True
+            w.world = world
+            w.save()
+            self.assertEqual(self.diff(w, before, self.snap(w)), (0, ""))
+
+    def test_the_diff_names_every_kind_of_damage(self):
+        with World() as w:
+            a = w.job("a", state="blocked", running=True)
+            w.pane("p1", attach=a, tab_label="a")
+            before = self.snap(w)
+            w.ctl("retire", a)  # the worker is gone and the window fell to its shell
+            rc, out = self.diff(w, before, self.snap(w))
+            self.assertEqual(rc, 1)
+            self.assertIn("had a worker and has none now", out)
+            self.assertIn("now shows None", out)
+            w.ctl("set", a, "name", json.dumps("renamed"))
+            self.assertIn("name changed", self.diff(w, before, self.snap(w))[1])
+
+    def test_a_flag_that_was_dropped_is_a_difference(self):
+        with World() as w:
+            a = w.job("a", state="blocked", running=True, flags=["--dangerously-skip-permissions", "--effort", "high"])
+            before = self.snap(w)
+            w.ctl("set", a, "flags", json.dumps(["--dangerously-skip-permissions"]))
+            self.assertIn("flags changed", self.diff(w, before, self.snap(w))[1])
 
 
 if __name__ == "__main__":

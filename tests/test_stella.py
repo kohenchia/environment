@@ -26,6 +26,14 @@ class StellaRestart(unittest.TestCase):
             self.assertEqual(calls[0], f"stop {job}")
             self.assertTrue(calls[1].startswith(f"--bg --resume {job}-0000-4000-8000-000000000000 -- Session start"), calls)
 
+    def test_waiting_for_a_wake_is_not_busy(self):
+        with World() as w:  # state working, tempo idle, one session cron: Stella between her routines
+            job = w.job("stella", state="working", running=True, flags=STELLA_FLAGS,
+                        in_flight={"tasks": 1, "queued": 0, "kinds": ["session_cron"], "wake": {"at": 1}})
+            p = w.run("stella", "restart")
+            self.assertIn("restarted in place", p.stdout, p.stdout + p.stderr)
+            self.assertEqual(w.claude_calls()[0], f"stop {job}")
+
     def test_a_daemon_fork_is_followed_not_duplicated(self):
         with World() as w:
             job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)

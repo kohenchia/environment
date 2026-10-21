@@ -223,6 +223,7 @@ def restart_session(req: dict) -> tuple[bool, str, dict]:
         raise ValueError("restart must be the name of a session")
     if name == "stella":
         raise ValueError("stella is not restarted by this helper (run `stella restart`)")
+    explicit = bool(req.get("prompt"))
     prompt = req.get("prompt") or "Continue where you left off. The session was restarted in bypass-permissions mode."
     if not isinstance(prompt, str) or len(prompt) > MAX_PROMPT:
         raise ValueError(f"prompt must be a string of at most {MAX_PROMPT} characters")
@@ -241,8 +242,8 @@ def restart_session(req: dict) -> tuple[bool, str, dict]:
     lines: list[str] = []
     try:
         if mode == "bypassPermissions":
-            problems = ks.respawn([job.id], 0.0, lines.append)
-            new_id = job.id
+            problems = ks.restart_with_prompt(job.id, prompt, lines.append) if explicit else ks.respawn([job.id], 0.0, lines.append)
+            new_id = ks.resolve(name).id
         else:
             problems = ks.fork(job.id, prompt, lines.append)
             new_id = ks.resolve(name).id
@@ -281,17 +282,24 @@ def doctor(req: dict, request: Path) -> tuple[bool, str, dict]:
         stamp.parent.mkdir(parents=True, exist_ok=True)
         stamp.touch()
     hook = home() / ".config/kc-sessions" / ("doctor" if what == "report" else "repair")
-    if hook.is_file() and os.access(hook, os.X_OK):
-        p = subprocess.run([str(hook)], capture_output=True, text=True, timeout=900, env=env, start_new_session=True)
+    usable = hook.is_file() and os.access(hook, os.X_OK)
+    if what == "repair":
+        # Stella's Bash call gives up after about two minutes and a repair restarts sessions one by one: run it detached,
+        # log to a file, and answer at once.
+        log_file = home() / ".local/state/kc-sessions/repair.log"
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [str(hook)] if usable else [sys.executable, str(Path(__file__).resolve().with_name("kc-sessions")), "repair"]
+        with open(log_file, "w") as out:
+            subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        return True, f"kc-new: repair started; read {log_file} in a minute or two (`ok` or `drift` lines)", {
+            "ok": True, "started": True, "log": str(log_file)}
+    if usable:
+        p = subprocess.run([str(hook)], capture_output=True, text=True, timeout=120, env=env, start_new_session=True)
         lines, ok = (p.stdout + p.stderr).splitlines(), p.returncode == 0
     else:
-        lines = []
-        if what == "report":
-            issues = ks.check(False)
-            lines = [("info: " if i.get("info") else "drift: ") + ks.describe(i) for i in issues] or ["ok: nothing to fix"]
-            ok = not any(not i.get("info") for i in issues)
-        else:
-            ok = ks.restore_ledger(lines.append) == 0
+        issues = ks.check(False)
+        lines = [("info: " if i.get("info") else "drift: ") + ks.describe(i) for i in issues] or ["ok: nothing to fix"]
+        ok = not any(not i.get("info") for i in issues)
     return ok, f"kc-new: doctor {what}: " + ("ok" if ok else "drift remains") + f" ({len(lines)} lines in the result)", {"ok": ok, "report": lines}
 
 
