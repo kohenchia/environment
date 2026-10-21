@@ -108,10 +108,16 @@ class Respawn(unittest.TestCase):
             self.assertFalse([c for c in w.calls() if "TYPED-INTO-PROGRAM" in c])
 
     def test_a_busy_session_is_waited_for_then_restarted(self):
+        import threading
         with World() as w:
             job = w.job("backlog", state="working", tempo="active", running=True)
             idle = w.job("idle-one", state="blocked", running=True)
-            p = w.run("kc-sessions", "respawn", job, idle, "--wait-idle", "0.3")
+
+            def quiet():
+                w.ctl("set", job, "tempo", json.dumps("idle"))
+
+            threading.Timer(3.0, quiet).start()
+            p = w.run("kc-sessions", "respawn", job, idle, "--wait-idle", "60")
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertEqual(w.claude_calls(), [f"respawn {idle}", f"respawn {job}"])  # idle first, busy after the wait
             self.assertIn("waiting for", p.stdout)
@@ -162,6 +168,28 @@ class Respawn(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn(job, w.load()["workers"])
             self.assertEqual(list(w.load()["jobs"]), [job])
+
+
+class Screen(unittest.TestCase):
+    def test_a_json_answer_with_a_moving_revision_still_counts_as_a_quiet_screen(self):
+        import importlib.machinery, importlib.util, subprocess, sys, tempfile
+        from pathlib import Path as P
+        d = P(tempfile.mkdtemp())
+        n = d / "n"
+        (d / "herdr").write_text(f"#!/bin/sh\nc=$(cat {n} 2>/dev/null || echo 0); echo $((c+1)) > {n}\n"
+                                 f"echo '{{\"result\":{{\"text\":\"prompt %\",\"revision\":'$c'}}}}'\n")
+        (d / "herdr").chmod(0o755)
+        loader = importlib.machinery.SourceFileLoader("ks_screen", str(P(__file__).resolve().parents[1] / "bin/kc-sessions"))
+        ks = importlib.util.module_from_spec(importlib.util.spec_from_loader("ks_screen", loader))
+        sys.modules["ks_screen"] = ks
+        loader.exec_module(ks)
+        import os
+        old = os.environ["PATH"]
+        os.environ["PATH"] = f"{d}:{old}"
+        try:
+            self.assertTrue(ks.screen_still("p1"))
+        finally:
+            os.environ["PATH"] = old
 
 
 class Ledger(unittest.TestCase):

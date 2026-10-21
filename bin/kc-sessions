@@ -340,8 +340,19 @@ def only_shell(info) -> bool:
 
 
 def screen(pane: str) -> str:
+    """The last lines on a pane's screen as text. herdr may answer with plain text or with a JSON object that also carries a
+    revision counter; only the text is compared."""
     p = run("herdr", "pane", "read", pane, "--lines", "4", timeout=15)
-    return p.stdout if p.returncode == 0 else ""
+    if p.returncode != 0:
+        return ""
+    try:
+        obj = json.loads(p.stdout)
+    except ValueError:
+        return p.stdout
+    for d in walk_dicts(obj):
+        if isinstance(d.get("text"), str):
+            return d["text"]
+    return p.stdout
 
 
 def screen_still(pane: str) -> bool:
