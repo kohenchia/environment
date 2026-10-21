@@ -800,9 +800,12 @@ def snapshot(with_herdr: bool = True) -> dict:
     }
     if with_herdr:
         try:
-            snap["panes"] = [{"id": p.id, "tab_id": p.tab_id, "workspace": p.workspace, "tab": p.tab, "cwd": p.cwd,
-                              "focused": p.focused, "attach": attached_job(process_info(p.id)),
-                              "shell": only_shell(process_info(p.id))} for p in panes()]
+            rows = []
+            for p in panes():
+                info = process_info(p.id)
+                rows.append({"id": p.id, "tab_id": p.tab_id, "workspace": p.workspace, "tab": p.tab, "cwd": p.cwd,
+                             "focused": p.focused, "attach": attached_job(info), "shell": only_shell(info)})
+            snap["panes"] = rows
         except Failure:
             snap["panes"] = None
     return snap
