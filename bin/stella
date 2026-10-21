@@ -3,7 +3,7 @@
 
     stella            attach to her session (Ctrl+Z drops back to the shell; she keeps running)
     stella start      start her in the background if she is not running, without attaching
-    stella restart    stop her and resume the same conversation, so she reloads her manual and routines
+    stella restart    restart her in place (same job, same window) so she reloads her manual and routines
 
 She is an ordinary background session of Claude's daemon, named `stella`, running the agent file
 ~/.claude/agents/stella.md in her store ~/.local/share/stella. Nothing else is needed for her to exist.
@@ -13,6 +13,8 @@ Standard library only.
 
 from __future__ import annotations
 
+import importlib.machinery
+import importlib.util
 import json
 import os
 import subprocess
@@ -49,18 +51,30 @@ def start() -> str:
     sys.exit("stella: started, but the session did not show up in `claude agents`")
 
 
+def sessions():
+    """The kc-sessions module that sits next to this file."""
+    path = Path(__file__).resolve().with_name("kc-sessions")
+    loader = importlib.machinery.SourceFileLoader("kc_sessions", str(path))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("kc_sessions", loader))
+    sys.modules["kc_sessions"] = mod
+    loader.exec_module(mod)
+    return mod
+
+
 def restart() -> str:
+    """Restart her in place (same job id, same flags, her window gets its attach back) so she reloads her manual."""
     r = row()
     if not r:
         return start()
-    if r.get("state") in ("working", "blocked") or r.get("pid"):
-        if claude("stop", r["id"]).returncode != 0:
-            sys.exit(f"stella: could not stop {r['id']}")
-    p = claude("--bg", "--resume", r["sessionId"], "-n", "stella", "--agent", "stella", "--model", "sonnet",
-               *FLAGS, "--", START, cwd=STORE)
-    if p.returncode != 0:
-        sys.exit(f"stella: could not resume: {(p.stderr or p.stdout).strip()[-200:]}")
-    return r["id"]
+    ks = sessions()
+    try:
+        problems = ks.restart_with_prompt("stella", START, lambda line: print(line, flush=True))
+        job = ks.resolve("stella")
+    except ks.Failure as e:
+        sys.exit(f"stella: {e}")
+    if problems:
+        sys.exit("stella: restarted, but not every window was put back; run `kc-sessions check`")
+    return job.id
 
 
 def main() -> None:

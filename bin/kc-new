@@ -17,21 +17,39 @@ opens a window in the space that runs `claude attach <id>`, and prints one line;
 $CLAUDE_JOB_DIR/tmp/kc-new.result.json. It scans every job's tmp directory for requests, oldest first, and
 deletes each request as it reads it, so a bad one is never retried.
 
-A second kind of request restarts a named session in bypass-permissions mode, so the sessions Stella messages are
-never in a mode that makes them hold her messages for approval:
+A second kind of request restarts a named session. A session in a mode that makes it hold Stella's messages for
+approval is continued in bypass-permissions mode (one new job: the window is moved to it and the old record is removed
+when nothing was done in it since); a session already in bypass mode is restarted in place with "force", which keeps
+its job id, flags and crons and reloads the instruction files:
 
     $CLAUDE_JOB_DIR/tmp/kc-new.json     {"restart": "2332-include-consistency", "prompt": "optional first message",
                                          "space": "optional herdr space to put a window in", "force": true}
 
-It refuses the session called stella, a session already in bypass mode (unless "force" is true, which restarts it anyway
-so that it reloads the instruction files), and a session that is working (retry when it is idle). Otherwise it stops the session and resumes its conversation with `--dangerously-skip-permissions`.
+It refuses the session called stella (`stella restart` does that), a session already in bypass mode unless "force" is
+true, a session that is busy (retry when it is idle), and a name that more than one session holds.
+Both restarts are done by `kc-sessions` (next to this file), which also gives the windows their attach back.
+
+A third kind reports on, or repairs, the state of the sessions and windows:
+
+    $CLAUDE_JOB_DIR/tmp/kc-new.json     {"doctor": "report"}      any session: drift in names, windows, tokens (read-only)
+                                        {"doctor": "repair"}      only Stella's own job, no parameters, at most once in
+                                                                  10 minutes: put every window and session right, never the
+                                                                  session that asked
+
+Report and repair run the machine's hooks `~/.config/kc-sessions/doctor` and `~/.config/kc-sessions/repair` when
+they exist (the work setup installs them), else `kc-sessions check` / `kc-sessions repair`.
+
+A new session may not take a name that a live session already has.
 
 Standard library only.
 """
 
 from __future__ import annotations
 
+import importlib.machinery
+import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -48,7 +66,22 @@ EFFORTS = ("low", "medium", "high", "xhigh", "max")
 
 
 def home() -> Path:
-    return Path.home()
+    return Path(os.environ.get("HOME") or Path.home())
+
+
+_KS = None
+
+
+def sessions():
+    """The kc-sessions module that sits next to this file."""
+    global _KS
+    if _KS is None:
+        path = Path(__file__).resolve().with_name("kc-sessions")
+        loader = importlib.machinery.SourceFileLoader("kc_sessions", str(path))
+        _KS = importlib.util.module_from_spec(importlib.util.spec_from_loader("kc_sessions", loader))
+        sys.modules["kc_sessions"] = _KS  # dataclasses look their module up here
+        loader.exec_module(_KS)
+    return _KS
 
 
 def roots() -> tuple[Path, ...]:
@@ -94,8 +127,16 @@ def run(*cmd: str, cwd: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=60)
 
 
+def refuse_live_name(name: str) -> None:
+    ks = sessions()
+    live = [j for j in ks.load_jobs() if j.name == name and (j.running or j.state in ("working", "blocked"))]
+    if live:
+        raise ValueError(f"a session called {name} already exists ({live[0].id}); restart it with a restart request or pick another name")
+
+
 def start_session(req: dict) -> str:
     """Start the background session (the same flags as `cy`) and return its id."""
+    refuse_live_name(req["name"])
     model = ["--model", req["model"]] if req.get("model") else []
     model += ["--effort", req["effort"]] if req.get("effort") else []
     p = run("claude", "--bg", "-n", req["name"], *model, "--dangerously-skip-permissions", "--", req["prompt"], cwd=req["dir"])
@@ -175,70 +216,83 @@ def place(req: dict, sid: str) -> str:
 
 
 def restart_session(req: dict) -> tuple[bool, str, dict]:
-    """Stop a named, idle session that is not in bypass mode and resume it in bypass mode."""
+    """Continue a named session in bypass mode (a fork), or restart a bypass one in place (force). kc-sessions does the work."""
+    ks = sessions()
     name = req.get("restart")
     if not isinstance(name, str) or not re.match(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$", name):
         raise ValueError("restart must be the name of a session")
     if name == "stella":
-        raise ValueError("stella is not restarted by this helper")
+        raise ValueError("stella is not restarted by this helper (run `stella restart`)")
     prompt = req.get("prompt") or "Continue where you left off. The session was restarted in bypass-permissions mode."
     if not isinstance(prompt, str) or len(prompt) > MAX_PROMPT:
         raise ValueError(f"prompt must be a string of at most {MAX_PROMPT} characters")
     space = req.get("space")
     if space is not None and (not isinstance(space, str) or not SPACE.match(space)):
         raise ValueError("space must be 1-61 characters: letters, digits, space, dot, dash, underscore, #")
-    rows = []
-    for p in (home() / ".claude/jobs").glob("*/state.json"):
-        try:
-            st = json.loads(p.read_text())
-        except (OSError, ValueError):
-            continue
-        if st.get("name") == name:
-            rows.append((p.parent.name, st))
-    if len(rows) != 1:
-        raise ValueError(f"expected exactly one session named {name}, found {len(rows)}")
-    job_id, st = rows[0]
-    flags = st.get("respawnFlags")
     try:
-        flags = json.loads(flags) if isinstance(flags, str) else (flags or [])
-    except ValueError:
-        flags = []
-    mode = "default"
-    if "--dangerously-skip-permissions" in flags:
-        mode = "bypassPermissions"
-    if "--permission-mode" in flags and flags.index("--permission-mode") + 1 < len(flags):
-        mode = flags[flags.index("--permission-mode") + 1]
+        job = ks.resolve(name)
+    except ks.Failure as e:
+        raise ValueError(str(e))
+    mode = job.mode
     if mode == "bypassPermissions" and not req.get("force"):
         raise ValueError(f"{name} is already in bypass-permissions mode (use force to restart it anyway, e.g. to reload the instructions)")
-    if st.get("state") == "working":
-        raise ValueError(f"{name} is working; retry when it is idle")
-    sid, cwd = st.get("sessionId"), st.get("cwd") or str(home())
-    if not sid or not Path(cwd).is_dir():
-        raise ValueError(f"{name} has no resumable conversation")
-    p = run("claude", "stop", job_id)
-    if p.returncode != 0 and st.get("state") != "done":  # a finished session has nothing to stop: resuming it is enough
-        raise RuntimeError(f"claude stop {job_id} failed: {(p.stderr or p.stdout).strip()[-200:]}")
-    p = run("claude", "--bg", "--resume", sid, "-n", name, "--dangerously-skip-permissions", "--", prompt, cwd=cwd)
-    if p.returncode != 0:
-        raise RuntimeError(f"claude --bg --resume failed after the stop: {(p.stderr or p.stdout).strip()[-200:]}")
-    new_id = None
-    for _ in range(20):
-        try:
-            agents = json.loads(run("claude", "agents", "--json").stdout)
-        except ValueError:
-            agents = []
-        row = next((r for r in agents if r.get("name") == name and r.get("kind") == "background"), None)
-        if row:
-            new_id = row["id"]
-            break
-        time.sleep(1)
-    if not new_id:
-        raise RuntimeError(f"{name} did not show up in `claude agents` after the restart")
-    info = {"ok": True, "restarted": name, "id": new_id, "was": mode}
+    if job.busy:
+        raise ValueError(f"{name} is busy; retry when it is idle")
+    lines: list[str] = []
+    try:
+        if mode == "bypassPermissions":
+            problems = ks.respawn([job.id], 0.0, lines.append)
+            new_id = job.id
+        else:
+            problems = ks.fork(job.id, prompt, lines.append)
+            new_id = ks.resolve(name).id
+    except ks.Failure as e:
+        raise RuntimeError(str(e))
+    info = {"ok": not problems, "restarted": name, "id": new_id, "was": mode, "log": lines}
     if space:
-        place({"space": space, "name": name, "dir": cwd}, new_id)
+        place({"space": space, "name": name, "dir": job.cwd}, new_id)
         info["space"] = space
-    return True, f"kc-new: restarted {name} ({new_id}) in bypass-permissions mode (was {mode})" + ("" if space else "; run `tok reattach` to put its window back"), info
+    how = "restarted in place" if new_id == job.id else f"continued as {new_id}"
+    line = f"kc-new: {how}: {name} ({new_id}) in bypass-permissions mode (was {mode})"
+    if problems:
+        line += f"; {problems} window(s) not put back, see the log and `doctor`"
+    return not problems, line, info
+
+
+def caller_job(request: Path) -> str:
+    return request.parent.parent.name
+
+
+def doctor(req: dict, request: Path) -> tuple[bool, str, dict]:
+    """Report on, or repair, the sessions and windows. Repair is Stella's alone, parameterless and rate-limited."""
+    ks = sessions()
+    what = req.get("doctor")
+    if what not in ("report", "repair") or set(req) - {"doctor"}:
+        raise ValueError('doctor must be "report" or "repair" and takes no other field')
+    caller = caller_job(request)
+    env = dict(os.environ, KC_CALLER_JOB=caller)
+    if what == "repair":
+        job = next((j for j in ks.load_jobs() if j.id == caller), None)
+        if job is None or job.name != "stella" or job.template != "stella":
+            raise ValueError("repair is only run for Stella's own session")
+        stamp = home() / ".local/state/kc-sessions/last-repair"
+        if stamp.exists() and time.time() - stamp.stat().st_mtime < 600:
+            raise ValueError("repair ran less than 10 minutes ago")
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+    hook = home() / ".config/kc-sessions" / ("doctor" if what == "report" else "repair")
+    if hook.is_file() and os.access(hook, os.X_OK):
+        p = subprocess.run([str(hook)], capture_output=True, text=True, timeout=900, env=env, start_new_session=True)
+        lines, ok = (p.stdout + p.stderr).splitlines(), p.returncode == 0
+    else:
+        lines = []
+        if what == "report":
+            issues = ks.check(False)
+            lines = [("info: " if i.get("info") else "drift: ") + ks.describe(i) for i in issues] or ["ok: nothing to fix"]
+            ok = not any(not i.get("info") for i in issues)
+        else:
+            ok = ks.restore_ledger(lines.append) == 0
+    return ok, f"kc-new: doctor {what}: " + ("ok" if ok else "drift remains") + f" ({len(lines)} lines in the result)", {"ok": ok, "report": lines}
 
 
 def handle(request: Path) -> tuple[bool, str]:
@@ -253,9 +307,9 @@ def handle(request: Path) -> tuple[bool, str]:
         loaded = json.loads(raw)
     except ValueError:
         loaded = None
-    if isinstance(loaded, dict) and "restart" in loaded:
+    if isinstance(loaded, dict) and ("restart" in loaded or "doctor" in loaded):
         try:
-            ok, line, info = restart_session(loaded)
+            ok, line, info = restart_session(loaded) if "restart" in loaded else doctor(loaded, request)
         except (ValueError, RuntimeError) as e:
             result.write_text(json.dumps({"ok": False, "error": str(e)}))
             return False, f"kc-new: {e}"

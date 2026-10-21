@@ -18,7 +18,7 @@ Alacritty ── herdr (tw)                                  Claude's background
 | The `stella` agent | `claude/agents/stella.md` | `~/.claude/agents/stella.md` |
 | The leak gate | `githooks/pre-push` | `core.hooksPath` of this repo |
 | The guard around it | `claude/plugin/hooks/hooks.json` → `claude/bin/kc-hook` | the `kc@kc-local` plugin |
-| `stella`, `kc-env`, `kc-keys`, `herdr-space`, `kc-new` | `bin/` | `~/.local/bin/` |
+| `stella`, `kc-env`, `kc-keys`, `herdr-space`, `kc-new`, `kc-sessions` | `bin/` | `~/.local/bin/` |
 
 `./setup.sh` links all of it and installs the plugin; re-run it after adding a skill or agent.
 
@@ -95,13 +95,39 @@ It starts the session like `cy` would (`claude --bg … --dangerously-skip-permi
 token), opens a window in the space running `claude attach <id>`, and prints one line. The request is deleted as it
 is read, so a refused one is never retried; the answer is also in `kc-new.result.json` next to it.
 
-A request with `restart` instead of `space`/`dir`/`name`/`prompt` restarts a named session in bypass-permissions mode:
-`{"restart": "<session name>", "prompt": "optional first message", "space": "optional herdr space"}`. It exists because a
-session in any other mode holds a peer's messages for its user's approval, and they expire unread. It refuses `stella`,
-a session already in bypass mode (unless `"force": true`, which restarts it anyway so it reloads its instruction files), and a session that is working (retry when idle); otherwise it stops the session
-(`claude stop <job id>`) and resumes its conversation with `--dangerously-skip-permissions`. Without `space` it prints a
-hint to run `tok reattach` for the window. Run `kc-new` as the only command of its Bash call: combined with another command it runs in the sandbox, where
+A request with `restart` instead of `space`/`dir`/`name`/`prompt` restarts a named session:
+`{"restart": "<session name>", "prompt": "optional first message", "space": "optional herdr space"}`. A session in any
+other permission mode holds a peer's messages for its user's approval, and they expire unread, so it is continued in
+bypass-permissions mode: the one restart that has to change the job id (the mode is fixed when a job is created). A
+session already in bypass mode is refused unless `"force": true`, which restarts it **in place**: same job id, flags and
+crons, the instruction files reloaded. Both go through `kc-sessions` (below). The request is refused for `stella`
+(`stella restart` does hers), for a busy session (retry when idle), and for a name that more than one session holds.
+A new session may not take a name that a live session already has.
+
+A request `{"doctor": "report"}` returns drift in sessions and windows in `kc-new.result.json` (any session may ask);
+`{"doctor": "repair"}` is Stella's alone, takes no other field, and runs at most once in 10 minutes. Both run the
+machine's hooks `~/.config/kc-sessions/doctor` and `~/.config/kc-sessions/repair` when they exist, else
+`kc-sessions check` / `kc-sessions repair`. Run `kc-new` as the only command of its Bash call: combined with another command it runs in the sandbox, where
 `claude stop` and `claude --bg --resume` fail with `sandbox_apply: Operation not permitted`.
+
+## Restarting sessions without disturbing anything: `kc-sessions`
+
+Two restarts exist and they differ:
+
+| | `claude respawn <id>` | `claude --bg --resume <session id> <any flag>` |
+|---|---|---|
+| Job id, session id, name | kept | **new**; the old record stays under the same name |
+| Flags (mode, model, effort, agent), crons | kept | only what is repeated on the new command line |
+| Herdr window running `claude attach <id>` | its attach ends, the pane falls back to its shell | still points at the old id (grey) |
+
+`kc-sessions` is the one tool that restarts sessions: `respawn` (in place; windows get their attach back, a busy session
+is waited for with `--wait-idle SECONDS`), `restart TARGET --prompt TEXT` (in place with a first message), `fork`
+(continue in bypass mode: new job first, windows moved, the old one stopped and removed unless it did work since or runs
+in a git worktree), `retire`, `check` (duplicate names, windows that attach a stopped job, grey dots, sessions not in
+bypass mode; `--files-only` needs neither `claude` nor herdr, so a sandboxed session can run it), `repair` and `list`.
+It types into a pane only when every process there is a shell and the screen has stopped changing, and only for a pane
+it saw attached to the job it restarted (recorded in `~/.local/state/kc-sessions/detached.json` until the attach is
+back), never into a Claude, a pager or a shell somebody is typing in.
 
 The allowlist entry is the machine owner's to add, never a session's. It must be an **exact** match of
 `~/.local/bin/kc-new`: a `contains_match` entry, or an entry for `claude` or `herdr` themselves, would let any

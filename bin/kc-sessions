@@ -1,0 +1,738 @@
+#!/usr/bin/env python3
+"""kc-sessions: restart Claude background sessions without disturbing anything else.
+
+A background session is a job of Claude's daemon (an 8-hex id, a name). Kohen watches most of them in herdr windows
+that run `claude attach <id>`. Restarting a session ends that attach, and some ways of restarting it change its id
+and leave the old record behind under the same name. This tool restarts sessions the safe way, puts every window
+back, and says what is wrong when something already is.
+
+    kc-sessions list [--json]                 every job: running worker, state, mode, and whether another job supersedes it
+    kc-sessions respawn TARGET... [--wait-idle SECONDS]
+                                              restart sessions in place (same job id, same flags, same crons). A session
+                                              that is working is waited for up to SECONDS (default 0: restart now);
+                                              the windows that showed them are given their attach back
+    kc-sessions restart TARGET --prompt TEXT  restart in place with a first message (stop, then a bare resume: same job id)
+    kc-sessions fork TARGET [--prompt TEXT]   the one restart that must change the id: continue the conversation in
+                                              bypass-permissions mode. New job first, windows moved, then the old one is
+                                              stopped and removed (never when it has done work since, or has a worktree)
+    kc-sessions retire ID [--rm]              stop a superseded job (and remove it when that is safe)
+    kc-sessions check [--files-only] [--json] report drift: duplicate names, stale or dropped windows, grey dots,
+                                              sessions not in bypass mode. Exit 1 when anything is wrong
+    kc-sessions repair                        give the windows this tool detached their attach back
+    kc-sessions windows                       every window and what it attaches to
+
+TARGET is a job id or a session name. A name must resolve to exactly one session: the only one with a running worker,
+else the only one, else the newest when the others are superseded by a recorded fork; anything else is an error that
+lists the candidates.
+
+Text is typed into a pane only when every process in it is a shell and its screen has stopped changing, and only for
+panes this tool saw attached to the job it restarted. Standard library only; reads ~/.claude/jobs and
+~/.claude/daemon/roster.json directly, so `check --files-only` works inside a sandbox.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+ATTACH = re.compile(r"\battach\s+([0-9a-f]{8})\b")
+RESPAWNED = re.compile(r"\b([0-9a-f]{8})\s*(?:→|->)\s*([0-9a-f]{8})\b")
+SHELLS = {"zsh", "bash", "sh", "fish", "dash"}
+# Flags a fork repeats from the old session. Everything else (ids, names, the permission mode, the daemon's
+# --settings blob, one-shot options) is either set by the fork itself or must not be copied.
+COPY_FLAGS = {"--effort", "--agent", "--agents", "--add-dir", "--plugin-dir", "--mcp-config", "--fallback-model",
+              "--append-system-prompt", "--append-system-prompt-file", "--allowed-tools", "--allowedTools",
+              "--disallowed-tools", "--disallowedTools", "--tools", "--thinking"}
+MODELS = ("opus", "sonnet", "haiku")
+
+
+def home() -> Path:
+    return Path(os.environ.get("HOME") or Path.home())
+
+
+def state_dir() -> Path:
+    return Path(os.environ.get("KC_SESSIONS_STATE") or home() / ".local/state/kc-sessions")
+
+
+def poll() -> float:
+    return float(os.environ.get("KC_SESSIONS_POLL", "1.0"))
+
+
+def scaled(seconds: float) -> float:
+    return seconds * float(os.environ.get("KC_SESSIONS_TIMEOUT_SCALE", "1.0"))
+
+
+def now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+class Failure(Exception):
+    """A refusal or an error whose message is the answer."""
+
+
+# ── jobs ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class Job:
+    id: str
+    name: str
+    state: str
+    tempo: str
+    created: str
+    cwd: str
+    flags: list
+    in_flight: dict
+    session_id: str
+    template: str
+    transcript: str
+    worker: dict | None = None
+    raw: dict = field(default_factory=dict)
+
+    @property
+    def running(self) -> bool:
+        return self.worker is not None
+
+    @property
+    def busy(self) -> bool:
+        """Doing something now: a turn is running, or subagents / a wake are in flight."""
+        inflight = self.in_flight or {}
+        return (self.state == "working" or self.tempo == "active" or bool(inflight.get("tasks"))
+                or bool(inflight.get("wake")))
+
+    @property
+    def mode(self) -> str:
+        if "--dangerously-skip-permissions" in self.flags:
+            return "bypassPermissions"
+        if "--permission-mode" in self.flags and self.flags.index("--permission-mode") + 1 < len(self.flags):
+            return self.flags[self.flags.index("--permission-mode") + 1]
+        return "default"
+
+
+def load_jobs() -> list[Job]:
+    jobs_dir = home() / ".claude/jobs"
+    try:
+        workers = json.loads((home() / ".claude/daemon/roster.json").read_text()).get("workers") or {}
+    except (OSError, ValueError):
+        workers = {}
+    out = []
+    for p in sorted(jobs_dir.glob("*/state.json")):
+        try:
+            st = json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        flags = st.get("respawnFlags")
+        try:
+            flags = json.loads(flags) if isinstance(flags, str) else (flags or [])
+        except ValueError:
+            flags = []
+        inflight = st.get("inFlight")
+        if isinstance(inflight, str):
+            try:
+                inflight = json.loads(inflight)
+            except ValueError:
+                inflight = {}
+        out.append(Job(id=p.parent.name, name=st.get("name") or "", state=st.get("state") or "", tempo=st.get("tempo") or "",
+                       created=st.get("createdAt") or "", cwd=st.get("cwd") or "", flags=list(flags),
+                       in_flight=inflight if isinstance(inflight, dict) else {}, session_id=st.get("sessionId") or "",
+                       template=st.get("template") or "", transcript=st.get("linkScanPath") or "",
+                       worker=workers.get(p.parent.name), raw=st))
+    return out
+
+
+def lineage() -> dict:
+    try:
+        return json.loads((state_dir() / "lineage.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json_atomic(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    os.replace(tmp, path)
+
+
+def superseded_by(job: Job, jobs: list[Job]) -> Job | None:
+    """The job that replaced this one, when a recorded fork says so or the choice is otherwise unambiguous."""
+    new = lineage().get(job.id, {}).get("new")
+    by_id = {j.id: j for j in jobs}
+    if new in by_id:
+        return by_id[new]
+    return None
+
+
+def candidates(name: str, jobs: list[Job]) -> list[Job]:
+    return [j for j in jobs if j.name == name]
+
+
+def resolve(target: str, jobs: list[Job] | None = None) -> Job:
+    """One job for an id or a name, or a Failure that lists the candidates."""
+    jobs = load_jobs() if jobs is None else jobs
+    for j in jobs:
+        if target in (j.id, j.session_id):
+            return j
+    named = candidates(target, jobs)
+    if not named:
+        raise Failure(f"no session called {target}")
+    live = [j for j in named if not superseded_by(j, jobs)]
+    running = [j for j in live if j.running]
+    pool = running or live
+    if len(pool) == 1:
+        return pool[0]
+    desc = "; ".join(f"{j.id} ({j.state}{', running' if j.running else ''})" for j in named)
+    raise Failure(f"{target} names more than one session: {desc}. Pass the id, or retire the old copy with "
+                  f"`kc-sessions retire <id>`")
+
+
+def duplicate_names(jobs: list[Job]) -> dict[str, list[Job]]:
+    """Names held by more than one job where no recorded fork says which one is current and which is old."""
+    out = {}
+    for name in sorted({j.name for j in jobs if j.name}):
+        group = candidates(name, jobs)
+        live = [j for j in group if not superseded_by(j, jobs)]
+        running = [j for j in live if j.running]
+        if len(running) > 1 or (len(live) > 1 and not running):
+            out[name] = group
+    return out
+
+
+# ── claude and herdr ─────────────────────────────────────────────────────────────────────────────────────────
+
+def run(*cmd: str, cwd: str | None = None, timeout: float = 60) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return subprocess.CompletedProcess(cmd, 127, "", str(e))
+
+
+def herdr_json(*args: str):
+    p = run("herdr", *args, timeout=30)
+    try:
+        return json.loads(p.stdout)
+    except ValueError:
+        return None
+
+
+def walk_dicts(x):
+    if isinstance(x, dict):
+        yield x
+        for v in x.values():
+            yield from walk_dicts(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from walk_dicts(v)
+
+
+def herdr_reachable() -> bool:
+    return herdr_json("workspace", "list") is not None
+
+
+@dataclass
+class Pane:
+    id: str
+    tab_id: str
+    workspace: str
+    tab: str
+    cwd: str
+    focused: bool = False
+
+
+def panes() -> list[Pane]:
+    """Every pane, in herdr's order, with its space and window labels."""
+    ws_label: dict[str, str] = {}
+    tab_label: dict[str, tuple[str, str]] = {}
+    ws_reply = herdr_json("workspace", "list")
+    if ws_reply is None:
+        raise Failure("herdr is not answering")
+    for w in walk_dicts(ws_reply):
+        wid = w.get("workspace_id") or w.get("id")
+        if isinstance(wid, str) and isinstance(w.get("label"), str):
+            ws_label[wid] = w["label"]
+            for t in walk_dicts(herdr_json("tab", "list", "--workspace", wid) or {}):
+                tid = t.get("tab_id") or t.get("id")
+                if isinstance(tid, str):
+                    tab_label[tid] = (w["label"], t.get("label") if isinstance(t.get("label"), str) else "")
+    out, seen = [], set()
+    for d in walk_dicts(herdr_json("pane", "list") or {}):
+        pid = d.get("pane_id")
+        if isinstance(pid, str) and pid not in seen:
+            seen.add(pid)
+            ws, tab = tab_label.get(d.get("tab_id"), ("", ""))
+            out.append(Pane(pid, d.get("tab_id") or "", ws, tab, d.get("cwd") or d.get("foreground_cwd") or "",
+                            bool(d.get("focused"))))
+    return out
+
+
+def commands(info) -> list[str]:
+    out: list[str] = []
+
+    def walk(x):
+        if isinstance(x, list) and x and all(isinstance(i, str) for i in x):
+            out.append(" ".join(x))
+        elif isinstance(x, dict):
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(info)
+    return out
+
+
+def process_info(pane: str):
+    return herdr_json("pane", "process-info", "--pane", pane)
+
+
+def attached_job(info) -> str | None:
+    for c in commands(info):
+        m = ATTACH.search(c)
+        if m:
+            return m.group(1)
+    return None
+
+
+def only_shell(info) -> bool:
+    """True when every process in the pane is a shell. An unreadable reply is not a shell: fail safe."""
+    cmds = commands(info)
+    return bool(cmds) and all(Path(c.split()[0].lstrip("-")).name in SHELLS for c in cmds)
+
+
+def screen(pane: str) -> str:
+    p = run("herdr", "pane", "read", pane, "--lines", "4", timeout=15)
+    return p.stdout if p.returncode == 0 else ""
+
+
+def screen_still(pane: str) -> bool:
+    """The screen did not change for a moment: nobody is typing there."""
+    first = screen(pane)
+    time.sleep(min(1.0, poll()))
+    return bool(first) and first == screen(pane)
+
+
+def dot(pane: str) -> str | None:
+    for d in walk_dicts(herdr_json("agent", "list") or {}):
+        if d.get("pane_id") == pane and isinstance(d.get("agent_status"), str):
+            return d["agent_status"]
+    return None
+
+
+def attachments() -> dict[str, str]:
+    """{pane id: job id} for every pane that runs `claude attach`."""
+    out = {}
+    for p in panes():
+        job = attached_job(process_info(p.id))
+        if job:
+            out[p.id] = job
+    return out
+
+
+# ── detached ledger ──────────────────────────────────────────────────────────────────────────────────────────
+
+def ledger() -> dict:
+    try:
+        return json.loads((state_dir() / "detached.json").read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def ledger_write(data: dict) -> None:
+    write_json_atomic(state_dir() / "detached.json", data)
+
+
+def give_back(pane: str, job: str, log) -> bool:
+    """Type the attach into a pane that lost it. Returns True when the pane shows the attach (and a dot) after."""
+    deadline = time.time() + scaled(40)
+    typed = False
+    while time.time() < deadline:
+        info = process_info(pane)
+        if info is None:
+            time.sleep(poll())
+            continue
+        if attached_job(info) == job:
+            if dot(pane) not in (None, "unknown") or time.time() > deadline - scaled(20):
+                log(f"{pane}: attached to {job}")
+                return True
+            time.sleep(poll())
+            continue
+        if attached_job(info):  # attached to another job: not ours to touch
+            log(f"{pane}: shows {attached_job(info)}, left alone")
+            return False
+        if only_shell(info) and not typed and screen_still(pane):
+            run("herdr", "pane", "run", pane, f"claude attach {job}", timeout=15)
+            typed = True
+            time.sleep(poll())
+            continue
+        time.sleep(poll())
+    log(f"{pane}: could not give back the attach to {job} (not a quiet shell); `kc-sessions repair` retries")
+    return False
+
+
+def restore_ledger(log) -> int:
+    """Give every window in the ledger its attach back. Returns how many remain."""
+    data = ledger()
+    for pane, entry in list(data.items()):
+        job = lineage().get(entry["job"], {}).get("new", entry["job"])
+        if give_back(pane, job, log):
+            del data[pane]
+            ledger_write(data)
+    return len(data)
+
+
+# ── restarts ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+def wait_restarted(job_id: str, before: str | None) -> bool:
+    deadline = time.time() + scaled(40)
+    while time.time() < deadline:
+        for j in load_jobs():
+            if j.id == job_id and j.worker and j.worker.get("procStart") != before:
+                return True
+        time.sleep(poll())
+    return False
+
+
+def respawn(targets: list[str], wait_idle: float, log) -> int:
+    """Restart sessions in place. Returns the number of problems."""
+    jobs = load_jobs()
+    chosen = [resolve(t, jobs) for t in targets]
+    problems = 0
+    try:
+        before = attachments()
+    except Failure:
+        before = {}
+        log("herdr is not answering: windows are not tracked, check them with `kc-sessions check`")
+    data = ledger()
+    for pane, job in before.items():
+        if job in {j.id for j in chosen}:
+            data[pane] = {"job": job, "since": now()}
+    ledger_write(data)
+    deadline = time.time() + wait_idle
+    pending = sorted(chosen, key=lambda j: j.busy)  # idle sessions first
+    while pending:
+        fresh = {j.id: j for j in load_jobs()}
+        ready = [j for j in pending if not fresh.get(j.id, j).busy or time.time() >= deadline]
+        if not ready:
+            log(f"waiting for {', '.join(j.name for j in pending)} to go idle")
+            time.sleep(max(poll(), min(5.0, poll() * 5)))
+            continue
+        job = ready[0]
+        pending.remove(job)
+        was = (fresh.get(job.id, job).worker or {}).get("procStart")
+        p = run("claude", "respawn", job.id)
+        if p.returncode != 0:
+            log(f"{job.name} ({job.id}): claude respawn failed: {(p.stderr or p.stdout).strip()[-160:]}")
+            problems += 1
+            continue
+        m = RESPAWNED.search(p.stdout + p.stderr)
+        if m and m.group(1) == job.id and m.group(2) != job.id:
+            log(f"{job.name}: the daemon gave it a new id {m.group(2)}; recording the link")
+            link = lineage()
+            link[job.id] = {"new": m.group(2), "at": now()}
+            write_json_atomic(state_dir() / "lineage.json", link)
+        if not wait_restarted(job.id, was):
+            log(f"{job.name} ({job.id}): no new worker seen after the respawn")
+            problems += 1
+        else:
+            log(f"{job.name} ({job.id}): restarted")
+    problems += restore_ledger(log)
+    return problems
+
+
+def restart_with_prompt(target: str, prompt: str, log) -> int:
+    """Restart a session in place and give it a first message: `claude stop`, then a bare `claude --bg --resume`
+    (no flags, so the daemon continues the same job with its saved flags). If the daemon forks anyway, the fork is
+    recorded and the windows follow it."""
+    job = resolve(target)
+    if job.busy:
+        raise Failure(f"{job.name} is busy (state {job.state}); try again when it is idle")
+    try:
+        before = attachments()
+    except Failure:
+        before = {}
+        log("herdr is not answering: windows are not tracked, check them with `kc-sessions check`")
+    data = ledger()
+    for pane, j in before.items():
+        if j == job.id:
+            data[pane] = {"job": job.id, "since": now()}
+    ledger_write(data)
+    known = {j.id for j in load_jobs()}
+    if job.running:
+        if run("claude", "stop", job.id).returncode != 0:
+            raise Failure(f"claude stop {job.id} failed")
+        deadline = time.time() + scaled(30)
+        while time.time() < deadline and any(j.running for j in load_jobs() if j.id == job.id):
+            time.sleep(poll())
+    p = run("claude", "--bg", "--resume", job.session_id, "--", prompt, cwd=job.cwd)
+    if p.returncode != 0:
+        raise Failure(f"claude --bg --resume failed: {(p.stderr or p.stdout).strip()[-200:]}")
+    deadline = time.time() + scaled(40)
+    problems = 0
+    while time.time() < deadline:
+        jobs = load_jobs()
+        same = next((j for j in jobs if j.id == job.id and j.running), None)
+        copy = next((j for j in jobs if j.name == job.name and j.id not in known and j.running), None)
+        if same:
+            log(f"{job.name} ({job.id}): restarted in place")
+            break
+        if copy:
+            log(f"{job.name}: the daemon continued it as {copy.id} (a fork); recording the link")
+            link = lineage()
+            link[job.id] = {"new": copy.id, "at": now()}
+            write_json_atomic(state_dir() / "lineage.json", link)
+            break
+        time.sleep(poll())
+    else:
+        log(f"{job.name} ({job.id}): no worker after the resume")
+        problems += 1
+    return problems + restore_ledger(log)
+
+
+def transcript_size(job: Job) -> int:
+    try:
+        return Path(job.transcript).stat().st_size if job.transcript else 0
+    except OSError:
+        return 0
+
+
+def last_model(job: Job) -> str | None:
+    """opus, sonnet or haiku: the model of the last assistant message in the transcript."""
+    try:
+        with open(job.transcript, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 400_000))
+            tail = f.read().decode("utf-8", "replace")
+    except OSError:
+        return None
+    found = re.findall(r'"model"\s*:\s*"([^"]+)"', tail)
+    for m in reversed(found):
+        for name in MODELS:
+            if name in m:
+                return name
+    return None
+
+
+def copied_flags(job: Job) -> list[str]:
+    out, flags, i = [], job.flags, 0
+    while i < len(flags):
+        f = flags[i]
+        if f in COPY_FLAGS:
+            out.append(f)
+            if i + 1 < len(flags) and not flags[i + 1].startswith("--"):
+                out.append(flags[i + 1])
+                i += 1
+        i += 1
+    model = last_model(job)
+    if model and "--model" not in out:
+        out += ["--model", model]
+    return out
+
+
+def in_worktree(cwd: str) -> bool:
+    """True when cwd is a linked git worktree: `claude rm` may delete a worktree, so those are never removed."""
+    if not cwd or not Path(cwd).is_dir():
+        return False
+    a = run("git", "-C", cwd, "rev-parse", "--git-dir", timeout=10).stdout.strip()
+    b = run("git", "-C", cwd, "rev-parse", "--git-common-dir", timeout=10).stdout.strip()
+    return bool(a and b and os.path.realpath(os.path.join(cwd, a)) != os.path.realpath(os.path.join(cwd, b)))
+
+
+def retire(job_id: str, log, *, remove: bool, grown_since: int | None = None) -> bool:
+    job = next((j for j in load_jobs() if j.id == job_id), None)
+    if job is None:
+        log(f"{job_id}: no such job")
+        return False
+    if job.running:
+        run("claude", "stop", job.id)
+        deadline = time.time() + scaled(30)
+        while time.time() < deadline and any(j.running for j in load_jobs() if j.id == job.id):
+            time.sleep(poll())
+        if any(j.running for j in load_jobs() if j.id == job.id):
+            log(f"{job.name} ({job.id}): still has a worker after claude stop; left as is")
+            return False
+    log(f"{job.name} ({job.id}): stopped")
+    if not remove:
+        return True
+    if grown_since is not None and transcript_size(job) > grown_since:
+        log(f"{job.name} ({job.id}): its transcript grew after the fork, so it is kept (work exists only there)")
+        return True
+    if in_worktree(job.cwd):
+        log(f"{job.name} ({job.id}): runs in a git worktree ({job.cwd}); kept, `claude rm {job.id}` by hand if wanted")
+        return True
+    p = run("claude", "rm", job.id)
+    log(f"{job.name} ({job.id}): " + ("removed" if p.returncode == 0 else f"claude rm failed: {(p.stderr or p.stdout).strip()[-120:]}"))
+    return True
+
+
+def fork(target: str, prompt: str, log) -> int:
+    """Continue a conversation in bypass-permissions mode. The id has to change; nothing else may."""
+    jobs = load_jobs()
+    old = resolve(target, jobs)
+    if old.busy:
+        raise Failure(f"{old.name} is busy (state {old.state}, in flight {old.in_flight or 'none'}); try again when it is idle")
+    if not old.session_id or not old.cwd or not Path(old.cwd).is_dir():
+        raise Failure(f"{old.name} has no conversation to continue")
+    try:
+        before = attachments()
+    except Failure:
+        before = {}
+    panes_of_old = [p for p, j in before.items() if j == old.id]
+    data = ledger()
+    for p in panes_of_old:
+        data[p] = {"job": old.id, "since": now()}
+    ledger_write(data)
+    size = transcript_size(old)
+    flags = ["--dangerously-skip-permissions", *copied_flags(old)]
+    p = run("claude", "--bg", "--resume", old.session_id, "-n", old.name, *flags, "--", prompt, cwd=old.cwd)
+    if p.returncode != 0:
+        raise Failure(f"claude --bg --resume failed: {(p.stderr or p.stdout).strip()[-200:]}")
+    new = None
+    deadline = time.time() + scaled(40)
+    while time.time() < deadline and new is None:
+        new = next((j for j in load_jobs() if j.name == old.name and j.id != old.id and j.running
+                    and j.id not in lineage()), None)
+        if new is None:
+            time.sleep(poll())
+    if new is None:
+        raise Failure(f"the continuation of {old.name} did not appear; the old session is untouched")
+    link = lineage()
+    link[old.id] = {"new": new.id, "at": now()}
+    write_json_atomic(state_dir() / "lineage.json", link)
+    log(f"{old.name}: continued as {new.id} (was {old.id}, mode {old.mode} -> bypassPermissions)")
+    retire(old.id, log, remove=True, grown_since=size)
+    return restore_ledger(log)
+
+
+# ── checks ───────────────────────────────────────────────────────────────────────────────────────────────────
+
+def check(files_only: bool) -> list[dict]:
+    jobs = load_jobs()
+    issues = []
+    for name, group in duplicate_names(jobs).items():
+        issues.append({"kind": "duplicate-name", "name": name,
+                       "jobs": [{"id": j.id, "state": j.state, "running": j.running} for j in group]})
+    for j in jobs:
+        if j.running and j.mode != "bypassPermissions" and j.name != "":
+            issues.append({"kind": "not-bypass", "name": j.name, "id": j.id, "mode": j.mode, "info": True})
+    for pane, entry in ledger().items():
+        issues.append({"kind": "detached-window", "pane": pane, "job": entry["job"], "since": entry["since"]})
+    if files_only:
+        return issues
+    try:
+        table = {p.id: p for p in panes()}
+        att = attachments()
+    except Failure as e:
+        return issues + [{"kind": "herdr-unreachable", "detail": str(e)}]
+    by_id = {j.id: j for j in jobs}
+    for pane, job_id in att.items():
+        job = by_id.get(job_id)
+        label = f"{table[pane].workspace}/{table[pane].tab}"
+        if job is None:
+            issues.append({"kind": "stale-attach", "pane": pane, "window": label, "job": job_id, "why": "no such job"})
+        elif not job.running:
+            issues.append({"kind": "stale-attach", "pane": pane, "window": label, "job": job_id,
+                           "why": f"{job.name} has no running worker", "successor": succ.id if (succ := superseded_by(job, jobs)) else None})
+        if dot(pane) == "unknown":
+            issues.append({"kind": "grey-dot", "pane": pane, "window": label, "job": job_id})
+    return issues
+
+
+def describe(issue: dict) -> str:
+    k = issue["kind"]
+    if k == "duplicate-name":
+        return f"{issue['name']}: held by " + ", ".join(f"{j['id']} ({j['state']}{', running' if j['running'] else ''})" for j in issue["jobs"])
+    if k == "not-bypass":
+        return f"{issue['name']} ({issue['id']}) runs in {issue['mode']} mode (messages to it expire)"
+    if k == "detached-window":
+        return f"window {issue['pane']} lost its attach to {issue['job']} at {issue['since']}; `kc-sessions repair`"
+    if k == "stale-attach":
+        succ = f"; its successor is {issue['successor']}" if issue.get("successor") else ""
+        return f"window {issue['window']} ({issue['pane']}) attaches {issue['job']}: {issue['why']}{succ}"
+    if k == "grey-dot":
+        return f"window {issue['window']} ({issue['pane']}) shows a grey dot (attached to {issue['job']})"
+    return f"{k}: {issue.get('detail', '')}"
+
+
+# ── command line ─────────────────────────────────────────────────────────────────────────────────────────────
+
+def say(line: str) -> None:
+    print(line, flush=True)
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(prog="kc-sessions", description=__doc__.split("\n\n")[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    l = sub.add_parser("list")
+    l.add_argument("--json", action="store_true")
+    r = sub.add_parser("respawn")
+    r.add_argument("targets", nargs="+")
+    r.add_argument("--wait-idle", type=float, default=0.0, metavar="SECONDS")
+    f = sub.add_parser("fork")
+    f.add_argument("target")
+    f.add_argument("--prompt", default="Continue where you left off. The session was restarted in bypass-permissions mode.")
+    t = sub.add_parser("retire")
+    t.add_argument("id")
+    t.add_argument("--rm", action="store_true")
+    c = sub.add_parser("check")
+    c.add_argument("--files-only", action="store_true")
+    c.add_argument("--json", action="store_true")
+    q = sub.add_parser("restart")
+    q.add_argument("target")
+    q.add_argument("--prompt", required=True)
+    sub.add_parser("repair")
+    sub.add_parser("windows")
+    a = ap.parse_args(argv)
+    try:
+        if a.cmd == "list":
+            jobs = load_jobs()
+            rows = [{"id": j.id, "name": j.name, "state": j.state, "running": j.running, "mode": j.mode,
+                     "superseded_by": (superseded_by(j, jobs).id if superseded_by(j, jobs) else None)} for j in jobs]
+            if a.json:
+                say(json.dumps(rows, indent=1))
+            else:
+                for x in sorted(rows, key=lambda x: x["name"]):
+                    say(f"{x['id']}  {x['name']:38} {x['state']:8} {'running' if x['running'] else 'no worker':10} {x['mode']}"
+                        + (f"  superseded by {x['superseded_by']}" if x["superseded_by"] else ""))
+            return 0
+        if a.cmd == "respawn":
+            return 1 if respawn(a.targets, a.wait_idle, say) else 0
+        if a.cmd == "restart":
+            return 1 if restart_with_prompt(a.target, a.prompt, say) else 0
+        if a.cmd == "fork":
+            return 1 if fork(a.target, a.prompt, say) else 0
+        if a.cmd == "retire":
+            return 0 if retire(a.id, say, remove=a.rm) else 1
+        if a.cmd == "check":
+            issues = check(a.files_only)
+            if a.json:
+                say(json.dumps(issues, indent=1))
+            else:
+                for i in issues:
+                    say(("info: " if i.get("info") else "drift: ") + describe(i))
+                if not issues:
+                    say("ok: nothing to fix")
+            return 1 if any(not i.get("info") for i in issues) else 0
+        if a.cmd == "repair":
+            left = restore_ledger(say)
+            return 1 if left else 0
+        if a.cmd == "windows":
+            att = attachments()
+            for p in panes():
+                say(f"{p.id:8} {p.workspace[:24]:24} {p.tab[:30]:30} {att.get(p.id, '-')}")
+            return 0
+    except Failure as e:
+        print(f"kc-sessions: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

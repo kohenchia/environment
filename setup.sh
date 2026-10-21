@@ -406,6 +406,8 @@ LINKS=(
     # `kc-new`: how a session, whose sandbox cannot start `claude` or reach herdr, starts another session in a
     # space. Needs one allowlist entry, see docs/claude-code.md.
     "bin/kc-new|$HOME/.local/bin/kc-new"
+    # `kc-sessions`: restart sessions in place, put their herdr windows back, report drift (docs/claude-code.md).
+    "bin/kc-sessions|$HOME/.local/bin/kc-sessions"
     # herdr, the terminal multiplexer for the work window (`tw`).
     "local/herdr.toml|$HOME/.config/herdr/config.toml"
 )

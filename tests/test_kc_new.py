@@ -1,10 +1,14 @@
 """kc-new: validates a request, starts the session, puts a window in the space."""
 
 import json
+import sys
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from fakeworld import World  # noqa: E402
 
 BIN = Path(__file__).resolve().parent.parent / "bin/kc-new"
 
@@ -92,50 +96,6 @@ esac'''
         self.assertNotEqual(p.returncode, 0)
         self.assertEqual(self.calls(), [])
 
-    def job(self, jid, name, flags, state="done"):
-        d = self.home / ".claude/jobs" / jid
-        d.mkdir(parents=True, exist_ok=True)
-        (self.home / "github/proj").mkdir(parents=True, exist_ok=True)
-        (d / "state.json").write_text(json.dumps({"name": name, "state": state, "sessionId": "sess-" + jid,
-                                                  "cwd": str(self.home / "github/proj"), "respawnFlags": json.dumps(flags)}))
-
-    def restart(self, **kw):
-        (self.home / ".claude/jobs/aaaa1111/tmp/kc-new.json").write_text(json.dumps(kw))
-        return self.run_helper()
-
-    def test_restart_moves_a_session_into_bypass_mode(self):
-        self.job("cccc3333", "slow-one", ["--permission-mode", "auto"])
-        p = self.restart(restart="slow-one")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertEqual(self.calls()[0], "claude stop cccc3333")
-        self.assertTrue(self.calls()[1].startswith("claude --bg --resume sess-cccc3333 -n slow-one --dangerously-skip-permissions --"))
-        self.assertIn("restarted slow-one (bbbb2222) in bypass-permissions mode (was auto)", p.stdout)
-
-    def test_restart_of_a_finished_session_survives_a_failing_stop_but_a_blocked_one_does_not(self):
-        (self.home / "stop-fails").write_text("")
-        self.job("aaaa9999", "done-one", ["--permission-mode", "auto"], state="done")
-        p = self.restart(restart="done-one")
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.job("bbbb9999", "waiting-one", ["--permission-mode", "auto"], state="blocked")
-        p = self.restart(restart="waiting-one")
-        self.assertNotEqual(p.returncode, 0)
-
-    def test_force_restarts_a_session_already_in_bypass(self):
-        self.job("gggg7777", "reload-me", ["--dangerously-skip-permissions"])
-        self.assertNotEqual(self.restart(restart="reload-me").returncode, 0)
-        p = self.restart(restart="reload-me", force=True)
-        self.assertEqual(p.returncode, 0, p.stderr)
-        self.assertIn("claude stop gggg7777", self.calls())
-
-    def test_restart_refuses_a_bypass_session_a_working_one_and_stella(self):
-        self.job("dddd4444", "fine", ["--dangerously-skip-permissions"])
-        self.job("eeee5555", "busy", ["--permission-mode", "auto"], state="working")
-        self.job("ffff6666", "stella", ["--permission-mode", "auto"])
-        for name in ("fine", "busy", "stella", "nobody"):
-            p = self.restart(restart=name)
-            self.assertNotEqual(p.returncode, 0, name)
-        self.assertEqual(self.calls(), [])
-
     def test_an_existing_space_gets_a_window(self):
         self.request(space="existing", name="second-task")
         p = self.run_helper()
@@ -190,6 +150,110 @@ esac'''
         self.assertIn("started, but no window", p.stdout)
         self.assertIn("claude attach bbbb2222", p.stdout)
         self.assertEqual(self.result()["id"], "bbbb2222")
+
+
+class RestartAndDoctor(unittest.TestCase):
+    """The restart and doctor requests, against the fake daemon (tests/fakeworld.py)."""
+
+    def request(self, w, caller, **kw):
+        d = w.home / ".claude/jobs" / caller / "tmp"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "kc-new.json").write_text(json.dumps(kw))
+        return d
+
+    def result(self, d):
+        return json.loads((d / "kc-new.result.json").read_text())
+
+    def test_restart_continues_a_non_bypass_session_in_bypass_and_moves_its_window(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            old = w.job("slow-one", state="blocked", running=True, flags=["--permission-mode", "auto"])
+            w.pane("p1", attach=old, tab_label="slow-one")
+            d = self.request(w, caller, restart="slow-one")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            world = w.load()
+            slow = [j for j, v in world["jobs"].items() if v["name"] == "slow-one"]
+            self.assertEqual(len(slow), 1)  # the old record is gone
+            self.assertNotEqual(slow[0], old)
+            self.assertEqual(world["panes"]["p1"]["fg"], f"attach:{slow[0]}")
+            self.assertIn("in bypass-permissions mode (was auto)", p.stdout)
+            self.assertEqual(self.result(d)["id"], slow[0])
+
+    def test_force_restarts_a_bypass_session_in_place_keeping_its_id_and_window(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("reload-me", state="blocked", running=True)
+            w.pane("p1", attach=job)
+            d = self.request(w, caller, restart="reload-me")
+            self.assertNotEqual(w.run("kc-new").returncode, 0)  # already bypass: refused without force
+            self.assertEqual(w.claude_calls(), [])
+            self.request(w, caller, restart="reload-me", force=True)
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertEqual(w.claude_calls(), [f"respawn {job}"])
+            self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{job}")
+            self.assertEqual(self.result(d)["id"], job)
+
+    def test_restart_refuses_a_busy_session_stella_and_an_ambiguous_name(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            w.job("busy", state="working", tempo="active", running=True, flags=["--permission-mode", "auto"])
+            w.job("stella", state="blocked", running=True, flags=["--permission-mode", "auto"])
+            w.job("twin", state="done", running=True, flags=["--permission-mode", "auto"])
+            w.job("twin", state="working", running=True, flags=["--permission-mode", "auto"])
+            for name in ("busy", "stella", "twin", "nobody"):
+                d = self.request(w, caller, restart=name)
+                p = w.run("kc-new")
+                self.assertNotEqual(p.returncode, 0, name)
+                self.assertFalse(self.result(d)["ok"], name)
+            self.assertEqual(w.claude_calls(), [])
+
+    def test_a_new_session_may_not_take_a_live_name(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            w.job("taken", state="blocked", running=True)
+            (w.home / "github/proj").mkdir()
+            d = self.request(w, caller, space="s", dir=str(w.home / "github/proj"), name="taken", prompt="x")
+            p = w.run("kc-new")
+            self.assertNotEqual(p.returncode, 0)
+            self.assertIn("already exists", self.result(d)["error"])
+            self.assertEqual(w.claude_calls(), [])
+
+    def test_doctor_report_works_for_any_session_and_repair_only_for_stella_once_in_ten_minutes(self):
+        with World() as w:
+            caller = w.job("somebody", state="blocked", running=True)
+            d = self.request(w, caller, doctor="report")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn("ok: nothing to fix", self.result(d)["report"])
+            self.request(w, caller, doctor="repair")
+            self.assertNotEqual(w.run("kc-new").returncode, 0)
+            self.assertIn("only run for Stella", self.result(d)["error"])
+        with World() as w:
+            stella = w.job("stella", state="blocked", running=True)
+            sj = w.load()["jobs"][stella]
+            w.ctl("set", stella, "template", json.dumps("stella"))
+            d = self.request(w, stella, doctor="repair")
+            self.assertEqual(w.run("kc-new").returncode, 0)
+            self.request(w, stella, doctor="repair")
+            self.assertNotEqual(w.run("kc-new").returncode, 0)
+            self.assertIn("10 minutes", self.result(d)["error"])
+            del sj
+
+    def test_doctor_takes_no_other_fields_and_uses_the_machines_hooks(self):
+        with World() as w:
+            caller = w.job("somebody", state="blocked", running=True)
+            d = self.request(w, caller, doctor="report", force=True)
+            self.assertNotEqual(w.run("kc-new").returncode, 0)
+            hook = w.home / ".config/kc-sessions/doctor"
+            hook.parent.mkdir(parents=True)
+            hook.write_text('#!/bin/sh\necho "hook ran for $KC_CALLER_JOB"; echo drift: token; exit 1\n')
+            hook.chmod(0o755)
+            self.request(w, caller, doctor="report")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 1)
+            self.assertEqual(self.result(d)["report"], [f"hook ran for {caller}", "drift: token"])
 
 
 if __name__ == "__main__":
