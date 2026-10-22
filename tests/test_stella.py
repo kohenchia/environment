@@ -12,9 +12,17 @@ from fakeworld import World  # noqa: E402
 STELLA_FLAGS = ["--agent", "stella", "--dangerously-skip-permissions", "--model", "sonnet"]
 
 
+def link_stella_check(w):
+    """`setup.sh` links bin/stella-check into ~/.local/bin; `stella` writes her hooks only once it is there."""
+    link = w.home / ".local/bin/stella-check"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.write_text("#!/bin/sh\n")
+
+
 class StellaRestart(unittest.TestCase):
     def test_restart_keeps_the_job_the_flags_and_the_window(self):
         with World() as w:
+            link_stella_check(w)
             job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             w.pane("p1", attach=job, tab_label="Stella")
             before = w.snapshot()
@@ -30,6 +38,7 @@ class StellaRestart(unittest.TestCase):
 
     def test_waiting_for_a_wake_is_not_busy(self):
         with World() as w:  # state working, tempo idle, one session cron: Stella between her routines
+            link_stella_check(w)
             job = w.job("stella", state="working", running=True, flags=STELLA_FLAGS,
                         in_flight={"tasks": 1, "queued": 0, "kinds": ["session_cron"], "wake": {"at": 1}})
             p = w.run("stella", "restart")
@@ -38,6 +47,7 @@ class StellaRestart(unittest.TestCase):
 
     def test_a_daemon_fork_without_a_note_is_followed_not_duplicated(self):
         with World() as w:
+            link_stella_check(w)
             job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             w.pane("p1", attach=job)
             w.opt("always_fork", True)  # the daemon forks even a bare resume
@@ -65,11 +75,22 @@ class StellaRestart(unittest.TestCase):
 class StellaSettings(unittest.TestCase):
     """Every run writes her project settings: the watcher hooks, recaps off, the hour cache; the cap only when ready."""
 
+    def linked(self, w):
+        link_stella_check(w)
+
+    def test_without_the_stella_check_link_nothing_is_written(self):
+        with World() as w:
+            w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
+            p = w.run("stella", "start")
+            self.assertIn("setup.sh", p.stderr)
+            self.assertFalse((w.home / ".local/share/stella/.claude/settings.json").exists())
+
     def settings(self, w):
         return json.loads((w.home / ".local/share/stella/.claude/settings.json").read_text())
 
     def test_start_on_a_running_stella_writes_the_hooks_and_keeps_other_keys(self):
         with World() as w:
+            self.linked(w)
             w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             path = w.home / ".local/share/stella/.claude/settings.json"
             path.parent.mkdir(parents=True)
@@ -97,6 +118,7 @@ class StellaSettings(unittest.TestCase):
 
     def test_a_settings_file_that_does_not_parse_is_left_alone(self):
         with World() as w:
+            self.linked(w)
             w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             path = w.home / ".local/share/stella/.claude/settings.json"
             path.parent.mkdir(parents=True)
@@ -107,6 +129,7 @@ class StellaSettings(unittest.TestCase):
 
     def test_a_settings_file_of_the_wrong_shape_is_left_alone(self):
         with World() as w:
+            self.linked(w)
             w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             path = w.home / ".local/share/stella/.claude/settings.json"
             path.parent.mkdir(parents=True)
@@ -117,6 +140,7 @@ class StellaSettings(unittest.TestCase):
 
     def test_restart_writes_them_too_and_adds_the_cap_after_a_day_of_pr_lists(self):
         with World() as w:
+            self.linked(w)
             w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             store = w.home / ".local/share/stella"
             store.mkdir(parents=True)

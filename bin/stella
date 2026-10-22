@@ -55,6 +55,8 @@ def ours(entry: dict) -> bool:
 def write_settings() -> None:
     """Her project settings: the watcher hooks, recaps off, a one-hour cache, and the compaction cap when ready.
     Hooks other than stella-check's, and every other key, are kept; a file that does not parse is left alone."""
+    if not (Path.home() / ".local/bin/stella-check").exists():  # hooks that exit 127 would leave her deaf, silently
+        sys.exit("stella: ~/.local/bin/stella-check is missing; run ./setup.sh in ~/github/environment, then this again")
     path = STORE / ".claude/settings.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
