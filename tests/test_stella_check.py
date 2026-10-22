@@ -42,12 +42,14 @@ class World:
         (h / "approved-prs.py").write_text(HELPER)
         (h / "fake.json").write_text(json.dumps(outputs))
 
+    def env(self):
+        return {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "STELLA_CHECK_POLL": "1"}
+
     def run(self, *args, timeout=30):
-        env = {"HOME": str(self.home), "PATH": "/usr/bin:/bin", "STELLA_CHECK_POLL": "1"}
-        return subprocess.run(["python3", str(BIN), *args], env=env, capture_output=True, text=True, timeout=timeout)
+        return subprocess.run(["python3", str(BIN), *args], env=self.env(), capture_output=True, text=True, timeout=timeout)
 
     def once(self):
-        p = self.run()
+        p = self.run("--once")
         assert p.returncode == 0, p.stderr
         return json.loads(p.stdout)
 
@@ -76,9 +78,14 @@ class Findings(unittest.TestCase):
 
     def test_an_api_error_wakes_after_5_minutes(self):
         with World() as w:
-            w.job("e1", "tracker", state="working", age=2 * 60, detail="API Error: 500")
+            w.job("e1", "tracker", state="done", age=2 * 60, detail="API Error: 500")
             self.assertEqual(w.once(), [])
-            w.job("e1", "tracker", state="working", age=6 * 60, detail="API Error: 500")
+            w.job("e1", "tracker", state="done", age=6 * 60, detail="API Error: 500")
+            self.assertEqual([f["kind"] for f in w.once()], ["api_error"])
+
+    def test_a_failed_session_is_an_api_error_after_5_minutes(self):
+        with World() as w:
+            w.job("f1", "tracker", state="failed", age=6 * 60, needs="Retry later")
             self.assertEqual([f["kind"] for f in w.once()], ["api_error"])
 
     def test_every_pr_bucket_wakes_and_pr_tasks_are_written(self):
@@ -121,6 +128,53 @@ class Findings(unittest.TestCase):
             self.assertEqual(len(lines), 1)
             self.assertIn("blocked phase-10", lines[0])
 
+    def test_merged_items_keep_the_wake_kind(self):
+        with World() as w:
+            w.helper(merged={"merged": [{"id": "j8", "session": "fix", "signature": "m1", "kind": "partial"}]})
+            new = w.once()
+            self.assertEqual([(f["kind"], f["helper_kind"]) for f in new], [("merged", "partial")])
+
+    def test_a_helper_failure_and_recovery_do_not_wake_the_backlog_again(self):
+        with World() as w:
+            steward = {"held": [{"pr": "o/r#5", "why": "w"}], "stuck": [{"pr": "o/r#4", "told": "z", "times": 3}]}
+            w.helper(steward=steward)
+            self.assertEqual(len(w.once()), 2)
+            w.helper(steward=steward, fail="steward")
+            self.assertEqual([f["kind"] for f in w.once()], ["helper_error"])
+            w.helper(steward=steward)
+            self.assertEqual(w.once(), [])
+
+    def test_an_error_that_lasts_an_hour_wakes_again_as_persisting(self):
+        with World() as w:
+            w.helper(fail="steward")
+            self.assertEqual(len(w.once()), 1)
+            state = json.loads((w.store / "check-state.json").read_text())
+            state["errors"]["steward"] -= 2 * 3600
+            (w.store / "check-state.json").write_text(json.dumps(state))
+            new = w.once()
+            self.assertEqual([(f["kind"], f.get("persisting")) for f in new], [("helper_error", True)])
+
+    def test_a_blocked_session_that_mentions_a_rate_limit_is_still_blocked(self):
+        with World() as w:
+            w.job("b1", "phase-10", age=20 * 60, needs="awaiting your call on the rate limit")
+            self.assertEqual([f["kind"] for f in w.once()], ["blocked"])
+
+    def test_a_dry_run_saves_nothing(self):
+        with World() as w:
+            w.job("a1", "phase-10", age=20 * 60, needs="?")
+            w.helper(steward={"waiting_review": [{"pr": "o/r#6"}]})
+            p = w.run()
+            self.assertEqual([f["kind"] for f in json.loads(p.stdout)], ["blocked"])
+            self.assertFalse((w.store / "check-state.json").exists())
+            self.assertFalse((w.store / "pr-tasks.json").exists())
+            self.assertEqual([f["kind"] for f in w.once()], ["blocked"])
+
+    def test_compact_note_is_a_session_start_answer(self):
+        with World() as w:
+            out = json.loads(w.run("--compact-note").stdout)
+            self.assertEqual(out["hookSpecificOutput"]["hookEventName"], "SessionStart")
+            self.assertIn("start-of-session", out["hookSpecificOutput"]["additionalContext"])
+
 
 class Watch(unittest.TestCase):
     def test_watch_exits_2_with_the_finding(self):
@@ -129,6 +183,58 @@ class Watch(unittest.TestCase):
             p = w.run("--watch")
             self.assertEqual(p.returncode, 2, p.stderr)
             self.assertIn("blocked", p.stdout)
+
+    def test_a_crash_wakes_once_instead_of_killing_the_watcher(self):
+        with World() as w:
+            w.helper(steward={})
+            (w.store / "pr-tasks.json").mkdir()  # writing the PR lists now fails
+            p = w.run("--watch")
+            self.assertEqual(p.returncode, 2, p.stderr)
+            self.assertIn('"kind": "crash"', p.stdout)
+
+    def test_a_wake_lost_to_a_restart_is_delivered_again_only_by_a_fresh_watcher(self):
+        with World() as w:
+            w.job("a1", "phase-10", age=20 * 60, needs="?")
+            self.assertEqual(w.run("--watch").returncode, 2)
+            state = json.loads((w.store / "check-state.json").read_text())
+            state["pending"]["at"] -= 600
+            (w.store / "check-state.json").write_text(json.dumps(state))
+            # a Stop-hook watcher in the same process never doubles a wake that may still be queued
+            stop = subprocess.Popen(["python3", str(BIN), "--watch"], env=w.env(), stdout=subprocess.PIPE, text=True)
+            try:
+                time.sleep(2.5)
+                self.assertIsNone(stop.poll())
+            finally:
+                stop.kill()
+                stop.wait()
+                stop.stdout.close()
+            p = w.run("--watch", "--fresh")  # a new session process: the wake was lost, deliver it again
+            self.assertEqual(p.returncode, 2)
+            self.assertIn("blocked", p.stdout)
+            w.run("--ack")
+            self.assertNotIn("pending", json.loads((w.store / "check-state.json").read_text()))
+
+    def test_a_fresh_watcher_takes_over_from_one_left_by_the_previous_process(self):
+        with World() as w:
+            old = subprocess.Popen(["python3", str(BIN), "--watch"], env=w.env(), stdout=subprocess.PIPE, text=True)
+            try:
+                time.sleep(1.5)
+                self.assertIn(f"watcher pid {old.pid}", w.run("--status").stdout)
+                new = subprocess.Popen(["python3", str(BIN), "--watch", "--fresh"], env=w.env(),
+                                       stdout=subprocess.PIPE, text=True)
+                try:
+                    old.wait(timeout=10)  # ended by the takeover
+                    time.sleep(1.5)
+                    self.assertIn(f"watcher pid {new.pid}", w.run("--status").stdout)
+                finally:
+                    new.kill()
+                    new.wait()
+                    new.stdout.close()
+            finally:
+                if old.poll() is None:
+                    old.kill()
+                old.wait()
+                old.stdout.close()
 
     def test_a_second_watcher_exits_at_once(self):
         with World() as w:

@@ -64,7 +64,9 @@ turn), and `stella` writes those settings on every run, with recaps off, a one-h
 events, a 200k-token compaction window. So a quiet hour draws nothing and spends nothing, except one hourly judgment
 check (a self-paced `/loop` whose quiet ticks Claude Code folds into one row). Each wake and each action she takes is a
 line in `~/.local/share/stella/events.log`; her lasting PR tasks are in `pr-tasks.json`. In her session, `/calm` hides
-tool rows and turn timings so her turns read as a conversation (on by default; `/calm` again shows everything).
+tool rows and turn timings so her turns read as a conversation (on by default; `/calm` again shows everything). Both need
+`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the `env` of `~/.claude/settings.json` for `/calm` (the hooks do not), and
+`./setup.sh` (which links `stella-check`) before `stella restart` switches her over.
 
 ## Commands
 

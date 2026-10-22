@@ -8,10 +8,10 @@
 She is an ordinary background session of Claude's daemon, named `stella`, running the agent file
 ~/.claude/agents/stella.md in her store ~/.local/share/stella. Nothing else is needed for her to exist.
 
-Every run also writes her project settings (~/.local/share/stella/.claude/settings.json), so they can
+`start`, `restart` and a run that starts her also write her project settings (~/.local/share/stella/.claude/settings.json), so they can
 always be rebuilt from this repo: the hooks that run `stella-check --watch` (it wakes her only when something needs
 her), recaps off, a one-hour prompt cache, and, once `stella-check` has kept her PR tasks in files for a day, a
-200k-token compaction window. Keys of that file this script does not manage are kept.
+200k-token compaction window. Other keys and other hooks in that file are kept.
 
 Standard library only.
 """
@@ -33,37 +33,47 @@ FLAGS = ["--dangerously-skip-permissions"]
 CAP_AFTER = 86400  # the compaction cap waits until stella-check has written her PR tasks to files for this long
 
 
-def watcher_hook() -> dict:
+def watcher_hook(fresh: bool = False) -> dict:
     # asyncRewake: runs in the background and wakes her on exit code 2; the timeout (seconds) must outlive the
     # watcher, or Claude Code kills it silently (the default is 600 s). stella-check exits on its own before a day.
-    return {"type": "command", "command": "$HOME/.local/bin/stella-check --watch", "asyncRewake": True, "timeout": 86400}
+    command = "$HOME/.local/bin/stella-check --watch" + (" --fresh" if fresh else "")
+    return {"type": "command", "command": command, "asyncRewake": True, "timeout": 86400}
 
 
 def cap_ready() -> bool:
+    """True once stella-check has kept her PR lists in pr-tasks.json for a day ("since" is its first write)."""
     try:
-        first = (STORE / "events.log").read_text().splitlines()[0][:19]
-        return time.time() - time.mktime(time.strptime(first, "%Y-%m-%d %H:%M:%S")) >= CAP_AFTER
-    except (OSError, IndexError, ValueError):
+        return time.time() - int(json.loads((STORE / "pr-tasks.json").read_text())["since"]) >= CAP_AFTER
+    except (OSError, ValueError, KeyError, TypeError):
         return False
 
 
+def ours(entry: dict) -> bool:
+    return any("stella-check" in str(h.get("command", "")) for h in entry.get("hooks", []))
+
+
 def write_settings() -> None:
-    """Her project settings: the watcher hooks, recaps off, a one-hour cache, and the compaction cap when ready."""
+    """Her project settings: the watcher hooks, recaps off, a one-hour cache, and the compaction cap when ready.
+    Hooks other than stella-check's, and every other key, are kept; a file that does not parse is left alone."""
     path = STORE / ".claude/settings.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     try:
         s = json.loads(path.read_text())
-    except (OSError, ValueError):
+    except FileNotFoundError:
         s = {}
+    except (OSError, ValueError) as e:
+        sys.exit(f"stella: {path} does not parse ({e}); fix it, then run this again")
     s.setdefault("env", {})["CLAUDE_CODE_ENABLE_AWAY_SUMMARY"] = "0"
     s["promptCacheTtl"] = "1h"
     if cap_ready():
         s["autoCompactWindow"] = 200000
     compact_note = {"type": "command", "command": "$HOME/.local/bin/stella-check --compact-note"}
-    s["hooks"] = {**s.get("hooks", {}),
-                  "SessionStart": [{"hooks": [watcher_hook()]}, {"matcher": "compact", "hooks": [compact_note]}],
-                  "Stop": [{"hooks": [watcher_hook()]}],
-                  "StopFailure": [{"hooks": [watcher_hook()]}]}
+    mine = {"SessionStart": [{"hooks": [watcher_hook(fresh=True)]}, {"matcher": "compact", "hooks": [compact_note]}],
+            "Stop": [{"hooks": [watcher_hook()]}],
+            "StopFailure": [{"hooks": [watcher_hook()]}]}
+    hooks = s.setdefault("hooks", {})
+    for event, entries in mine.items():
+        hooks[event] = [e for e in hooks.get(event, []) if not ours(e)] + entries
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(s, indent=2) + "\n")
     tmp.replace(path)
@@ -123,7 +133,8 @@ def main() -> None:
     cmd = sys.argv[1:]
     if cmd not in ([], ["start"], ["restart"]):
         sys.exit(__doc__)
-    write_settings()  # every path, so a running Stella picks up a changed hook at her next settings reload
+    if cmd or row() is None:  # start, restart, or starting her now; a plain attach to a running Stella writes nothing
+        write_settings()
     sid = restart() if cmd == ["restart"] else (row() or {}).get("id") or start()
     if cmd == ["start"]:
         return

@@ -3,7 +3,7 @@
  *
  * With calm on (the default; `/calm` toggles it, remembered in ~/.local/share/stella/calm.flag) her session hides
  * tool rows, turn timings ("Cogitated for 57s") and the short notes she writes between tool calls, so a turn reads
- * as what she said. Her replies, Kohen's messages, long text and dialogs stay; `/calm` again shows everything, and
+ * as what she said. Her replies, Kohen's messages, failed tool calls, long text and dialogs stay; `/calm` again shows everything, and
  * nothing hidden leaves her context or the transcript. Rows Claude Code draws itself ("Running scheduled task",
  * recaps) cannot be reached from here; stella-check and her settings remove those at the source.
  *
@@ -51,7 +51,8 @@ async function isCalm($: any, store: string): Promise<boolean> {
 
 async function hidden($: any, e: any): Promise<boolean> {
   const store = await stella($)
-  return !!store && !(e.props as any).isExpanded && (await isCalm($, store))
+  // A failed tool call always shows: calm hides routine work, never an error.
+  return !!store && !(e.props as any).isExpanded && !(e.props as any).isErrored && (await isCalm($, store))
 }
 
 export const register: Register = on => {

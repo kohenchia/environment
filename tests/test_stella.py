@@ -73,28 +73,43 @@ class StellaSettings(unittest.TestCase):
             w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             path = w.home / ".local/share/stella/.claude/settings.json"
             path.parent.mkdir(parents=True)
-            path.write_text(json.dumps({"permissions": {"allow": ["Read"]}, "hooks": {"PreToolUse": []}}))
+            other = {"hooks": [{"type": "command", "command": "say done"}]}
+            path.write_text(json.dumps({"permissions": {"allow": ["Read"]}, "hooks": {"PreToolUse": [], "Stop": [other]}}))
             w.run("stella", "start")
             s = self.settings(w)
             self.assertEqual(s["permissions"], {"allow": ["Read"]})
             self.assertIn("PreToolUse", s["hooks"])
+            self.assertEqual(s["hooks"]["Stop"][0], other)  # Kohen's own hook stays, first
+            w.run("stella", "start")  # a second run replaces ours, never duplicates them
+            s = self.settings(w)
+            self.assertEqual(len(s["hooks"]["Stop"]), 2)
             for event in ("SessionStart", "Stop", "StopFailure"):
-                hook = s["hooks"][event][0]["hooks"][0]
+                hook = [e for e in s["hooks"][event] if "stella-check --watch" in str(e)][0]["hooks"][0]
+                self.assertEqual("--fresh" in hook["command"], event == "SessionStart")
                 self.assertTrue(hook["asyncRewake"], event)
                 self.assertIn("stella-check --watch", hook["command"])
                 self.assertGreaterEqual(hook["timeout"], 86400)
-            self.assertEqual(s["hooks"]["SessionStart"][1]["matcher"], "compact")
+            self.assertEqual(s["hooks"]["SessionStart"][-1]["matcher"], "compact")
             self.assertEqual(s["env"]["CLAUDE_CODE_ENABLE_AWAY_SUMMARY"], "0")
             self.assertEqual(s["promptCacheTtl"], "1h")
             self.assertNotIn("autoCompactWindow", s)
 
-    def test_restart_writes_them_too_and_adds_the_cap_after_a_day_of_events(self):
+    def test_a_settings_file_that_does_not_parse_is_left_alone(self):
+        with World() as w:
+            w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
+            path = w.home / ".local/share/stella/.claude/settings.json"
+            path.parent.mkdir(parents=True)
+            path.write_text("{ not json")
+            p = w.run("stella", "start")
+            self.assertIn("does not parse", p.stderr)
+            self.assertEqual(path.read_text(), "{ not json")
+
+    def test_restart_writes_them_too_and_adds_the_cap_after_a_day_of_pr_lists(self):
         with World() as w:
             w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             store = w.home / ".local/share/stella"
             store.mkdir(parents=True)
-            old = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 2 * 86400))
-            (store / "events.log").write_text(f"{old} wake: blocked x (20 min)\n")
+            (store / "pr-tasks.json").write_text(json.dumps({"updated": int(time.time()), "since": int(time.time()) - 2 * 86400}))
             w.run("stella", "restart")
             s = self.settings(w)
             self.assertEqual(s["autoCompactWindow"], 200000)

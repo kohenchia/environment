@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 """stella-check: decide, without a model, when Stella's session needs to wake.
 
-    stella-check            check once: print what is new since the last check (JSON), exit 0
+    stella-check            dry run: print what is new now, without saving anything (safe to run by hand)
     stella-check --watch    keep checking; exit 2 with what is new, so the hook that started it wakes Stella
-    stella-check --status   one line: the watcher's pid and age, and the last line of events.log
+    stella-check --watch --fresh   the same, from the SessionStart hook: ends a watcher left by the previous process
+                                   (hooks run detached, so one can outlive a restart) and redelivers a lost wake
+    stella-check --ack      Stella's last step on a wake turn: the wake was delivered and handled
+    stella-check --status   one line: the watcher's pid and age, the PR lists' age, and the last line of events.log
     stella-check --compact-note   the SessionStart (compact) hook's answer: redo the start steps after a compaction
+    stella-check --once     one real check that saves what it saw (tests and repairs)
 
 Stella's session starts `--watch` from its SessionStart, Stop and StopFailure hooks (asyncRewake), which `stella`
 writes into her project settings. Only one watcher runs at a time (a lock in her store); a second exits at once.
 
-What wakes her is what her manual's "When stella-check wakes you" section acts on, and nothing else:
+What wakes her is what her manual's "How you are woken" section acts on, and nothing else:
   - a session blocked for 15 minutes (its job record says so and has not moved since);
-  - a session stopped on an API error or a rate limit for 5 minutes;
+  - a session stopped on an API error for 5 minutes, again every hour while it stays stopped;
   - each PR helper bucket (approved-prs/approved-prs.py in her store, when it exists): act, orphans,
-    unacknowledged, stuck, held, wrong_mode_sessions, and its errors; merged sessions; due reminders.
+    unacknowledged, stuck, held, wrong_mode_sessions (again every hour while it stays), merged sessions, due
+    reminders, and the helper's errors (again, as "persisting", after an hour of failures);
+  - the check itself crashing (once per kind of crash).
 A finding wakes her once, when it appears; one that stays is not news. One that goes and comes back is news again
-(the PR helper drops an item for a while after Stella marks it, then lists it again if it still needs her).
+(the PR helper drops an item for a while after Stella marks it, then lists it again if it still needs her). A failed
+run of the helper keeps what it listed before, so its recovery is not mistaken for news.
 
-Every check that finds something appends one line to events.log. The PR helper's lasting lists (held, stuck,
-unacknowledged, waiting_review) are written to pr-tasks.json, which her status reads.
+A wake stays pending until Stella runs `--ack`. Only a `--fresh` watcher (a new session process) delivers a pending
+wake again, when it is more than two minutes old: a wake still queued in a running session is never doubled.
+
+Every wake appends one line to events.log. The PR helper's lasting lists (held, stuck, unacknowledged,
+waiting_review) are written to pr-tasks.json, which her status reads.
 
 It runs inside the session's command sandbox: it reads files and runs the PR helper (which calls `gh`); it never
 calls `claude` and never messages anyone.
@@ -32,6 +42,7 @@ import fcntl
 import hashlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -41,11 +52,17 @@ POLL = int(os.environ.get("STELLA_CHECK_POLL", "60"))  # seconds between checks 
 HELPER_EVERY = 600  # seconds between runs of the PR helper (it calls gh for every open PR)
 BLOCKED_AFTER = 15 * 60
 API_ERROR_AFTER = 5 * 60
+REPEAT = 3600  # findings Stella may have to retry (api_error, wrong_mode) come back once an hour while they stay
+ERROR_PERSISTS = 3600  # a helper error still there after this is news again, as "persisting"
+REDELIVER_AFTER = 120  # a pending wake older than this, found by a new watcher, was lost: deliver it again
 RECENT = 3 * 3600  # job records older than this are not looked at
 MAX_LIFE = 23 * 3600  # exit quietly before the hook's one-day timeout kills it; the next turn's Stop hook restarts it
 SELF = ("stella",)
+API_ERROR_WORDS = ("api error", "rate limit", "overloaded", "request timed out", "server error", "429", "529")
 COMPACT_NOTE = ("Your conversation was just compacted. Do the start-of-session steps in your manual again now, and read "
-                "pr-tasks.json and the end of events.log in your store before answering anything about PRs or sessions.")
+                "pr-tasks.json, tasks.md and the end of events.log in your store before answering anything about PRs or "
+                "sessions.")
+HELPER_FAILS = (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired)
 
 
 def home() -> Path:
@@ -60,40 +77,45 @@ def now() -> float:
     return time.time()
 
 
+def digest(text: str) -> str:
+    return hashlib.sha1(text.encode()).hexdigest()[:10]
+
+
+def hour() -> int:
+    return int(now() // REPEAT)
+
+
 def jobs() -> list[dict]:
     out = []
     for p in sorted((home() / ".claude/jobs").glob("*/state.json")):
         try:
             d = json.loads(p.read_text())
-            d["_id"], d["_mtime"] = p.parent.name, p.stat().st_mtime
+            mtime = p.stat().st_mtime
         except (OSError, ValueError):
             continue
-        if d.get("name") in SELF or now() - d["_mtime"] > RECENT:
+        if not isinstance(d, dict) or d.get("name") in SELF or now() - mtime > RECENT:
             continue
+        d["_id"], d["_mtime"] = p.parent.name, mtime
         out.append(d)
     return out
-
-
-def digest(text: str) -> str:
-    return hashlib.sha1(text.encode()).hexdigest()[:10]
 
 
 def session_findings() -> dict[str, dict]:
     found = {}
     for j in jobs():
         age = now() - j["_mtime"]
-        name, jid = j.get("name") or j["_id"], j["_id"]
-        needs = str(j.get("needs") or "")
-        detail = str(j.get("detail") or "")
-        text = f"{needs} {detail}".lower()
-        if "api error" in text or "rate limit" in text:
-            if age >= API_ERROR_AFTER:
-                found[f"apierror:{jid}:{int(j['_mtime'])}"] = {"kind": "api_error", "session": name, "id": jid,
-                                                               "minutes": int(age / 60), "detail": (needs or detail)[:200]}
+        name, jid = str(j.get("name") or j["_id"]), j["_id"]
+        needs, detail = str(j.get("needs") or ""), str(j.get("detail") or "")
+        if j.get("state") == "blocked":  # a question for Kohen, whatever its words say
+            if age >= BLOCKED_AFTER:
+                found[f"blocked:{jid}:{digest(needs)}"] = {"kind": "blocked", "session": name, "id": jid,
+                                                          "minutes": int(age / 60), "needs": needs[:300]}
             continue
-        if j.get("state") == "blocked" and age >= BLOCKED_AFTER:
-            found[f"blocked:{jid}:{digest(needs)}"] = {"kind": "blocked", "session": name, "id": jid,
-                                                      "minutes": int(age / 60), "needs": needs[:300]}
+        text = f"{needs} {detail}".lower()
+        stopped = j.get("state") == "failed" or (j.get("state") != "working" and any(w in text for w in API_ERROR_WORDS))
+        if stopped and age >= API_ERROR_AFTER:
+            found[f"apierror:{jid}:{int(j['_mtime'])}:h{hour()}"] = {"kind": "api_error", "session": name, "id": jid,
+                                                                     "minutes": int(age / 60), "detail": (needs or detail)[:200]}
     return found
 
 
@@ -102,49 +124,84 @@ def helper() -> Path:
 
 
 def run_helper(*args: str) -> dict:
-    p = subprocess.run([sys.executable, str(helper()), *args], capture_output=True, text=True, timeout=300)
+    p = subprocess.run([sys.executable, str(helper()), *args], capture_output=True, text=True, timeout=120)
     if p.returncode:
         raise RuntimeError((p.stderr or p.stdout).strip()[-200:] or f"exit {p.returncode}")
-    return json.loads(p.stdout)
+    out = json.loads(p.stdout)
+    if not isinstance(out, dict):
+        raise RuntimeError("not a JSON object")
+    return out
 
 
-def pr_findings() -> dict[str, dict]:
-    """The PR helper's buckets as findings; also writes pr-tasks.json. Nothing when the helper is not installed."""
-    if not helper().exists():
-        return {}
+def items(out: dict, bucket: str) -> list[dict]:
+    return [it for it in out.get(bucket) or [] if isinstance(it, dict)]
+
+
+def error_finding(state: dict, what: str, error: str) -> dict[str, dict]:
+    """A helper error: news when it first appears, and once more as "persisting" after an hour of it."""
+    first = state.get("errors", {}).get(what) or now()
+    state.setdefault("errors_now", {})[what] = first
+    f = {"kind": "helper_error", "what": what, "error": error[:200]}
+    if now() - first >= ERROR_PERSISTS:
+        return {f"error:{what}:persisting": {**f, "persisting": True, "minutes": int((now() - first) / 60)}}
+    return {f"error:{what}": f}
+
+
+def pr_findings(state: dict, save: bool = True) -> tuple[dict[str, dict], set[str]]:
+    """The PR helper's buckets as findings, and which of its commands failed. Writes pr-tasks.json on success."""
     found: dict[str, dict] = {}
+    failed: set[str] = set()
+    if not helper().exists():
+        return found, failed
     try:
         s = run_helper("steward")
-    except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-        return {"error:steward": {"kind": "helper_error", "what": "steward", "error": str(e)[:200]}}
-    keep = {k: s.get(k, []) for k in ("held", "stuck", "unacknowledged", "waiting_review")}
-    write_atomic(store() / "pr-tasks.json", json.dumps({"updated": int(now()), **keep}, indent=1) + "\n")
-    for it in s.get("act", []):
-        if it.get("error"):
-            found[f"error:{it.get('repo')}"] = {"kind": "helper_error", "what": it.get("repo"), "error": it["error"][:200]}
-        else:
-            found[f"act:{it['pr']}:{it.get('signature', '')}"] = {"kind": "act", "pr": it["pr"], "reasons": it.get("reasons"),
-                                                                  "owner": (it.get("owner") or {}).get("name")}
-    for it in s.get("orphans", []):
-        found[f"orphan:{it['pr']}:{it.get('signature', '')}"] = {"kind": "orphan", "pr": it["pr"], "reasons": it.get("reasons")}
-    for it in s.get("unacknowledged", []):
-        found[f"unack:{it['pr']}:{it.get('told')}"] = {"kind": "unacknowledged", "pr": it["pr"], "told": it.get("told")}
-    for it in s.get("stuck", []):
-        found[f"stuck:{it['pr']}:{it.get('times')}"] = {"kind": "stuck", "pr": it["pr"], "told": it.get("told")}
-    for it in s.get("held", []):
-        found[f"held:{it['pr']}:{digest(str(it.get('why')))}"] = {"kind": "held", "pr": it["pr"], "why": it.get("why")}
-    for it in s.get("wrong_mode_sessions", []):
-        found[f"mode:{it.get('id')}"] = {"kind": "wrong_mode", "session": it.get("name"), "mode": it.get("mode")}
-    for what, key in (("merged", "merged"), ("reminders", "due")):
+    except HELPER_FAILS as e:
+        failed.add("steward")
+        found.update(error_finding(state, "steward", str(e)))
+        s = None
+    if s is not None and save:
+        keep = {k: items(s, k) for k in ("held", "stuck", "unacknowledged", "waiting_review")}
+        write_atomic(store() / "pr-tasks.json",
+                     json.dumps({"updated": int(now()), "since": previous_since() or int(now()), **keep}, indent=1) + "\n")
+    if s is not None:
+        for it in items(s, "act"):
+            if it.get("error"):
+                found.update(error_finding(state, str(it.get("repo")), str(it["error"])))
+            elif it.get("pr"):
+                found[f"act:{it['pr']}:{it.get('signature', '')}"] = {"kind": "act", "pr": it["pr"], "reasons": it.get("reasons"),
+                                                                      "owner": (it.get("owner") or {}).get("name")}
+        for it in items(s, "orphans"):
+            if it.get("pr"):
+                found[f"orphan:{it['pr']}:{it.get('signature', '')}"] = {"kind": "orphan", "pr": it["pr"], "reasons": it.get("reasons")}
+        for it in items(s, "unacknowledged"):
+            if it.get("pr"):
+                found[f"unack:{it['pr']}:{it.get('told')}"] = {"kind": "unacknowledged", "pr": it["pr"], "told": it.get("told")}
+        for it in items(s, "stuck"):
+            if it.get("pr"):
+                found[f"stuck:{it['pr']}:{it.get('times')}"] = {"kind": "stuck", "pr": it["pr"], "told": it.get("told")}
+        for it in items(s, "held"):
+            if it.get("pr"):
+                found[f"held:{it['pr']}:{digest(str(it.get('why')))}"] = {"kind": "held", "pr": it["pr"], "why": it.get("why")}
+        for it in items(s, "wrong_mode_sessions"):
+            found[f"mode:{it.get('id')}:h{hour()}"] = {"kind": "wrong_mode", "session": it.get("name"), "mode": it.get("mode")}
+    for what, bucket in (("merged", "merged"), ("reminders", "due")):
         try:
             r = run_helper(what)
-        except (RuntimeError, ValueError, OSError, subprocess.TimeoutExpired) as e:
-            found[f"error:{what}"] = {"kind": "helper_error", "what": what, "error": str(e)[:200]}
+        except HELPER_FAILS as e:
+            failed.add(what)
+            found.update(error_finding(state, what, str(e)))
             continue
-        for it in r.get(key, []):
-            ident = it.get("key") or it.get("id") or it.get("session") or json.dumps(it, sort_keys=True)
-            found[f"{what}:{ident}:{it.get('signature', '')}"] = {"kind": what, **it}
-    return found
+        for it in items(r, bucket):
+            ident = it.get("key") or it.get("id") or it.get("session") or digest(json.dumps(it, sort_keys=True))
+            found[f"{what}:{ident}:{it.get('signature', '')}"] = {**it, "kind": what, "helper_kind": it.get("kind")}
+    return found, failed
+
+
+def previous_since() -> int | None:
+    try:
+        return int(json.loads((store() / "pr-tasks.json").read_text()).get("since"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
 
 
 def write_atomic(path: Path, text: str) -> None:
@@ -155,9 +212,14 @@ def write_atomic(path: Path, text: str) -> None:
 
 def load_state() -> dict:
     try:
-        return json.loads((store() / "check-state.json").read_text())
+        d = json.loads((store() / "check-state.json").read_text())
+        return d if isinstance(d, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def save_state(state: dict) -> None:
+    write_atomic(store() / "check-state.json", json.dumps(state, indent=1) + "\n")
 
 
 def log(line: str) -> None:
@@ -165,22 +227,27 @@ def log(line: str) -> None:
         f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + line + "\n")
 
 
-def check(with_helper: bool) -> list[dict]:
-    """One check: the findings that are new since the last one. Keeps the PR helper's findings between its runs."""
+def check(with_helper: bool, save: bool = True) -> list[dict]:
+    """One check: the findings that are new since the last one."""
     state = load_state()
+    before = set(state.get("sessions", [])) | set(state.get("pr", []))
     found = session_findings()
-    seen_pr = state.get("pr", {})
     if with_helper:
-        pr = pr_findings()
+        kept = [k for k in state.get("pr", []) if not k.startswith("error:")]
+        pr, failed = pr_findings(state, save)
+        if "steward" in failed:  # what the steward listed before still stands; only the error is new
+            pr = {**{k: {} for k in kept if not k.startswith(("merged:", "reminders:"))}, **pr}
+        for what in ("merged", "reminders"):
+            if what in failed:
+                pr = {**{k: {} for k in kept if k.startswith(what + ":")}, **pr}
+        state["errors"] = state.pop("errors_now", {})
         state["pr"], state["helper_at"] = sorted(pr), int(now())
     else:
-        pr = {k: {} for k in seen_pr}
-    previous = set(state.get("sessions", [])) | set(seen_pr)
-    new = [{"key": k, **v} for k, v in {**found, **pr}.items() if k not in previous and v]
+        pr = {}
+    new = [{"key": k, **v} for k, v in {**found, **pr}.items() if k not in before and v]
     state["sessions"] = sorted(found)
-    write_atomic(store() / "check-state.json", json.dumps(state, indent=1) + "\n")
-    if new:
-        log("wake: " + "; ".join(summary(f) for f in new))
+    if save:
+        save_state(state)
     return new
 
 
@@ -191,12 +258,22 @@ def summary(f: dict) -> str:
     if k == "wrong_mode":
         return f"wrong_mode {f.get('session')}"
     if k == "helper_error":
-        return f"helper error ({f.get('what')}): {f.get('error')}"
+        return f"helper error ({f.get('what')}{', persisting' if f.get('persisting') else ''}): {f.get('error')}"
+    if k == "crash":
+        return f"stella-check crashed: {f.get('error')}"
     return f"{k} {f.get('pr') or f.get('key') or f.get('session') or ''}".strip()
 
 
-def helper_due() -> bool:
-    return now() - load_state().get("helper_at", 0) >= HELPER_EVERY
+def deliver(new: list[dict]) -> int:
+    """Keep the wake as pending, log it, print it (the hook's wake carries stderr when there is any), and exit 2."""
+    state = load_state()
+    state["pending"] = {"at": int(now()), "findings": new}
+    save_state(state)
+    log("wake: " + "; ".join(summary(f) for f in new))
+    text = "stella-check: " + json.dumps(new)
+    print(text)
+    print(text, file=sys.stderr)
+    return 2
 
 
 def lock():
@@ -214,51 +291,101 @@ def lock():
     return fh
 
 
-def watch() -> int:
+def take_over() -> None:
+    """End a watcher left by the previous session process, so this one can take the lock."""
+    old = watcher_pid()
+    if old and old[0] != os.getpid():
+        try:
+            os.kill(old[0], signal.SIGTERM)
+        except OSError:
+            return
+        for _ in range(50):
+            if watcher_pid() is None:
+                return
+            time.sleep(0.1)
+
+
+def watch(fresh: bool) -> int:
+    if fresh:
+        take_over()
     held = lock()
     if held is None:
         return 0
     started = now()
+    pending = load_state().get("pending")
+    if fresh and pending and now() - pending.get("at", now()) >= REDELIVER_AFTER:
+        log("redeliver: the last wake was not acknowledged before the restart")
+        return deliver(pending.get("findings") or [])
     while now() - started < MAX_LIFE:
-        new = check(with_helper=helper_due())
+        try:
+            new = check(with_helper=now() - load_state().get("helper_at", 0) >= HELPER_EVERY)
+        except Exception as e:  # noqa: BLE001 - a crash must wake her once, never kill the watcher silently
+            kind = type(e).__name__
+            state = load_state()
+            if state.get("crash") != kind:
+                state["crash"] = kind
+                save_state(state)
+                return deliver([{"key": f"crash:{kind}", "kind": "crash", "error": f"{kind}: {str(e)[:200]}"}])
+            time.sleep(POLL * 5)
+            continue
         if new:
-            print("stella-check: " + json.dumps(new))
-            return 2
+            state = load_state()
+            if state.pop("crash", None):
+                save_state(state)
+            return deliver(new)
         time.sleep(POLL)
     return 0
 
 
-def status() -> str:
+def ack() -> int:
+    state = load_state()
+    state.pop("pending", None)
+    save_state(state)
+    return 0
+
+
+def watcher_pid() -> tuple[int, int] | None:
     try:
-        pid, since = (store() / "watch.lock").read_text().split()
+        pid, since = (int(x) for x in (store() / "watch.lock").read_text().split())
+        os.kill(pid, 0)
+        return pid, since
     except (OSError, ValueError):
-        pid, since = "", "0"
-    alive = False
-    if pid:
-        fh = open(store() / "watch.lock", "a+")
-        try:
-            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            fcntl.flock(fh, fcntl.LOCK_UN)
-        except BlockingIOError:
-            alive = True
-        fh.close()
+        return None
+
+
+def status() -> str:
+    w = watcher_pid()
+    head = f"watcher pid {w[0]}, up {int((now() - w[1]) / 60)} min" if w else "watcher NOT running"
+    try:
+        updated = json.loads((store() / "pr-tasks.json").read_text()).get("updated", 0)
+        prs = f"PR lists {int((now() - updated) / 60)} min old"
+    except (OSError, ValueError, AttributeError):
+        prs = "no PR lists yet"
+    pending = "; a wake is pending" if load_state().get("pending") else ""
     try:
         last = (store() / "events.log").read_text().splitlines()[-1]
     except (OSError, IndexError):
         last = "no events yet"
-    w = f"watcher pid {pid}, up {int((now() - int(since)) / 60)} min" if alive else "watcher NOT running"
-    return f"{w}; last event: {last[:120]}"
+    return f"{head}; {prs}{pending}; last event: {last[:120]}"
 
 
 def main() -> int:
     store().mkdir(parents=True, exist_ok=True)
     args = sys.argv[1:]
-    if args in ([], ["--once"]):
-        print(json.dumps(check(with_helper=True), indent=1))
+    if args == []:
+        print(json.dumps(check(with_helper=True, save=False), indent=1))
         return 0
-    if args == ["--watch"]:
+    if args == ["--once"]:
+        new = check(with_helper=True)
+        if new:
+            log("wake: " + "; ".join(summary(f) for f in new))
+        print(json.dumps(new, indent=1))
+        return 0
+    if args in (["--watch"], ["--watch", "--fresh"]):
         sys.stdin.close()  # the hook's input
-        return watch()
+        return watch(fresh="--fresh" in args)
+    if args == ["--ack"]:
+        return ack()
     if args == ["--compact-note"]:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": COMPACT_NOTE}}))
         return 0
