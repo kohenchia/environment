@@ -319,13 +319,23 @@ class Fork(unittest.TestCase):
             tr = w.load()["jobs"][old]["transcript"]
             # `claude stop` is where the old job could have done more work: make the stop append to the transcript
             real = w.bin / "claude"
-            real.write_text(real.read_text().replace('exec python3', f'case "$1" in stop) echo more >> {tr};; esac\nexec python3'))
+            real.write_text(real.read_text().replace('exec python3', f'case "$1" in stop) echo \x27{{"type":"user","message":"more"}}\x27 >> {tr};; esac\nexec python3'))
             p = w.run("kc-sessions", "fork", "review")
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn(old, w.load()["jobs"])  # not removed
             self.assertIn("grew", p.stdout)
             self.assertEqual(sum(1 for v in w.load()["jobs"].values() if v["name"] == "review"), 2)
 
+    def test_bookkeeping_lines_written_by_the_stop_are_not_work(self):
+        with World() as w:
+            old = w.job("review", state="blocked", running=True)
+            tr = w.load()["jobs"][old]["transcript"]
+            real = w.bin / "claude"
+            real.write_text(real.read_text().replace('exec python3', f'case "$1" in stop) echo \x27{{"type":"cost-state","totalCostUSD":1}}\x27 >> {tr};; esac\nexec python3'))
+            p = w.run("kc-sessions", "fork", "review")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertNotIn(old, w.load()["jobs"])  # removed
+            self.assertEqual(sum(1 for v in w.load()["jobs"].values() if v["name"] == "review"), 1)
     def test_a_job_in_a_git_worktree_is_stopped_but_not_removed(self):
         import subprocess
         with World() as w:

@@ -34,16 +34,30 @@ class StellaRestart(unittest.TestCase):
             self.assertIn("restarted in place", p.stdout, p.stdout + p.stderr)
             self.assertEqual(w.claude_calls()[0], f"stop {job}")
 
-    def test_a_daemon_fork_is_followed_not_duplicated(self):
+    def test_a_daemon_fork_without_a_note_is_followed_not_duplicated(self):
         with World() as w:
             job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             w.pane("p1", attach=job)
             w.opt("always_fork", True)  # the daemon forks even a bare resume
+            w.opt("no_note", True)  # and does not say so
             p = w.run("stella", "restart")
             self.assertIn("a fork", p.stdout, p.stdout + p.stderr)
             new = [j for j, v in w.load()["jobs"].items() if v["name"] == "stella" and j != job]
             self.assertEqual(len(new), 1)
             self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{new[0]}")
+
+    def test_a_copy_the_daemon_announces_is_undone_and_the_job_restarts_in_place(self):
+        with World() as w:
+            job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
+            w.pane("p1", attach=job)
+            w.opt("always_fork", True)  # the daemon starts a copy and says so
+            p = w.run("stella", "restart")
+            self.assertIn("instead of continuing it", p.stdout, p.stdout + p.stderr)
+            stellas = [j for j, v in w.load()["jobs"].items() if v["name"] == "stella"]
+            self.assertEqual(stellas, [job])  # the copy is gone, the job is the same
+            self.assertIn(job, w.load()["workers"])
+            self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{job}")
+            self.assertTrue(any(c.startswith(f"respawn {job}") for c in w.claude_calls()), w.claude_calls())
 
 
 if __name__ == "__main__":

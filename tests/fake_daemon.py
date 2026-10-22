@@ -210,6 +210,8 @@ def claude(argv: list[str]) -> int:
         if orig:
             launch = ["--session-id", w["jobs"][jid]["sessionId"], "--fork-session", "--resume", w["jobs"][orig]["transcript"], *fresh]
         spawn(w, jid, launch)
+        if orig and not w.get("no_note"):  # the real daemon says so on stderr
+            print(f"note: background session {orig[:8]} keeps its own saved options, so this started a copy as {jid[:8]}.", file=sys.stderr)
         return 0
     print(f"fake claude: unsupported {argv}", file=sys.stderr)
     return 2

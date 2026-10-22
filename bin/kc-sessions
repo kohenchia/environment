@@ -562,6 +562,23 @@ def respawn(targets: list[str], wait_idle: float, log) -> int:
     return problems + restore_ledger(log)
 
 
+COPY_NOTE = re.compile(r"started a (?:restricted )?copy (?:of that conversation )?as ([0-9a-f]{8})")
+
+
+def session_open(session_id: str) -> bool:
+    """Does a live process still hold this conversation (a session file under ~/.claude/sessions with a live pid)?"""
+    for f in (Path.home() / ".claude/sessions").glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+            if d.get("sessionId") != session_id:
+                continue
+            os.kill(int(d["pid"]), 0)
+            return True
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return False
+
+
 def restart_with_prompt(target: str, prompt: str, log) -> int:
     """Restart a session in place and give it a first message: `claude stop`, then a bare `claude --bg --resume`
     (no flags, so the daemon continues the same job with its saved flags). If the daemon forks anyway, the fork is
@@ -580,9 +597,23 @@ def restart_with_prompt(target: str, prompt: str, log) -> int:
         deadline = time.time() + scaled(30)
         while time.time() < deadline and any(j.running for j in load_jobs() if j.id == job.id):
             time.sleep(poll())
+        # the job is "stopped" a moment before its process is gone, and the daemon starts a COPY of a session that
+        # still looks open: wait for the process to go
+        deadline = time.time() + scaled(20)
+        while time.time() < deadline and session_open(job.session_id):
+            time.sleep(poll())
+        time.sleep(scaled(1))
     p = run("claude", "--bg", "--resume", job.session_id, "--", prompt, cwd=job.cwd)
     if p.returncode != 0:
         raise Failure(f"claude --bg --resume failed: {(p.stderr or p.stdout).strip()[-200:]}")
+    said = f"{p.stdout}\n{p.stderr}"
+    if (m := COPY_NOTE.search(said)) and m.group(1) not in known:
+        # the daemon started a copy (its note says why) instead of continuing the job: undo it, keep the job
+        note = next((ln.strip() for ln in said.splitlines() if "started a" in ln), m.group(0))
+        log(f"{job.name} ({job.id}): the daemon started a copy ({m.group(1)}) instead of continuing it: {note}")
+        retire(m.group(1), log, remove=True)
+        log(f"{job.name} ({job.id}): restarting it in place without the first message")
+        return respawn([job.id], 0.0, log)
     deadline = time.time() + scaled(40)
     problems = 0
     while time.time() < deadline:
@@ -608,6 +639,20 @@ def transcript_size(job: Job) -> int:
         return Path(job.transcript).stat().st_size if job.transcript else 0
     except OSError:
         return 0
+
+
+def transcript_turns(job: Job) -> int:
+    """How many conversation entries (user and assistant messages) the transcript holds. Stopping a session appends
+    bookkeeping lines (cost, title, mode) that are not work, so the size cannot tell whether it did anything."""
+    n = 0
+    try:
+        with open(job.transcript, "rb") as f:
+            for line in f:
+                if b'"type":"user"' in line or b'"type":"assistant"' in line:
+                    n += 1
+    except OSError:
+        return 0
+    return n
 
 
 def last_model(job: Job) -> str | None:
@@ -680,7 +725,7 @@ def retire(job_id: str, log, *, remove: bool, grown_since: int | None = None) ->
     log(f"{job.name} ({job.id}): stopped")
     if not remove:
         return True
-    if grown_since is not None and transcript_size(job) > grown_since:
+    if grown_since is not None and transcript_turns(job) > grown_since:
         log(f"{job.name} ({job.id}): its transcript grew after the fork, so it is kept (work exists only there)")
         return True
     if in_worktree(job.cwd):
@@ -705,7 +750,7 @@ def fork(target: str, prompt: str, log) -> int:
         before = {}
     ledger_add({pane: entry_for(pane, j, pid) for pane, (j, pid) in before.items() if j == old.id})
     known = {j.id for j in jobs}
-    size = transcript_size(old)
+    size = transcript_turns(old)
     flags = ["--dangerously-skip-permissions", *copied_flags(old)]
     p = run("claude", "--bg", "--resume", old.session_id, "-n", old.name, *flags, "--", prompt, cwd=old.cwd)
     if p.returncode != 0:
