@@ -1,6 +1,8 @@
 """`stella restart` keeps her job id and her window; it never leaves two sessions called stella."""
 
+import json
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -58,6 +60,45 @@ class StellaRestart(unittest.TestCase):
             self.assertIn(job, w.load()["workers"])
             self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{job}")
             self.assertTrue(any(c.startswith(f"respawn {job}") for c in w.claude_calls()), w.claude_calls())
+
+
+class StellaSettings(unittest.TestCase):
+    """Every run writes her project settings: the watcher hooks, recaps off, the hour cache; the cap only when ready."""
+
+    def settings(self, w):
+        return json.loads((w.home / ".local/share/stella/.claude/settings.json").read_text())
+
+    def test_start_on_a_running_stella_writes_the_hooks_and_keeps_other_keys(self):
+        with World() as w:
+            w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
+            path = w.home / ".local/share/stella/.claude/settings.json"
+            path.parent.mkdir(parents=True)
+            path.write_text(json.dumps({"permissions": {"allow": ["Read"]}, "hooks": {"PreToolUse": []}}))
+            w.run("stella", "start")
+            s = self.settings(w)
+            self.assertEqual(s["permissions"], {"allow": ["Read"]})
+            self.assertIn("PreToolUse", s["hooks"])
+            for event in ("SessionStart", "Stop", "StopFailure"):
+                hook = s["hooks"][event][0]["hooks"][0]
+                self.assertTrue(hook["asyncRewake"], event)
+                self.assertIn("stella-check --watch", hook["command"])
+                self.assertGreaterEqual(hook["timeout"], 86400)
+            self.assertEqual(s["hooks"]["SessionStart"][1]["matcher"], "compact")
+            self.assertEqual(s["env"]["CLAUDE_CODE_ENABLE_AWAY_SUMMARY"], "0")
+            self.assertEqual(s["promptCacheTtl"], "1h")
+            self.assertNotIn("autoCompactWindow", s)
+
+    def test_restart_writes_them_too_and_adds_the_cap_after_a_day_of_events(self):
+        with World() as w:
+            w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
+            store = w.home / ".local/share/stella"
+            store.mkdir(parents=True)
+            old = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - 2 * 86400))
+            (store / "events.log").write_text(f"{old} wake: blocked x (20 min)\n")
+            w.run("stella", "restart")
+            s = self.settings(w)
+            self.assertEqual(s["autoCompactWindow"], 200000)
+            self.assertTrue(s["hooks"]["Stop"][0]["hooks"][0]["asyncRewake"])
 
 
 if __name__ == "__main__":

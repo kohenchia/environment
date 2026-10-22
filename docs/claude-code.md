@@ -18,7 +18,7 @@ Alacritty ── herdr (tw)                                  Claude's background
 | The `stella` agent | `claude/agents/stella.md` | `~/.claude/agents/stella.md` |
 | The leak gate | `githooks/pre-push` | `core.hooksPath` of this repo |
 | The guard around it | `claude/plugin/hooks/hooks.json` → `claude/bin/kc-hook` | the `kc@kc-local` plugin |
-| `stella`, `kc-env`, `kc-keys`, `herdr-space`, `kc-new`, `kc-sessions` | `bin/` | `~/.local/bin/` |
+| `stella`, `stella-check`, `kc-env`, `kc-keys`, `herdr-space`, `kc-new`, `kc-sessions` | `bin/` | `~/.local/bin/` |
 
 `./setup.sh` links all of it and installs the plugin; re-run it after adding a skill or agent.
 
@@ -53,8 +53,18 @@ reports is how many are waiting for them. She answers a waiting session herself 
 certainty, learns Kohen's preferences into proposed canon, and in the background writes a daily log of every session
 that worked (`/kc-log day`), keeps proposed priorities from their Slack, and audits memories, instructions and skills
 weekly. Those results go into files in her store (`priorities.md`, `canon.md`, `audit.md`), which Kohen reads when
-they want. Her manual, memory files and routines are in her agent file; no other session loads it. Her routines are
-durable session crons she recreates at the start of her session.
+they want. Her manual, memory files and routines are in her agent file; no other session loads it. Her daily and
+weekly routines are durable session crons she recreates at the start of her session.
+
+Nothing runs a model on a timer to watch the other sessions. `stella-check` (`bin/`) does that without one: it reads
+the job records every minute and runs her PR helper every 10 minutes, and wakes her only when something new needs her
+(a session blocked for 15 minutes, an API-error stop, a PR to push along, a merged set, a due reminder). Hooks in her
+project settings start it at session start and at the end of every turn (`asyncRewake`: its exit code 2 starts her
+turn), and `stella` writes those settings on every run, with recaps off, a one-hour prompt cache and, after a day of
+events, a 200k-token compaction window. So a quiet hour draws nothing and spends nothing, except one hourly judgment
+check (a self-paced `/loop` whose quiet ticks Claude Code folds into one row). Each wake and each action she takes is a
+line in `~/.local/share/stella/events.log`; her lasting PR tasks are in `pr-tasks.json`. In her session, `/calm` hides
+tool rows and turn timings so her turns read as a conversation (on by default; `/calm` again shows everything).
 
 ## Commands
 

@@ -400,6 +400,8 @@ LINKS=(
     # `stella` opens Stella's permanent session, `kc-env` lists every command, skill and background
     # process, `kc-keys` every key binding, `herdr-space` moves a space (Cmd+Ctrl+K / J).
     "bin/stella|$HOME/.local/bin/stella"
+    # `stella-check` wakes Stella only when something needs her; her session's hooks start it (docs/claude-code.md).
+    "bin/stella-check|$HOME/.local/bin/stella-check"
     "bin/kc-env|$HOME/.local/bin/kc-env"
     "bin/kc-keys|$HOME/.local/bin/kc-keys"
     "bin/herdr-space|$HOME/.local/bin/herdr-space"

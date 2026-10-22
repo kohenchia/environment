@@ -8,6 +8,11 @@
 She is an ordinary background session of Claude's daemon, named `stella`, running the agent file
 ~/.claude/agents/stella.md in her store ~/.local/share/stella. Nothing else is needed for her to exist.
 
+Every run also writes her project settings (~/.local/share/stella/.claude/settings.json), so they can
+always be rebuilt from this repo: the hooks that run `stella-check --watch` (it wakes her only when something needs
+her), recaps off, a one-hour prompt cache, and, once `stella-check` has kept her PR tasks in files for a day, a
+200k-token compaction window. Keys of that file this script does not manage are kept.
+
 Standard library only.
 """
 
@@ -25,6 +30,43 @@ from pathlib import Path
 STORE = Path.home() / ".local/share/stella"
 START = "Session start: do the start-of-session steps in your manual."
 FLAGS = ["--dangerously-skip-permissions"]
+CAP_AFTER = 86400  # the compaction cap waits until stella-check has written her PR tasks to files for this long
+
+
+def watcher_hook() -> dict:
+    # asyncRewake: runs in the background and wakes her on exit code 2; the timeout (seconds) must outlive the
+    # watcher, or Claude Code kills it silently (the default is 600 s). stella-check exits on its own before a day.
+    return {"type": "command", "command": "$HOME/.local/bin/stella-check --watch", "asyncRewake": True, "timeout": 86400}
+
+
+def cap_ready() -> bool:
+    try:
+        first = (STORE / "events.log").read_text().splitlines()[0][:19]
+        return time.time() - time.mktime(time.strptime(first, "%Y-%m-%d %H:%M:%S")) >= CAP_AFTER
+    except (OSError, IndexError, ValueError):
+        return False
+
+
+def write_settings() -> None:
+    """Her project settings: the watcher hooks, recaps off, a one-hour cache, and the compaction cap when ready."""
+    path = STORE / ".claude/settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        s = json.loads(path.read_text())
+    except (OSError, ValueError):
+        s = {}
+    s.setdefault("env", {})["CLAUDE_CODE_ENABLE_AWAY_SUMMARY"] = "0"
+    s["promptCacheTtl"] = "1h"
+    if cap_ready():
+        s["autoCompactWindow"] = 200000
+    compact_note = {"type": "command", "command": "$HOME/.local/bin/stella-check --compact-note"}
+    s["hooks"] = {**s.get("hooks", {}),
+                  "SessionStart": [{"hooks": [watcher_hook()]}, {"matcher": "compact", "hooks": [compact_note]}],
+                  "Stop": [{"hooks": [watcher_hook()]}],
+                  "StopFailure": [{"hooks": [watcher_hook()]}]}
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(s, indent=2) + "\n")
+    tmp.replace(path)
 
 
 def claude(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
@@ -81,6 +123,7 @@ def main() -> None:
     cmd = sys.argv[1:]
     if cmd not in ([], ["start"], ["restart"]):
         sys.exit(__doc__)
+    write_settings()  # every path, so a running Stella picks up a changed hook at her next settings reload
     sid = restart() if cmd == ["restart"] else (row() or {}).get("id") or start()
     if cmd == ["start"]:
         return

@@ -1,5 +1,5 @@
 {
   "name": "kc",
-  "version": "3.0.0",
-  "description": "The guard that keeps a session from bypassing the leak check on pushes to ~/github/environment"
+  "version": "3.1.0",
+  "description": "The guard that keeps a session from bypassing the leak check on pushes to ~/github/environment, and /calm in Stella's session"
 }

@@ -141,6 +141,9 @@ def processes() -> list[tuple[str, str]]:
             rows.append(("  routine", f"{t.get('cron', '?')}  {first_sentence(t.get('prompt', ''), 70)}"))
     except (OSError, ValueError):
         rows.append(("  routines", "none recorded (Stella creates them at the start of her session)"))
+    check = BIN / "stella-check"
+    if check.exists():
+        rows.append(("  stella-check", run(str(check), "--status").strip() or "no answer"))
     hooks = run("git", "-C", str(HOME / "github/environment"), "config", "core.hooksPath").strip()
     leak = BIN / "leakcheck"
     rows.append(("leak gate", f"pre-push hook {'on' if hooks else 'OFF'}; check {'linked' if leak.exists() else 'MISSING'}"))
