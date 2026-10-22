@@ -90,6 +90,7 @@ class StellaSettings(unittest.TestCase):
                 self.assertIn("stella-check --watch", hook["command"])
                 self.assertGreaterEqual(hook["timeout"], 86400)
             self.assertEqual(s["hooks"]["SessionStart"][-1]["matcher"], "compact")
+            self.assertEqual(s["hooks"]["SessionStart"][0]["matcher"], "startup|resume")
             self.assertEqual(s["env"]["CLAUDE_CODE_ENABLE_AWAY_SUMMARY"], "0")
             self.assertEqual(s["promptCacheTtl"], "1h")
             self.assertNotIn("autoCompactWindow", s)
@@ -103,6 +104,16 @@ class StellaSettings(unittest.TestCase):
             p = w.run("stella", "start")
             self.assertIn("does not parse", p.stderr)
             self.assertEqual(path.read_text(), "{ not json")
+
+    def test_a_settings_file_of_the_wrong_shape_is_left_alone(self):
+        with World() as w:
+            w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
+            path = w.home / ".local/share/stella/.claude/settings.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"hooks": []}')
+            p = w.run("stella", "start")
+            self.assertIn("not the shape", p.stderr)
+            self.assertEqual(path.read_text(), '{"hooks": []}')
 
     def test_restart_writes_them_too_and_adds_the_cap_after_a_day_of_pr_lists(self):
         with World() as w:

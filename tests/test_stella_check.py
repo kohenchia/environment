@@ -149,7 +149,7 @@ class Findings(unittest.TestCase):
             w.helper(fail="steward")
             self.assertEqual(len(w.once()), 1)
             state = json.loads((w.store / "check-state.json").read_text())
-            state["errors"]["steward"] -= 2 * 3600
+            state["errors"]["steward"]["first"] -= 2 * 3600
             (w.store / "check-state.json").write_text(json.dumps(state))
             new = w.once()
             self.assertEqual([(f["kind"], f.get("persisting")) for f in new], [("helper_error", True)])
@@ -197,7 +197,6 @@ class Watch(unittest.TestCase):
             w.job("a1", "phase-10", age=20 * 60, needs="?")
             self.assertEqual(w.run("--watch").returncode, 2)
             state = json.loads((w.store / "check-state.json").read_text())
-            state["pending"]["at"] -= 600
             (w.store / "check-state.json").write_text(json.dumps(state))
             # a Stop-hook watcher in the same process never doubles a wake that may still be queued
             stop = subprocess.Popen(["python3", str(BIN), "--watch"], env=w.env(), stdout=subprocess.PIPE, text=True)
@@ -235,6 +234,70 @@ class Watch(unittest.TestCase):
                     old.kill()
                 old.wait()
                 old.stdout.close()
+
+    def test_a_helper_that_fails_every_other_run_wakes_her_once(self):
+        with World() as w:
+            for fail in ("steward", None, "steward", None, "steward"):
+                w.helper(**({"fail": fail} if fail else {"steward": {}}))
+                w.once()
+            self.assertEqual((w.store / "events.log").read_text().count("helper error"), 1)
+
+    def test_a_stale_pid_in_the_lock_file_is_never_signalled(self):
+        with World() as w:
+            sleeper = subprocess.Popen(["sleep", "30"])
+            try:
+                (w.store / "watch.lock").write_text(f"{sleeper.pid} {int(time.time())} {int(time.time())}\n")
+                p = subprocess.Popen(["python3", str(BIN), "--watch", "--fresh"], env=w.env(), stdout=subprocess.PIPE, text=True)
+                try:
+                    time.sleep(2)
+                    self.assertIsNone(sleeper.poll(), "take_over killed a process that is not a watcher")
+                    self.assertIsNone(p.poll())
+                finally:
+                    p.kill()
+                    p.wait()
+                    p.stdout.close()
+            finally:
+                sleeper.kill()
+                sleeper.wait()
+
+    def test_an_ack_during_a_check_is_not_undone(self):
+        with World() as w:
+            w.helper(steward={})
+            (w.store / "approved-prs/approved-prs.py").write_text(HELPER.replace(
+                "cmd = sys.argv", "import time; time.sleep(3 if len(sys.argv) < 2 or sys.argv[1] == 'steward' else 0)\ncmd = sys.argv"))
+            (w.store / "check-state.json").write_text(json.dumps({"pending": {"at": 1, "findings": []}}))
+            check = subprocess.Popen(["python3", str(BIN), "--once"], env=w.env(), stdout=subprocess.PIPE, text=True)
+            try:
+                time.sleep(1)
+                w.run("--ack")
+                check.wait(timeout=30)
+            finally:
+                check.stdout.close()
+            self.assertNotIn("pending", json.loads((w.store / "check-state.json").read_text()))
+
+    def test_ending_the_watcher_ends_the_helper_it_is_waiting_for(self):
+        with World() as w:
+            marker = w.home / "helper.pid"
+            (w.store / "approved-prs").mkdir()
+            (w.store / "approved-prs/approved-prs.py").write_text(
+                f"import os, time\nopen({str(marker)!r}, 'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+            p = subprocess.Popen(["python3", str(BIN), "--watch"], env=w.env(), stdout=subprocess.PIPE, text=True)
+            try:
+                for _ in range(50):
+                    if marker.exists() and marker.read_text():
+                        break
+                    time.sleep(0.2)
+                helper_pid = int(marker.read_text())
+                p.terminate()
+                p.wait(timeout=10)
+                time.sleep(0.5)
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(helper_pid, 0)
+            finally:
+                if p.poll() is None:
+                    p.kill()
+                    p.wait()
+                p.stdout.close()
 
     def test_a_second_watcher_exits_at_once(self):
         with World() as w:

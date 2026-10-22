@@ -3,8 +3,9 @@
 
     stella-check            dry run: print what is new now, without saving anything (safe to run by hand)
     stella-check --watch    keep checking; exit 2 with what is new, so the hook that started it wakes Stella
-    stella-check --watch --fresh   the same, from the SessionStart hook: ends a watcher left by the previous process
-                                   (hooks run detached, so one can outlive a restart) and redelivers a lost wake
+    stella-check --watch --fresh   the same, for the SessionStart hook only (by hand it ends Stella's watcher): ends a
+                                   watcher left by the previous process (hooks run detached, so one can outlive a
+                                   restart) and redelivers a wake that was never acknowledged
     stella-check --ack      Stella's last step on a wake turn: the wake was delivered and handled
     stella-check --status   one line: the watcher's pid and age, the PR lists' age, and the last line of events.log
     stella-check --compact-note   the SessionStart (compact) hook's answer: redo the start steps after a compaction
@@ -24,8 +25,9 @@ A finding wakes her once, when it appears; one that stays is not news. One that 
 (the PR helper drops an item for a while after Stella marks it, then lists it again if it still needs her). A failed
 run of the helper keeps what it listed before, so its recovery is not mistaken for news.
 
-A wake stays pending until Stella runs `--ack`. Only a `--fresh` watcher (a new session process) delivers a pending
-wake again, when it is more than two minutes old: a wake still queued in a running session is never doubled.
+A wake stays pending until Stella runs `--ack`. Only a `--fresh` watcher (a new session process, from SessionStart
+`startup|resume`) delivers a pending wake again: the old process's queue is gone. A watcher in the same process (the
+Stop hook, or after a compaction) never does, so a wake that is still queued is not doubled.
 
 Every wake appends one line to events.log. The PR helper's lasting lists (held, stuck, unacknowledged,
 waiting_review) are written to pr-tasks.json, which her status reads.
@@ -38,10 +40,12 @@ Standard library only.
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -54,11 +58,14 @@ BLOCKED_AFTER = 15 * 60
 API_ERROR_AFTER = 5 * 60
 REPEAT = 3600  # findings Stella may have to retry (api_error, wrong_mode) come back once an hour while they stay
 ERROR_PERSISTS = 3600  # a helper error still there after this is news again, as "persisting"
-REDELIVER_AFTER = 120  # a pending wake older than this, found by a new watcher, was lost: deliver it again
+ERROR_GAP = 1800  # failures further apart than this are separate errors
+ALIVE_WITHIN = 900  # a watcher that has not beat for this long is gone (a helper run takes up to 6 minutes)
 RECENT = 3 * 3600  # job records older than this are not looked at
 MAX_LIFE = 23 * 3600  # exit quietly before the hook's one-day timeout kills it; the next turn's Stop hook restarts it
 SELF = ("stella",)
-API_ERROR_WORDS = ("api error", "rate limit", "overloaded", "request timed out", "server error", "429", "529")
+# How today's check reads them: a rate limit or overload in what the session needs, "API Error" in its detail.
+NEEDS_RE = re.compile(r"rate.limit|overloaded|\b(429|529)\b|request timed out|server error")
+DETAIL_RE = re.compile(r"api error")
 COMPACT_NOTE = ("Your conversation was just compacted. Do the start-of-session steps in your manual again now, and read "
                 "pr-tasks.json, tasks.md and the end of events.log in your store before answering anything about PRs or "
                 "sessions.")
@@ -111,11 +118,12 @@ def session_findings() -> dict[str, dict]:
                 found[f"blocked:{jid}:{digest(needs)}"] = {"kind": "blocked", "session": name, "id": jid,
                                                           "minutes": int(age / 60), "needs": needs[:300]}
             continue
-        text = f"{needs} {detail}".lower()
-        stopped = j.get("state") == "failed" or (j.get("state") != "working" and any(w in text for w in API_ERROR_WORDS))
+        stopped = j.get("state") == "failed" or (
+            j.get("state") != "working" and (NEEDS_RE.search(needs.lower()) or DETAIL_RE.search(detail.lower())))
         if stopped and age >= API_ERROR_AFTER:
-            found[f"apierror:{jid}:{int(j['_mtime'])}:h{hour()}"] = {"kind": "api_error", "session": name, "id": jid,
-                                                                     "minutes": int(age / 60), "detail": (needs or detail)[:200]}
+            again = int(age // REPEAT)  # comes back once an hour of being stopped, while it stays
+            found[f"apierror:{jid}:{int(j['_mtime'])}:h{again}"] = {"kind": "api_error", "session": name, "id": jid,
+                                                                    "minutes": int(age / 60), "detail": (needs or detail)[:200]}
     return found
 
 
@@ -124,10 +132,20 @@ def helper() -> Path:
 
 
 def run_helper(*args: str) -> dict:
-    p = subprocess.run([sys.executable, str(helper()), *args], capture_output=True, text=True, timeout=120)
+    p = subprocess.Popen([sys.executable, str(helper()), *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         text=True, start_new_session=True)
+    try:
+        stdout, stderr = p.communicate(timeout=120)
+    except BaseException:  # a timeout, or the watcher being ended: never leave the helper (and its gh calls) running
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        p.wait()
+        raise
     if p.returncode:
-        raise RuntimeError((p.stderr or p.stdout).strip()[-200:] or f"exit {p.returncode}")
-    out = json.loads(p.stdout)
+        raise RuntimeError((stderr or stdout).strip()[-200:] or f"exit {p.returncode}")
+    out = json.loads(stdout)
     if not isinstance(out, dict):
         raise RuntimeError("not a JSON object")
     return out
@@ -137,17 +155,22 @@ def items(out: dict, bucket: str) -> list[dict]:
     return [it for it in out.get(bucket) or [] if isinstance(it, dict)]
 
 
-def error_finding(state: dict, what: str, error: str) -> dict[str, dict]:
-    """A helper error: news when it first appears, and once more as "persisting" after an hour of it."""
-    first = state.get("errors", {}).get(what) or now()
-    state.setdefault("errors_now", {})[what] = first
-    f = {"kind": "helper_error", "what": what, "error": error[:200]}
-    if now() - first >= ERROR_PERSISTS:
-        return {f"error:{what}:persisting": {**f, "persisting": True, "minutes": int((now() - first) / 60)}}
-    return {f"error:{what}": f}
+def error_finding(state: dict, errors: list, what: str, error: str) -> None:
+    """A helper error: news when it first appears and once more, as "persisting", after an hour of it. Failures less
+    than half an hour apart are one error, so a helper that fails every other run does not wake her every time."""
+    rec = state.setdefault("errors", {}).get(what)
+    if not rec or now() - rec.get("last", 0) > ERROR_GAP:
+        rec = state["errors"][what] = {"first": now(), "announced": []}
+    rec["last"] = now()
+    level = "persisting" if now() - rec["first"] >= ERROR_PERSISTS else "first"
+    if level in rec["announced"]:
+        return
+    rec["announced"].append(level)
+    errors.append({"key": f"error:{what}:{level}", "kind": "helper_error", "what": what, "error": error[:200],
+                   **({"persisting": True, "minutes": int((now() - rec["first"]) / 60)} if level == "persisting" else {})})
 
 
-def pr_findings(state: dict, save: bool = True) -> tuple[dict[str, dict], set[str]]:
+def pr_findings(state: dict, errors: list, save: bool = True) -> tuple[dict[str, dict], set[str]]:
     """The PR helper's buckets as findings, and which of its commands failed. Writes pr-tasks.json on success."""
     found: dict[str, dict] = {}
     failed: set[str] = set()
@@ -157,7 +180,7 @@ def pr_findings(state: dict, save: bool = True) -> tuple[dict[str, dict], set[st
         s = run_helper("steward")
     except HELPER_FAILS as e:
         failed.add("steward")
-        found.update(error_finding(state, "steward", str(e)))
+        error_finding(state, errors, "steward", str(e))
         s = None
     if s is not None and save:
         keep = {k: items(s, k) for k in ("held", "stuck", "unacknowledged", "waiting_review")}
@@ -166,7 +189,7 @@ def pr_findings(state: dict, save: bool = True) -> tuple[dict[str, dict], set[st
     if s is not None:
         for it in items(s, "act"):
             if it.get("error"):
-                found.update(error_finding(state, str(it.get("repo")), str(it["error"])))
+                error_finding(state, errors, str(it.get("repo")), str(it["error"]))
             elif it.get("pr"):
                 found[f"act:{it['pr']}:{it.get('signature', '')}"] = {"kind": "act", "pr": it["pr"], "reasons": it.get("reasons"),
                                                                       "owner": (it.get("owner") or {}).get("name")}
@@ -189,7 +212,7 @@ def pr_findings(state: dict, save: bool = True) -> tuple[dict[str, dict], set[st
             r = run_helper(what)
         except HELPER_FAILS as e:
             failed.add(what)
-            found.update(error_finding(state, what, str(e)))
+            error_finding(state, errors, what, str(e))
             continue
         for it in items(r, bucket):
             ident = it.get("key") or it.get("id") or it.get("session") or digest(json.dumps(it, sort_keys=True))
@@ -227,27 +250,47 @@ def log(line: str) -> None:
         f.write(time.strftime("%Y-%m-%d %H:%M:%S ") + line + "\n")
 
 
+@contextlib.contextmanager
+def state_lock():
+    fh = open(store() / "check-state.lock", "a+")
+    fcntl.flock(fh, fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        fh.close()
+
+
+def update_state(change) -> None:
+    """Load, change and save the state under a lock, so a check (which runs the helper for minutes) never overwrites
+    an `--ack` or a pending wake written meanwhile."""
+    with state_lock():
+        st = load_state()
+        change(st)
+        save_state(st)
+
+
 def check(with_helper: bool, save: bool = True) -> list[dict]:
     """One check: the findings that are new since the last one."""
     state = load_state()
     before = set(state.get("sessions", [])) | set(state.get("pr", []))
     found = session_findings()
+    errors: list[dict] = []
+    pr: dict[str, dict] = {}
     if with_helper:
-        kept = [k for k in state.get("pr", []) if not k.startswith("error:")]
-        pr, failed = pr_findings(state, save)
-        if "steward" in failed:  # what the steward listed before still stands; only the error is new
+        kept = state.get("pr", [])
+        pr, failed = pr_findings(state, errors, save)
+        if "steward" in failed:  # what the steward listed before still stands
             pr = {**{k: {} for k in kept if not k.startswith(("merged:", "reminders:"))}, **pr}
         for what in ("merged", "reminders"):
             if what in failed:
                 pr = {**{k: {} for k in kept if k.startswith(what + ":")}, **pr}
-        state["errors"] = state.pop("errors_now", {})
-        state["pr"], state["helper_at"] = sorted(pr), int(now())
-    else:
-        pr = {}
-    new = [{"key": k, **v} for k, v in {**found, **pr}.items() if k not in before and v]
-    state["sessions"] = sorted(found)
+    new = [{"key": k, **v} for k, v in {**found, **pr}.items() if k not in before and v] + errors
     if save:
-        save_state(state)
+        def apply(st: dict) -> None:
+            st["sessions"] = sorted(found)
+            if with_helper:
+                st["pr"], st["helper_at"], st["errors"] = sorted(pr), int(now()), state.get("errors", {})
+        update_state(apply)
     return new
 
 
@@ -266,9 +309,7 @@ def summary(f: dict) -> str:
 
 def deliver(new: list[dict]) -> int:
     """Keep the wake as pending, log it, print it (the hook's wake carries stderr when there is any), and exit 2."""
-    state = load_state()
-    state["pending"] = {"at": int(now()), "findings": new}
-    save_state(state)
+    update_state(lambda st: st.__setitem__("pending", {"at": int(now()), "findings": new}))
     log("wake: " + "; ".join(summary(f) for f in new))
     text = "stella-check: " + json.dumps(new)
     print(text)
@@ -284,25 +325,48 @@ def lock():
     except BlockingIOError:
         fh.close()
         return None
-    fh.seek(0)
-    fh.truncate()
-    fh.write(f"{os.getpid()} {int(now())}\n")
-    fh.flush()
+    beat(fh, now())
     return fh
 
 
+def beat(fh, since: float) -> None:
+    """The lock file reads `pid since heartbeat`; --status trusts a pid only while the heartbeat is recent."""
+    fh.seek(0)
+    fh.truncate()
+    fh.write(f"{os.getpid()} {int(since)} {int(now())}\n")
+    fh.flush()
+
+
+def lock_free() -> bool:
+    """True when no watcher holds the lock (the only reliable test: a pid in the file can be stale or reused)."""
+    fh = open(store() / "watch.lock", "a+")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+    finally:
+        fh.close()
+
+
 def take_over() -> None:
-    """End a watcher left by the previous session process, so this one can take the lock."""
+    """End a watcher that still holds the lock, left by the previous session process (hooks run detached)."""
+    if lock_free():
+        return
     old = watcher_pid()
     if old and old[0] != os.getpid():
         try:
             os.kill(old[0], signal.SIGTERM)
         except OSError:
+            pass
+    for _ in range(50):
+        if lock_free():
             return
-        for _ in range(50):
-            if watcher_pid() is None:
-                return
-            time.sleep(0.1)
+        time.sleep(0.1)
+
+
+def stop_watching(*_):
+    sys.exit(0)  # raises in the main thread, so run_helper can end the helper it is waiting for
 
 
 def watch(fresh: bool) -> int:
@@ -311,42 +375,41 @@ def watch(fresh: bool) -> int:
     held = lock()
     if held is None:
         return 0
+    signal.signal(signal.SIGTERM, stop_watching)
     started = now()
     pending = load_state().get("pending")
-    if fresh and pending and now() - pending.get("at", now()) >= REDELIVER_AFTER:
+    if fresh and isinstance(pending, dict):
         log("redeliver: the last wake was not acknowledged before the restart")
         return deliver(pending.get("findings") or [])
     while now() - started < MAX_LIFE:
+        beat(held, started)
         try:
             new = check(with_helper=now() - load_state().get("helper_at", 0) >= HELPER_EVERY)
         except Exception as e:  # noqa: BLE001 - a crash must wake her once, never kill the watcher silently
             kind = type(e).__name__
-            state = load_state()
-            if state.get("crash") != kind:
-                state["crash"] = kind
-                save_state(state)
+            if load_state().get("crash") != kind:
+                update_state(lambda st: st.__setitem__("crash", kind))
                 return deliver([{"key": f"crash:{kind}", "kind": "crash", "error": f"{kind}: {str(e)[:200]}"}])
             time.sleep(POLL * 5)
             continue
         if new:
-            state = load_state()
-            if state.pop("crash", None):
-                save_state(state)
+            update_state(lambda st: st.pop("crash", None))
             return deliver(new)
         time.sleep(POLL)
     return 0
 
 
 def ack() -> int:
-    state = load_state()
-    state.pop("pending", None)
-    save_state(state)
+    update_state(lambda st: st.pop("pending", None))
     return 0
 
 
 def watcher_pid() -> tuple[int, int] | None:
+    """The watcher's pid and start, when its heartbeat is recent and the pid is alive (a hint: lock_free() decides)."""
     try:
-        pid, since = (int(x) for x in (store() / "watch.lock").read_text().split())
+        pid, since, last = (int(x) for x in (store() / "watch.lock").read_text().split())
+        if now() - last > ALIVE_WITHIN:
+            return None
         os.kill(pid, 0)
         return pid, since
     except (OSError, ValueError):
@@ -383,7 +446,13 @@ def main() -> int:
         return 0
     if args in (["--watch"], ["--watch", "--fresh"]):
         sys.stdin.close()  # the hook's input
-        return watch(fresh="--fresh" in args)
+        try:
+            return watch(fresh="--fresh" in args)
+        except Exception as e:  # noqa: BLE001 - even a failure to start must reach Stella, once
+            try:
+                return deliver([{"key": "crash:start", "kind": "crash", "error": f"{type(e).__name__}: {str(e)[:200]}"}])
+            except Exception:  # noqa: BLE001
+                raise e
     if args == ["--ack"]:
         return ack()
     if args == ["--compact-note"]:

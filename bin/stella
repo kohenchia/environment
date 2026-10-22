@@ -63,12 +63,17 @@ def write_settings() -> None:
         s = {}
     except (OSError, ValueError) as e:
         sys.exit(f"stella: {path} does not parse ({e}); fix it, then run this again")
+    if not isinstance(s, dict) or not isinstance(s.get("hooks", {}), dict) or not isinstance(s.get("env", {}), dict):
+        sys.exit(f"stella: {path} is not the shape stella expects (an object with object hooks and env); fix it, then run this again")
     s.setdefault("env", {})["CLAUDE_CODE_ENABLE_AWAY_SUMMARY"] = "0"
     s["promptCacheTtl"] = "1h"
     if cap_ready():
         s["autoCompactWindow"] = 200000
     compact_note = {"type": "command", "command": "$HOME/.local/bin/stella-check --compact-note"}
-    mine = {"SessionStart": [{"hooks": [watcher_hook(fresh=True)]}, {"matcher": "compact", "hooks": [compact_note]}],
+    # The fresh watcher belongs to a new session process only (startup, resume); a compaction or /clear keeps the
+    # process, and so its watcher and its queued wakes.
+    mine = {"SessionStart": [{"matcher": "startup|resume", "hooks": [watcher_hook(fresh=True)]},
+                             {"matcher": "compact", "hooks": [compact_note]}],
             "Stop": [{"hooks": [watcher_hook()]}],
             "StopFailure": [{"hooks": [watcher_hook()]}]}
     hooks = s.setdefault("hooks", {})
