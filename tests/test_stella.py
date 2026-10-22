@@ -60,6 +60,7 @@ class StellaRestart(unittest.TestCase):
 
     def test_a_copy_the_daemon_announces_is_undone_and_the_job_restarts_in_place(self):
         with World() as w:
+            link_stella_check(w)
             job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             w.pane("p1", attach=job)
             w.opt("always_fork", True)  # the daemon starts a copy and says so
