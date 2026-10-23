@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs, and the report states what was done. Writes a short report to the vault and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs, and the report states what was done. Writes a short, plain-language report to the vault (each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -25,9 +25,9 @@ review, by a small diff, or by time or budget.
    `rereview` and `delta` mean a complete review of the current head plus a "Since last review" section, not less work.
 3. **Small is not shallow.** A one-line change is traced to every consumer. Only the design debate (step 2) may be
    inline for a small fix; the diff pass, the caller trace and the verification still run on Opus.
-4. **Say what was done.** The report carries a "How this was reviewed" table (agents, models, steps done, steps not done
-   and why), and one `Depth:` line under the verdict. A step you could not do is a stated gap and the verdict line
-   begins `INCOMPLETE:`. "Not verified" is allowed; "assumed fine" is not.
+4. **Say what was done.** The report carries a "How this was reviewed" table at its end (agents, models, steps done,
+   steps not done and why), and one `Depth:` line under the verdict. A step you could not do is a stated gap and the
+   verdict line begins `INCOMPLETE:`. "Not verified" is allowed; "assumed fine" is not.
 5. **Unexamined is not clean.** Anything the change can reach that you did not look at is a named risk, with the exact
    command that would settle it.
 6. **A limit is a reason to wait, not to skip.** On a rate limit or a slow step, wait and continue; never drop a step to
@@ -101,7 +101,8 @@ Plus question 6: is the review itself consistent with the knowledge (step 0)?
 
 For anything beyond a typo-level change to a document, spawn these, in parallel where they are independent, every one
 with `model: "opus"` and `effort: "high"` (Sonnet only for mechanical work: listing files, fetching, formatting). Give each the subject's
-path and sha, the knowledge file and the exact question, and ask for findings with `file:line` evidence.
+path and sha, the knowledge file and the exact question, and ask for findings with `file:line` evidence and, for
+each, the user-level case it causes: what a user does, what fails for them, and what would make it work.
 
 | Agent | Its one task |
 |---|---|
@@ -124,20 +125,46 @@ disproves in one look costs more than the ten findings that were right.
 ## 6. Write the report
 
 Into the vault's `Reviews/` folder (the vault's location is in the global instructions; the extension may
-set the folder layout and a template), linked from `Reviews.md`. Short: a reader should get the verdict and
-every ask in under a screen.
+set the folder layout and a template), linked from `Reviews.md`.
 
-- The verdict first, in one line, then why in two or three sentences, then the `Depth:` line (how many Opus agents,
-  which steps ran; or `INCOMPLETE:` and what did not).
-- One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when
-  the verdict is to replace X.
-- Asks as numbered imperatives, most important first, each with its evidence and, when it is not obvious,
-  a worked example (before/after, a concrete input and the wrong output).
-- What is good about it, briefly, so the author knows what to keep.
-- A draft comment Kohen could post, if he wants one. Never post it.
-- Facts as facts: name the sha, the PR number, the file. No bare symbols without saying what they are.
-- A "How this was reviewed" table in the evidence section: each agent, its model, its task, and every step that was
-  not done with the reason.
+The depth contract decides what the review finds; this step decides only how it is written. Kohen reads a report to
+decide, not to audit: he must be able to act on every ask without opening the code. Plain writing never drops a
+finding, a gap or a check. It moves the detail to the Evidence section at the end.
+
+### The readability contract
+
+| Part | Rule |
+|---|---|
+| Verdict | Two sentences at most: the call, then the deciding reason told as what happens to a user. Then the `Depth:` line (how many Opus agents, which steps ran; or `INCOMPLETE:` and what did not). |
+| Target | One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when the verdict is to replace X. |
+| Terms | Each term an ask needs that a user of the system would not know, defined once in plain words, before the asks. Coin none: use the names the code and its users already use. |
+| Asks | Numbered, most important first, at most six. A finding that blocks merge is always an ask, whatever the cap or the length; lower-ranked ones go to Evidence, each with a one-line plain case, and the body says "N smaller findings in Evidence". |
+| One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one paragraph of at most four sentences: **if** the user does X, **then** Y fails, **and doing Z** (the change asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case). End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
+| No code above Evidence | Nothing above `## Evidence` (the verdict, terms, asks, draft comment and every other section) holds a `file:line`, a function, class or variable name, internal shorthand or a principle ID. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it. Commit shas, PR and ticket numbers are facts, not code. |
+| Unproven | A plausible finding says "(plausible, not proven)" in its ask. |
+| Draft comment | One Kohen could post if he wants to; never post it. Written the same plain way: a bold imperative per ask, then at most two sentences. |
+| Length | The verdict, terms and asks fit on one screen, about 40 lines. Everything else comes after the draft comment. When the blocking asks cannot fit, the budget gives way, never an ask. |
+| End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, every step not done and why). |
+
+One ask, before and after:
+
+| | The ask |
+|---|---|
+| ❌ Before: Kohen cannot act on it without the code | 🔴 2. Fix `ready_inputs()` in `sched/plan.py:212`: it counts sibling nodes as producers, so `check_inputs` only warns. |
+| ✅ After | **2 · Count only the jobs that run before a report as the source of its table** · blocks merge. If a user submits one report that reads a misspelled table, `sales_dayly`, it is refused, as it should be. If they submit it beside a second report, it only warns, because "the other report might create it". Neither does, so the report runs on an empty table and finishes green. Counting only the jobs that run before a report, and feed it, refuses the typo however many reports are in the batch. (E2) |
+
+### Before saving: the self-check
+
+Read the report from the top as Kohen would, and revise it until every answer is yes:
+
+1. Could Kohen act on every ask without opening the code?
+2. Does every ask name a real user action, what fails for them, and the change that makes it work, with real names
+   and numbers?
+3. Is every term either common or defined once above the asks?
+4. Search the text above `## Evidence` for paths, `name:line`, `()` and principle IDs: is every hit a name a user
+   types or sees? Move the rest to Evidence.
+5. Do the verdict, terms and asks fit on one screen?
+6. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
 
 ## 7. Stay for questions, and learn
 
