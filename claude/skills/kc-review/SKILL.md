@@ -128,7 +128,8 @@ Into the vault's `Reviews/` folder (the vault's location is in the global instru
 set the folder layout and a template), linked from `Reviews.md`.
 
 The depth contract decides what the review finds; this step decides only how it is written. Kohen reads a report to
-decide, not to audit: he must be able to act on every ask without opening the code. Plain writing never drops a
+decide, not to audit: he must be able to act on every ask without opening the code. Start from what a user does and
+what the system does; code appears only as a pointer to the key piece of logic. Plain writing never drops a
 finding, a gap or a check. It moves the detail to the Evidence section at the end.
 
 ### The readability contract
@@ -137,10 +138,11 @@ finding, a gap or a check. It moves the detail to the Evidence section at the en
 |---|---|
 | Verdict | Two sentences at most: the call, then the deciding reason told as what happens to a user. Then the `Depth:` line (how many Opus agents, which steps ran; or `INCOMPLETE:` and what did not). |
 | Target | One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when the verdict is to replace X. |
+| Who and what | Name the features, targets, teams or commands an ask affects, with a count when there is one ("Messages Action on rizz/v11.2_ifp", "37 of 64 features"). Never "everyone else", "other users" or "some cases". Call the author's code "the PR" and the asked-for change "the fix"; never "this change", "this way" or "the new behavior", which can mean either. |
 | Terms | Each term an ask needs that a user of the system would not know, defined once in plain words, before the asks. Coin none: use the names the code and its users already use. |
 | Asks | Numbered, most important first, at most six. A finding that blocks merge is always an ask, whatever the cap or the length; lower-ranked ones go to Evidence, each with a one-line plain case, and the body says "N smaller findings in Evidence". |
-| One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one paragraph of at most four sentences: **if** the user does X, **then** Y fails, **and doing Z** (the change asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case). End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
-| No code above Evidence | Nothing above `## Evidence` (the verdict, terms, asks, draft comment and every other section) holds a `file:line`, a function, class or variable name, internal shorthand or a principle ID. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it. Commit shas, PR and ticket numbers are facts, not code. |
+| One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one short paragraph, starting from what a user does and what the system then does, never from the code: **if** the user does X, **then** Y fails, **and doing Z** (the fix asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. Then the fix as an example: the exact command to run, the config lines to add, or the before and after of the name or output that changes (for instance `nightly.cfg` gains the line `retries = 3`; a saved job named `export` becomes `export-eu` and `export-us`). For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case) and still show the fix as an example. End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
+| Code is a footnote | The explanation never starts from code, and it must make sense with every code reference removed. The verdict, terms, draft comment and every section other than the asks hold none. An ask may add, after its paragraph and example, one short line `Key logic: <what it does in plain words> (path:line)`, at most two per ask, only where seeing that piece of logic makes the failure obvious; everything else goes in Evidence. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it anywhere. Internal shorthand and principle IDs stay in Evidence. Commit shas, PR and ticket numbers are facts. |
 | Unproven | A plausible finding says "(plausible, not proven)" in its ask. |
 | Draft comment | One Kohen could post if he wants to; never post it. Written the same plain way: a bold imperative per ask, then at most two sentences. |
 | Length | The verdict, terms and asks fit on one screen, about 40 lines. Everything else comes after the draft comment. When the blocking asks cannot fit, the budget gives way, never an ask. |
@@ -151,20 +153,23 @@ One ask, before and after:
 | | The ask |
 |---|---|
 | ❌ Before: Kohen cannot act on it without the code | 🔴 2. Fix `ready_inputs()` in `sched/plan.py:212`: it counts sibling nodes as producers, so `check_inputs` only warns. |
-| ✅ After | **2 · Count only the jobs that run before a report as the source of its table** · blocks merge. If a user submits one report that reads a misspelled table, `sales_dayly`, it is refused, as it should be. If they submit it beside a second report, it only warns, because "the other report might create it". Neither does, so the report runs on an empty table and finishes green. Counting only the jobs that run before a report, and feed it, refuses the typo however many reports are in the batch. (E2) |
+| ✅ After | **2 · Count only the jobs that run before a report as the source of its table** · blocks merge. If a user submits one report that reads a misspelled table, `sales_dayly`, it is refused, as it should be. If they submit it beside a second report (37 of 64 batches have one), it only warns, because "the other report might create it". Neither does, so the report runs on an empty table and finishes green. With the fix, `report submit nightly sales_dayly` is refused in both cases: `no earlier job creates sales_dayly`. *Key logic: every job in the batch counts as a possible source (`plan.py:212`).* (E2) |
 
 ### Before saving: the self-check
 
 Read the report from the top as Kohen would, and revise it until every answer is yes:
 
 1. Could Kohen act on every ask without opening the code?
-2. Does every ask name a real user action, what fails for them, and the change that makes it work, with real names
-   and numbers?
+2. Does every ask name a real user action, what fails for them, and the fix that makes it work, with real names and
+   numbers, and show the fix as an example (the command, the config lines, the before and after)?
 3. Is every term either common or defined once above the asks?
-4. Search the text above `## Evidence` for paths, `name:line`, `()` and principle IDs: is every hit a name a user
+4. Cover every code reference and re-read: does each ask still make sense? Search outside the asks for paths,
+   `name:line`, `()` and principle IDs, and inside them for more than two per ask: is every other hit a name a user
    types or sees? Move the rest to Evidence.
 5. Do the verdict, terms and asks fit on one screen?
-6. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
+6. Is every "everyone", "others", "this change" or "this way" replaced by the named features, targets or commands, the
+   PR or the fix?
+7. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
 
 ## 7. Stay for questions, and learn
 
