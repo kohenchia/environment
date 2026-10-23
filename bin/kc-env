@@ -144,6 +144,10 @@ def processes() -> list[tuple[str, str]]:
     check = BIN / "stella-check"
     if check.exists():
         rows.append(("  stella-check", run(str(check), "--status").strip() or "no answer"))
+    try:
+        rows.append(("  /calm", (STELLA_STORE / "calm.status").read_text().strip().split(";", 1)[-1].strip()[:90]))
+    except OSError:
+        rows.append(("  /calm", "no calm.status: the module has not loaded in her session (restart her; see docs/claude-code.md)"))
     hooks = run("git", "-C", str(HOME / "github/environment"), "config", "core.hooksPath").strip()
     leak = BIN / "leakcheck"
     rows.append(("leak gate", f"pre-push hook {'on' if hooks else 'OFF'}; check {'linked' if leak.exists() else 'MISSING'}"))

@@ -57,16 +57,30 @@ they want. Her manual, memory files and routines are in her agent file; no other
 weekly routines are durable session crons she recreates at the start of her session.
 
 Nothing runs a model on a timer to watch the other sessions. `stella-check` (`bin/`) does that without one: it reads
-the job records every minute and runs her PR helper every 10 minutes, and wakes her only when something new needs her
-(a session blocked for 15 minutes, an API-error stop, a PR to push along, a merged set, a due reminder). Hooks in her
-project settings start it at session start and at the end of every turn (`asyncRewake`: its exit code 2 starts her
-turn), and `stella` writes those settings on every run, with recaps off, a one-hour prompt cache and, after a day of
-events, a 200k-token compaction window. So a quiet hour draws nothing and spends nothing, except one hourly judgment
-check (a self-paced `/loop` whose quiet ticks Claude Code folds into one row). Each wake and each action she takes is a
-line in `~/.local/share/stella/events.log`; her lasting PR tasks are in `pr-tasks.json`. In her session, `/calm` hides
-tool rows and turn timings so her turns read as a conversation (on by default; `/calm` again shows everything). Both need
-`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the `env` of `~/.claude/settings.json` for `/calm` (the hooks do not), and
-`./setup.sh` (which links `stella-check`) before `stella restart` switches her over.
+the job records every minute and runs her PR helper every 10 minutes, and wakes her only for what she can act on:
+a blocked session whose last message asks a bare question (a "Needs you" table means the session marked the ask as
+Kohen's, so no wake; once per blocked episode, not per rewording), an API-error stop (hourly, up to 3 hours), a PR item
+that is new or whose signature changed (a conflict counts once it has held for two runs; an item she marked `noted`
+for that signature is silent and listed under `noted` in `pr-tasks.json`), a merged set whose session is not working,
+a due reminder, and the check's own errors. A session in a mode that holds her messages is no wake: it matters only
+when an item for it says `would_be_held`. Hooks in her project settings start the watcher at session start and at the
+end of every turn (`asyncRewake`: its exit code 2 starts her turn), and `stella` writes those settings on every
+start and restart, with recaps off, a one-hour prompt cache and, after a day of PR lists in files, a 200k-token
+compaction window. A quiet hour draws nothing and spends nothing, except one hourly judgment check (a self-paced
+`/loop` whose quiet ticks Claude Code folds into one row). Each wake and each action she takes is a line in
+`~/.local/share/stella/events.log`; her lasting PR tasks are in `pr-tasks.json`.
+
+In her session, `/calm` (the `kc` plugin's `stella-calm.tsx`) hides tool rows, turn timings, the wake row
+("stella-check wake") and her bare "Quiet." reply, so a wake that needed nothing leaves nothing on screen (on by default;
+`/calm` again shows everything; failed tool calls always show). **It only works if the module loads, and Claude Code
+loads a hooks module only if its static check passes**: a helper that takes `$` must be declared at the top level of the
+file, and a name that is passed `$` must not be assigned anywhere else. A module that fails the check does not load, silently
+(the error is a line in the transcript only when it reloads while running). To see whether it loaded, read
+`~/.local/share/stella/calm.status` (one line per session start; `kc-env` shows it). To test a change without restarting
+her: copy the module into a throwaway session's user-level plugin folder and read the "reloaded" or "reload failed" line it
+leaves in that session's transcript. It needs `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1` in the `env` of
+`~/.claude/settings.json` (the hooks do not), and `./setup.sh` (which links `stella-check`) before `stella restart`
+switches her over.
 
 ## Commands
 

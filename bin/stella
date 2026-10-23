@@ -37,7 +37,10 @@ def watcher_hook(fresh: bool = False) -> dict:
     # asyncRewake: runs in the background and wakes her on exit code 2; the timeout (seconds) must outlive the
     # watcher, or Claude Code kills it silently (the default is 600 s). stella-check exits on its own before a day.
     command = "$HOME/.local/bin/stella-check --watch" + (" --fresh" if fresh else "")
-    return {"type": "command", "command": command, "asyncRewake": True, "timeout": 86400}
+    # rewakeMessage / rewakeSummary (@internal in Claude Code 2.1.293, but accepted and honoured): what the wake says to
+    # her, and the one line it leaves on screen, which her /calm module hides by this exact text.
+    return {"type": "command", "command": command, "asyncRewake": True, "timeout": 86400,
+            "rewakeMessage": "A wake from stella-check (not an error):", "rewakeSummary": "stella-check wake"}
 
 
 def cap_ready() -> bool:

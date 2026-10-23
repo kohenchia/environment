@@ -108,6 +108,8 @@ class StellaSettings(unittest.TestCase):
             for event in ("SessionStart", "Stop", "StopFailure"):
                 hook = [e for e in s["hooks"][event] if "stella-check --watch" in str(e)][0]["hooks"][0]
                 self.assertEqual("--fresh" in hook["command"], event == "SessionStart")
+                self.assertEqual(hook["rewakeSummary"], "stella-check wake")  # the text her /calm module hides
+                self.assertIn("not an error", hook["rewakeMessage"])
                 self.assertTrue(hook["asyncRewake"], event)
                 self.assertIn("stella-check --watch", hook["command"])
                 self.assertGreaterEqual(hook["timeout"], 86400)

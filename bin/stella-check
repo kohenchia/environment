@@ -14,16 +14,29 @@
 Stella's session starts `--watch` from its SessionStart, Stop and StopFailure hooks (asyncRewake), which `stella`
 writes into her project settings. Only one watcher runs at a time (a lock in her store); a second exits at once.
 
-What wakes her is what her manual's "How you are woken" section acts on, and nothing else:
-  - a session blocked for 15 minutes (its job record says so and has not moved since);
-  - a session stopped on an API error for 5 minutes, again every hour while it stays stopped;
-  - each PR helper bucket (approved-prs/approved-prs.py in her store, when it exists): act, orphans,
-    unacknowledged, stuck, held, wrong_mode_sessions (again every hour while it stays), merged sessions, due
-    reminders, and the helper's errors (again, as "persisting", after an hour of failures);
+What wakes her is what her manual's "How you are woken" section acts on, and nothing else. No wake for what she
+cannot or will not act on, kind by kind (the numbers are in "Stella calm - plan", Assets):
+  - blocked: once per episode of a session being blocked (it is blocked for 15 minutes, counted from the job's
+    timeline, not from a file touch). The wording of what it needs changing is not a new episode; leaving the blocked
+    state and coming back is. Not a wake: a session whose last message marks its asks as Kohen's (a "Needs you" table,
+    "Who acts", "NEXT FOR YOU": the manual forbids answering what the session marked as his call), or that has not been
+    given work yet. A "blocked" job whose detail reads "API Error" is an api_error. Sessions already blocked when this
+    state first loads are known, not news.
+  - api_error: a session stopped on an API error or a rate limit for 5 minutes, again each hour for 3 hours.
+  - act and orphan (the PR helper's items): a conflict counts once it has held for two helper runs on the same sha
+    (the flag flaps); an item Stella marked `noted` for that exact signature does not come back (it is listed in
+    pr-tasks.json for her status); the owner's `would_be_held` mode rides along. A different signature (a new commit,
+    thread, comment or check) is news.
+  - unacknowledged, stuck, held: when they appear (held and stuck are also tasks in pr-tasks.json).
+  - merged: a session that has merged PRs and is not working (a working session reports by itself).
+  - reminders: due ones. helper errors: once, and once more as "persisting" after an hour; failures within half an hour
+    of each other are one error.
   - the check itself crashing (once per kind of crash).
-A finding wakes her once, when it appears; one that stays is not news. One that goes and comes back is news again
-(the PR helper drops an item for a while after Stella marks it, then lists it again if it still needs her). A failed
-run of the helper keeps what it listed before, so its recovery is not mistaken for news.
+  - Not a wake at all: a session in a mode that holds her messages (wrong_mode). It matters only when she has something
+    to send it, and then the act/orphan item says `would_be_held`.
+A finding wakes her once, when it appears; one that stays is not news. One that goes and comes back is news again,
+except the kinds above. A failed run of the helper keeps what it listed before, so its recovery is not news. Findings
+that arrive within SETTLE seconds of each other are one wake.
 
 A wake stays pending until Stella runs `--ack`. Only a `--fresh` watcher (a new session process, from SessionStart
 `startup|resume`) delivers a pending wake again: the old process's queue is gone. A watcher in the same process (the
@@ -40,6 +53,7 @@ Standard library only.
 
 from __future__ import annotations
 
+import calendar
 import contextlib
 import fcntl
 import hashlib
@@ -56,7 +70,9 @@ POLL = int(os.environ.get("STELLA_CHECK_POLL", "60"))  # seconds between checks 
 HELPER_EVERY = 600  # seconds between runs of the PR helper (it calls gh for every open PR)
 BLOCKED_AFTER = 15 * 60
 API_ERROR_AFTER = 5 * 60
-REPEAT = 3600  # findings Stella may have to retry (api_error, wrong_mode) come back once an hour while they stay
+REPEAT = 3600  # an api_error she could not continue yet comes back once an hour, for REPEATS hours
+REPEATS = 3
+SETTLE = int(os.environ.get("STELLA_CHECK_SETTLE", "20"))  # seconds the first finding waits for others to join its wake
 ERROR_PERSISTS = 3600  # a helper error still there after this is news again, as "persisting"
 ERROR_GAP = 1800  # failures further apart than this are separate errors
 ALIVE_WITHIN = 900  # a watcher that has not beat for this long is gone (a helper run takes up to 6 minutes)
@@ -107,23 +123,65 @@ def jobs() -> list[dict]:
     return out
 
 
+ASKS = re.compile(r"\|\s*Needs you\s*\||Who acts|NEXT FOR YOU")  # how a session marks what only Kohen can do
+
+
+def blocked_info(jid: str, fallback: float) -> tuple[float, bool, bool]:
+    """From the daemon's timeline (a job file's mtime moves whenever anything touches it): when the job's current run of
+    `blocked` began; whether its last message marks asks for Kohen (a "Needs you" table, or the older "Who acts" /
+    "NEXT FOR YOU" lists); whether it ever worked (a fresh session waiting for its first message has not).
+    Reads the tail of the file. Without a timeline: the fallback time, no asks, worked."""
+    path = home() / ".claude/jobs" / jid / "timeline.jsonl"
+    try:
+        size = path.stat().st_size
+        with open(path, "rb") as f:
+            f.seek(max(0, size - 600_000))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+        whole = size <= 600_000
+        if not whole:
+            lines = lines[1:]  # the first line is cut
+    except OSError:
+        return fallback, False, True
+    entries = []
+    for line in lines:
+        try:
+            e = json.loads(line)
+            at = calendar.timegm(time.strptime(e["at"][:19], "%Y-%m-%dT%H:%M:%S"))  # the timeline is UTC
+        except (ValueError, KeyError, TypeError, OverflowError):
+            continue
+        entries.append((at, e.get("state"), str(e.get("text") or "")))
+    if not entries:
+        return fallback, False, True
+    since = entries[-1][0]
+    for at, state, _ in reversed(entries):
+        if state != "blocked":
+            break
+        since = at
+    asks = bool(ASKS.search(entries[-1][2]))
+    worked = any(state == "working" for _, state, _ in entries) or not whole
+    return since, asks, worked
+
+
 def session_findings() -> dict[str, dict]:
     found = {}
     for j in jobs():
         age = now() - j["_mtime"]
         name, jid = str(j.get("name") or j["_id"]), j["_id"]
         needs, detail = str(j.get("needs") or ""), str(j.get("detail") or "")
-        if j.get("state") == "blocked":  # a question for Kohen, whatever its words say
-            if age >= BLOCKED_AFTER:
-                found[f"blocked:{jid}:{digest(needs)}"] = {"kind": "blocked", "session": name, "id": jid,
-                                                          "minutes": int(age / 60), "needs": needs[:300]}
+        if j.get("state") == "blocked" and not DETAIL_RE.search(detail.lower()):
+            # A question for Kohen, whatever its words say. Not a wake when the session marked its asks as Kohen's
+            # (the manual's rule: nothing she may answer), or has not been given work yet.
+            since, asks, worked = blocked_info(jid, j["_mtime"])
+            if now() - since >= BLOCKED_AFTER and worked and not asks:  # one episode, one wake: no wording in the key
+                found[f"blocked:{jid}:{int(since)}"] = {"kind": "blocked", "session": name, "id": jid,
+                                                        "minutes": int((now() - since) / 60), "needs": needs[:300]}
             continue
-        stopped = j.get("state") == "failed" or (
-            j.get("state") != "working" and (NEEDS_RE.search(needs.lower()) or DETAIL_RE.search(detail.lower())))
-        if stopped and age >= API_ERROR_AFTER:
+        stopped = j.get("state") == "failed" or (j.get("state") != "working" and (
+            NEEDS_RE.search(needs.lower()) or DETAIL_RE.search(detail.lower())))
+        if stopped and age >= API_ERROR_AFTER and age // REPEAT <= REPEATS:
             again = int(age // REPEAT)  # comes back once an hour of being stopped, while it stays
-            found[f"apierror:{jid}:{int(j['_mtime'])}:h{again}"] = {"kind": "api_error", "session": name, "id": jid,
-                                                                    "minutes": int(age / 60), "detail": (needs or detail)[:200]}
+            found[f"apierror:{jid}:h{again}"] = {"kind": "api_error", "session": name, "id": jid,
+                                                 "minutes": int(age / 60), "detail": (needs or detail)[:200]}
     return found
 
 
@@ -170,6 +228,63 @@ def error_finding(state: dict, errors: list, what: str, error: str) -> None:
                    **({"persisting": True, "minutes": int((now() - rec["first"]) / 60)} if level == "persisting" else {})})
 
 
+def ledger() -> dict:
+    """The PR helper's ledger of what Stella told or noted (read only: only her `mark-*` calls write it)."""
+    try:
+        d = json.loads((helper().parent / "ledger.json").read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def norm_sig(sig: str) -> str:
+    """The helper's signature (sha|conflict|threads|red|approved|feedback) with the conflict flag, which flaps,
+    left out."""
+    parts = str(sig).split("|")
+    if len(parts) > 1:
+        parts[1] = "-"
+    return "|".join(parts)
+
+
+def pr_items(s: dict, state: dict, errors: list) -> tuple[dict[str, dict], list[dict], list[str]]:
+    """The act and orphan items as findings, minus what Stella cannot or will not act on: a conflict that has not held
+    for two helper runs, and an item she marked `noted` for this signature. Also the items she noted (for her status)
+    and the conflicts seen in this run."""
+    led, before = ledger(), set(state.get("conflicts", []))
+    found: dict[str, dict] = {}
+    noted: list[dict] = []
+    conflicts: list[str] = []
+    for bucket, kind in (("act", "act"), ("orphans", "orphan")):
+        for it in items(s, bucket):
+            if it.get("error"):
+                error_finding(state, errors, str(it.get("repo")), str(it["error"]))
+                continue
+            pr = it.get("pr")
+            if not pr:
+                continue
+            reasons = [str(r) for r in it.get("reasons") or []]
+            seen = f"{pr}:{it.get('sha')}"
+            if "conflict" in reasons:
+                conflicts.append(seen)
+                if seen not in before:  # the flag flaps on an unchanged sha: it counts once it has held for two runs
+                    reasons = [r for r in reasons if r != "conflict"]
+            if not reasons:
+                continue
+            sig = norm_sig(it.get("signature", ""))
+            e = led.get(pr)
+            if isinstance(e, dict) and e.get("noted") and norm_sig(e.get("sig", "")) == sig:
+                noted.append({"pr": pr, "kind": kind, "reasons": reasons, "owner": (it.get("owner") or {}).get("name"),
+                              "noted_at": int(e.get("ts") or 0)})
+                continue
+            f = {"kind": kind, "pr": pr, "reasons": reasons}
+            if kind == "act":
+                f["owner"] = (it.get("owner") or {}).get("name")
+            if it.get("would_be_held"):
+                f["would_be_held"] = True  # the owner's mode holds her messages: restart it first (manual)
+            found[f"{kind}:{pr}:{sig}:{'|'.join(sorted(reasons))}"] = f
+    return found, noted, conflicts
+
+
 def pr_findings(state: dict, errors: list, save: bool = True) -> tuple[dict[str, dict], set[str]]:
     """The PR helper's buckets as findings, and which of its commands failed. Writes pr-tasks.json on success."""
     found: dict[str, dict] = {}
@@ -182,20 +297,14 @@ def pr_findings(state: dict, errors: list, save: bool = True) -> tuple[dict[str,
         failed.add("steward")
         error_finding(state, errors, "steward", str(e))
         s = None
-    if s is not None and save:
-        keep = {k: items(s, k) for k in ("held", "stuck", "unacknowledged", "waiting_review")}
-        write_atomic(store() / "pr-tasks.json",
-                     json.dumps({"updated": int(now()), "since": previous_since() or int(now()), **keep}, indent=1) + "\n")
     if s is not None:
-        for it in items(s, "act"):
-            if it.get("error"):
-                error_finding(state, errors, str(it.get("repo")), str(it["error"]))
-            elif it.get("pr"):
-                found[f"act:{it['pr']}:{it.get('signature', '')}"] = {"kind": "act", "pr": it["pr"], "reasons": it.get("reasons"),
-                                                                      "owner": (it.get("owner") or {}).get("name")}
-        for it in items(s, "orphans"):
-            if it.get("pr"):
-                found[f"orphan:{it['pr']}:{it.get('signature', '')}"] = {"kind": "orphan", "pr": it["pr"], "reasons": it.get("reasons")}
+        acts, noted, conflicts = pr_items(s, state, errors)
+        found.update(acts)
+        state["conflicts_now"] = conflicts
+        if save:
+            keep = {k: items(s, k) for k in ("held", "stuck", "unacknowledged", "waiting_review")}
+            write_atomic(store() / "pr-tasks.json", json.dumps(
+                {"updated": int(now()), "since": previous_since() or int(now()), **keep, "noted": noted}, indent=1) + "\n")
         for it in items(s, "unacknowledged"):
             if it.get("pr"):
                 found[f"unack:{it['pr']}:{it.get('told')}"] = {"kind": "unacknowledged", "pr": it["pr"], "told": it.get("told")}
@@ -205,8 +314,6 @@ def pr_findings(state: dict, errors: list, save: bool = True) -> tuple[dict[str,
         for it in items(s, "held"):
             if it.get("pr"):
                 found[f"held:{it['pr']}:{digest(str(it.get('why')))}"] = {"kind": "held", "pr": it["pr"], "why": it.get("why")}
-        for it in items(s, "wrong_mode_sessions"):
-            found[f"mode:{it.get('id')}:h{hour()}"] = {"kind": "wrong_mode", "session": it.get("name"), "mode": it.get("mode")}
     for what, bucket in (("merged", "merged"), ("reminders", "due")):
         try:
             r = run_helper(what)
@@ -215,6 +322,8 @@ def pr_findings(state: dict, errors: list, save: bool = True) -> tuple[dict[str,
             error_finding(state, errors, what, str(e))
             continue
         for it in items(r, bucket):
+            if what == "merged" and it.get("state") == "working":
+                continue  # a working session reports by itself; it comes back when it is no longer working
             ident = it.get("key") or it.get("id") or it.get("session") or digest(json.dumps(it, sort_keys=True))
             found[f"{what}:{ident}:{it.get('signature', '')}"] = {**it, "kind": what, "helper_kind": it.get("kind")}
     return found, failed
@@ -269,27 +378,40 @@ def update_state(change) -> None:
         save_state(st)
 
 
+RULES = 2  # bump when the keys of the findings change: a state from before is seeded, not woken for
+
+
 def check(with_helper: bool, save: bool = True) -> list[dict]:
     """One check: the findings that are new since the last one."""
     state = load_state()
     before = set(state.get("sessions", [])) | set(state.get("pr", []))
-    found = session_findings()
+    woken = dict(state.get("woken", {}))  # blocked episodes already woken for: a session that drops out of view
+    found = session_findings()            # (its job file idle for hours) and comes back is the same episode
+    if state.get("rules") != RULES:  # first run with these rules: what is blocked now is known, not news
+        woken.update({k: now() for k in found if k.startswith("blocked:")})
     errors: list[dict] = []
     pr: dict[str, dict] = {}
     if with_helper:
         kept = state.get("pr", [])
         pr, failed = pr_findings(state, errors, save)
+        if "steward" not in failed:
+            state["conflicts"] = state.pop("conflicts_now", [])
         if "steward" in failed:  # what the steward listed before still stands
             pr = {**{k: {} for k in kept if not k.startswith(("merged:", "reminders:"))}, **pr}
         for what in ("merged", "reminders"):
             if what in failed:
                 pr = {**{k: {} for k in kept if k.startswith(what + ":")}, **pr}
-    new = [{"key": k, **v} for k, v in {**found, **pr}.items() if k not in before and v] + errors
+    new = [{"key": k, **v} for k, v in {**found, **pr}.items()
+           if k not in before and v and not (k.startswith("blocked:") and k in woken)] + errors
+    woken.update({f["key"]: now() for f in new if f["key"].startswith("blocked:")})
     if save:
         def apply(st: dict) -> None:
             st["sessions"] = sorted(found)
+            st["rules"] = RULES
+            st["woken"] = {k: t for k, t in woken.items() if now() - t < 7 * 86400}
             if with_helper:
                 st["pr"], st["helper_at"], st["errors"] = sorted(pr), int(now()), state.get("errors", {})
+                st["conflicts"] = state.get("conflicts", st.get("conflicts", []))
         update_state(apply)
     return new
 
@@ -298,8 +420,6 @@ def summary(f: dict) -> str:
     k = f["kind"]
     if k in ("blocked", "api_error"):
         return f"{k} {f['session']} ({f['minutes']} min)"
-    if k == "wrong_mode":
-        return f"wrong_mode {f.get('session')}"
     if k == "helper_error":
         return f"helper error ({f.get('what')}{', persisting' if f.get('persisting') else ''}): {f.get('error')}"
     if k == "crash":
@@ -393,6 +513,12 @@ def watch(fresh: bool) -> int:
             time.sleep(POLL * 5)
             continue
         if new:
+            if SETTLE:  # findings that arrive together are one wake
+                time.sleep(SETTLE)
+                try:
+                    new += check(with_helper=False)
+                except Exception:  # noqa: BLE001 - the first findings still go out
+                    pass
             update_state(lambda st: st.pop("crash", None))
             return deliver(new)
         time.sleep(POLL)
