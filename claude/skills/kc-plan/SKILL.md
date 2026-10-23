@@ -79,6 +79,12 @@ as the next revision: apply each one, or answer it in the plan, then review agai
 `Adopt as written`, or `Adopt after changes` with no ask tagged `blocks adoption` left. If a decision only
 Kohen can make blocks the verdict, stop and put it to him rather than choosing for him.
 
+Two more places to stop and ask Kohen, because every further round is a full-team review that costs as much as the
+first (one plan used three rounds on a design he then shelved): a verdict of `Rework` or `Do not adopt` (the direction
+is in question: report the verdict and the reviewer's target, and review a revision only after he confirms the
+direction), and a review of the plan's second revision (the third review, counting the first) that still has an ask tagged
+`blocks adoption` (put what blocks to him).
+
 ## 6. Finish
 
 Link the plan from the project's index note and `Projects.md` if the vault keeps one. Report the path,
