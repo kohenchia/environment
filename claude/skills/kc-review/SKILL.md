@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. Writes a short, plain-language report to the vault (each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -141,6 +141,9 @@ domain; none removes one of these.
 
 How the team runs (each rule below is a cost or a loss seen in 14 earlier reviews):
 
+- **The user picture is a product of the team, not of memory.** The agent that runs the subject (dry runs, `--help`,
+  config validation) at the base and at the head brings back the exact commands, config snippets and outputs for the
+  surfaces the diff changes; ask for them in its brief.
 - **One fact sheet, built once.** Before the finders start, collect raw facts into the review's `assets/<sha10>/` folder (the head's first ten characters): the
   PR metadata, the diff and the changed symbols, the open PRs that overlap it, and the repo's tests, linters and type
   checks run once, in a fresh environment of the review worktree (a stale shared environment gave false failures).
@@ -164,7 +167,8 @@ Before anything reaches the report, an Opus verifier that did not produce the fi
 head sha (or the document text). Drop what cannot be confirmed; label what is plausible but unproven as such. A finding Kohen
 disproves in one look costs more than the ten findings that were right.
 
-The verifier runs after the finders, not beside them: an agent that finishes late (the extension's silent-failure
+The verifier also checks the user picture: each After snippet is accepted at the head, each Before snippet at the base,
+and the outputs shown are the ones those commands print. The verifier runs after the finders, not beside them: an agent that finishes late (the extension's silent-failure
 agent, for one) is a finder too, and its findings get a short second verifier pass. Nothing reaches the report as
 verified that no verifier saw; a finding that was not verified is written as such. A verifier's report is saved to
 `assets/<sha10>/` like any other.
@@ -187,13 +191,14 @@ finding, a gap or a check. It moves the detail to the Evidence section at the en
 | Target | One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when the verdict is to replace X. |
 | Who and what | Name the features, targets, teams or commands an ask affects, with a count when there is one ("the checkout service in eu-west", "37 of 64 batches"). Never "everyone else", "other users" or "some cases". Call the author's code "the PR" and the asked-for change "the fix"; never "this change", "this way" or "the new behavior", which can mean either. |
 | Terms | Each term an ask needs that a user of the system would not know, defined once in plain words, before the asks. Coin none: use the names the code and its users already use. |
+| User picture | Right after the terms and before the asks, a **before and after of the user's experience**, so the impact is clear at a glance. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all; a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. |
 | Asks | Numbered, most important first, at most six. A finding that blocks merge is always an ask, whatever the cap or the length; lower-ranked ones go to Evidence, each with a one-line plain case, and the body says "N smaller findings in Evidence". |
 | One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one short paragraph, starting from what a user does and what the system then does, never from the code: **if** the user does X, **then** Y fails, **and doing Z** (the fix asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. Then the fix as an example: the exact command to run, the config lines to add, or the before and after of the name or output that changes (for instance `nightly.cfg` gains the line `retries = 3`; a saved job named `export` becomes `export-eu` and `export-us`). For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case) and still show the fix as an example. End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
 | Code is a footnote | The explanation never starts from code, and it must make sense with every code reference removed. The verdict, terms, draft comment and every section other than the asks hold none. An ask may add, after its paragraph and example, one short line `Key logic: <what it does in plain words> (path:line)`, at most two per ask, only where seeing that piece of logic makes the failure obvious; everything else goes in Evidence. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it anywhere. Internal shorthand and principle IDs stay in Evidence. Commit shas, PR and ticket numbers are facts. |
 | Unproven | A plausible finding says "(plausible, not proven)" in its ask. |
 | Draft comment | One Kohen could post if he wants to; never post it. At most 12 lines, written the same plain way: a bold imperative per ask that goes to the author, then at most two sentences (the change, and the exact command or ticket number). Numbers match the asks. No rationale, no riders ("check that…"), no placeholders. |
 | Symbols | A symbol (✅ ❌ ⚠️ 🔴) is never bare: say once, in the legend or the cell, what goes wrong and give an example. "Accepted" is a problem only when the result is silently wrong, so say "accepted, then X happens". No ASCII art. |
-| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, which is one screen. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. |
+| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture (which has its own budget), so about one and a half screens. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. |
 | End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, every step not done and why). |
 
 One ask, before and after:
@@ -208,16 +213,18 @@ One ask, before and after:
 Read the report from the top as Kohen would, and revise it until every answer is yes:
 
 1. Could Kohen act on every ask without opening the code?
-2. Does every ask name a real user action, what fails for them, and the fix that makes it work, with real names and
+2. Is the user picture there, with a Before and an After for every changed config file, command and output, and does
+   each snippet say how it was produced (run, validated, or "not run")?
+3. Does every ask name a real user action, what fails for them, and the fix that makes it work, with real names and
    numbers, and show the fix as an example (the command, the config lines, the before and after)?
-3. Is every term either common or defined once above the asks?
-4. Cover every code reference and re-read: does each ask still make sense? Search outside the asks for paths,
+4. Is every term either common or defined once above the asks?
+5. Cover every code reference and re-read: does each ask still make sense? Search outside the asks for paths,
    `name:line`, `()` and principle IDs, and inside them for more than two per ask: is every other hit a name a user
    types or sees? Move the rest to Evidence.
-5. Do the title to the end of the draft comment fit about 40 lines?
-6. Is every "everyone", "others", "this change" or "this way" replaced by the named features, targets or commands, the
+6. Do the title to the end of the draft comment fit about 40 lines (the user picture has its own budget)?
+7. Is every "everyone", "others", "this change" or "this way" replaced by the named features, targets or commands, the
    PR or the fix?
-7. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
+8. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
 
 ## 7. Stay for questions, and learn
 
