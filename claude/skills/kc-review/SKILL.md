@@ -40,14 +40,15 @@ time and budget decide when a step's result reaches him, never whether the step 
    inline for a small fix; the diff pass, the caller trace and the verification still run on Opus.
 4. **Say what was done.** The report carries a "How this was reviewed" table at its end (agents, models, steps done,
    steps not done and why), and one `Depth:` line under the verdict (a tier-0 re-review says so there). A step you could not do is a stated gap and the
-   verdict line begins `INCOMPLETE:`. "Not verified" is allowed; "assumed fine" is not.
+   verdict line begins `INCOMPLETE:` (a first report is `IN PROGRESS:` instead, rule 7). "Not verified" is allowed; "assumed fine" is not.
 5. **Unexamined is not clean.** Anything the change can reach that you did not look at is a named risk, with the exact
    command that would settle it.
 6. **A limit is a reason to wait, not to skip.** On a rate limit or a slow step, wait and continue; never drop a step to
    finish sooner.
 7. **A first report at 30 minutes, the rest as an addendum, and nothing lower in quality.** At minute 30 of the review
    (or at the time the extension's check named before the team started) the report goes out with what the verifier
-   has confirmed so far. In it:
+   has confirmed so far. Minutes count from the team's start; any wait before it (for another review, for Kohen's
+   answer on the quota) is told to him with its expected end. In the first report:
    - an ask is only a finding a verifier has confirmed or labelled plausible. A finding no verifier has checked yet is
      one line under "Still being checked", tagged `could block merge` (`could block adoption` for a document) when its
      finder tagged it blocking. While any such line exists, the verdict line names it, e.g. `Provisional: merge with
@@ -61,8 +62,9 @@ time and budget decide when a step's result reaches him, never whether the step 
      finished as `INCOMPLETE:`, naming the stopped agents and every finding never verified.
 
    Every step still runs to the end. The review is done only when the addendum is written: rewrite the verdict, the
-   asks, the summary lines, the draft comment, the frontmatter and the index row to the final state, and put
-   `## Since the first report` directly under the `Depth:` line, its first line saying which asks of the first report
+   asks, the summary lines, the user picture (every "dry run running" and "not yet checked" mark replaced), the draft
+   comment, the frontmatter and the index row to the final state, remove the `Extension:` and "Still being checked"
+   lines, and put a `**Since the first report:**` line under the `Depth:` and summary lines, saying which asks of the first report
    were added, reversed, downgraded or corrected (or "none"), so Kohen sees what the early answer cost. The `Depth:`
    line is then final, and the "How this was reviewed" table gives each agent's start and end minute. A skill that runs
    the review and acts on it (`kc-dev`, `kc-plan`) acts only on the final report, whose `Depth:` line does not begin
@@ -180,18 +182,20 @@ How the team runs (each rule below is a cost or a loss seen in 14 earlier review
 - **An agent starts on its inputs, not on the slowest finder.** An agent that needs another agent's file (a ledger, a
   table) starts when that file is written, an interim one included, in the first slot a finished agent frees (the
   design advocates finish first; the extension orders who takes the freed slots). Every report file begins
-  `Status: interim` or `Status: final`. An agent that started on an interim file waits for the final one, audits every
-  row it has not yet audited (new or changed), and names the versions it audited, so an early start never audits half
-  a table.
+  `Status: interim HH:MM` or `Status: final HH:MM`. An agent that starts on an interim file copies it to
+  `assets/<sha10>/<its role>.input-<HHMM>.md`. Before it finishes it waits, checking every two minutes (`sleep 120`),
+  until the file says `final` or the roster marks its producer `stopped`; then it diffs the file against its copy and
+  audits every new or changed row, and names the versions it audited. If the producer stopped, it lists the rows it
+  could not audit, and the report counts them as never verified. So an early start never audits half a table.
 - **Report by minute 25, then keep going.** Each finder's brief gives the clock time to write its report so far by
   (minute 25 of the review, or five minutes before a later first-report time the extension's check set), with an
   `## Unfinished` list of what it has not reached, and then it carries on to the end of its task. It never cuts its work
   to make the minute; what it finds later is verified for the addendum (depth contract 7).
-- **A roster of agents.** Keep `assets/<sha10>/roster.md`: each agent, its task, and running, done or respawned. The
-  verifier and the addendum work from it.
+- **A roster of agents.** Keep `assets/<sha10>/roster.md`: each agent, its task, and running, done, respawned or
+  stopped (died and not respawned, or stopped by Kohen). The verifier and the addendum work from it.
 - **No report is ever lost.** Each agent writes its full report to `assets/<sha10>/<role>.md` before its final message, and
   an interim report after about 40 tool calls. If the harness refuses file writes in a subagent, the agent returns the
-  report as its final message and you save it at once. An agent that died (rate limit, quota reset) is respawned
+  report as its final message and you save it at once, with `Status: final HH:MM` at its top. An agent that died (rate limit, quota reset) is respawned
   alone, with its brief and its interim report; a finished agent is never re-run, and a wave is never repeated.
 - **A moving head does not restart the team.** Record the head sha when the team starts. If the head moves, let the
   running agents, and any agent not yet started, finish at the old sha (the wave, the verifier and the report all
@@ -207,7 +211,7 @@ disproves in one look costs more than the ten findings that were right.
 The verifier also checks the user picture: each After snippet is accepted at the head, each Before snippet at the base,
 and the outputs shown are the ones those commands print. The verifier works as the findings arrive: it starts with
 the first finder's report and takes each later report as it lands, blocking findings first, so a finding is checked
-minutes after it exists. It ends only when every agent on the roster (a respawned one and the extension's
+minutes after it exists. It ends only when every other agent on the roster (a respawned one and the extension's
 silent-failure agent included) is done and checked; it never finishes beside a running finder. Its last pass re-checks
 every claim that a later report contradicts or depends on. A report that lands after the verifier ended, or after it
 died, gets its own verifier pass before it reaches the report.
@@ -239,7 +243,7 @@ finding, a gap or a check. It moves the detail to the Evidence section at the en
 | Unproven | A plausible finding says "(plausible, not proven)" in its ask. |
 | Draft comment | One Kohen could post if he wants to; never post it. At most 12 lines, written the same plain way: a bold imperative per ask that goes to the author, then at most two sentences (the change, and the exact command or ticket number). Numbers match the asks. No rationale, no riders ("check that…"), no placeholders. |
 | Symbols | A symbol (✅ ❌ ⚠️ 🔴) is never bare: say once, in the legend or the cell, what goes wrong and give an example. "Accepted" is a problem only when the result is silently wrong, so say "accepted, then X happens". No ASCII art. |
-| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture (which has its own budget), so about one and a half screens. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. In a first report, "Still being checked" is one line (`N findings still being checked, M could block merge:`) plus one line for each of the M, and none of it counts against the budget. |
+| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture (which has its own budget), so about one and a half screens. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. In a first report, "Still being checked" is one line (`N findings still being checked, M could block merge:`, `adoption` for a document) plus one line for each of the M, and none of it counts against the budget. |
 | End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, its start and end minute, every step not done and why). |
 
 One ask, before and after:
@@ -268,8 +272,9 @@ Read the report from the top as Kohen would, and revise it until every answer is
 8. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
 9. In a first report: is every ask verified, every unchecked finding under "Still being checked" (blocking ones tagged),
    the verdict marked `Provisional:` everywhere it appears, every running agent named with its end time, and the
-   `Extension:` line there? After the addendum: are the verdict, asks, draft comment, frontmatter and index row
-   rewritten to the final state, and does `## Since the first report` say which asks of the first report changed?
+   `Extension:` line there? After the addendum: are the verdict, asks, user picture, draft comment, frontmatter and
+   index row rewritten to the final state, the `Extension:` and "Still being checked" lines gone, and does the
+   `**Since the first report:**` line say which asks of the first report changed?
 
 ## 7. Stay for questions, and learn
 
