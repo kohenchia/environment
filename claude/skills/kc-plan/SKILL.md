@@ -75,7 +75,8 @@ against `origin/main`. A command naming a path or option that does not exist is 
 ## 5. Review it before handing it over
 
 Run `/kc-review <plan path>` on the finished plan (it reviews documents at full depth) and treat its asks
-as the next revision: apply each one, or answer it in the plan, then review again. Stop when the verdict is
+as the next revision: apply each one, or answer it in the plan, then review again. Act only on the final report
+(its `Depth:` line does not begin `IN PROGRESS:`), never on a provisional first report. Stop when the verdict is
 `Adopt as written`, or `Adopt after changes` with no ask tagged `blocks adoption` left. If a decision only
 Kohen can make blocks the verdict, stop and put it to him rather than choosing for him.
 

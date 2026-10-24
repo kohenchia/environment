@@ -52,7 +52,8 @@ Run the repo's gates (format, lint, type check, tests) and exercise the change f
 and dry runs allow. Evidence before assertions: quote the commands and their results. If anything fails,
 say so with the output.
 
-For a non-trivial change, run `/kc-review` on the committed branch and act on its report: apply each ask,
+For a non-trivial change, run `/kc-review` on the committed branch and act on its final report (not a provisional
+first report, whose `Depth:` line begins `IN PROGRESS:`): apply each ask,
 decline one only with code evidence, or bring a real judgment call to Kohen.
 
 ## 5. Commit and push

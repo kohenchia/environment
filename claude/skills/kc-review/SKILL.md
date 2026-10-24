@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A verified first report comes at 30 minutes and the remaining steps follow as an addendum, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A provisional first report of verified findings comes at 30 minutes when the model quota allows (the extension's check says when it does not), and the remaining steps follow as an addendum that rewrites it to the final state, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -46,19 +46,27 @@ time and budget decide when a step's result reaches him, never whether the step 
 6. **A limit is a reason to wait, not to skip.** On a rate limit or a slow step, wait and continue; never drop a step to
    finish sooner.
 7. **A first report at 30 minutes, the rest as an addendum, and nothing lower in quality.** At minute 30 of the review
-   (or at the time an extension named at the start, see the extension's check) the report goes out with what the
-   verifier has confirmed so far. In it:
-   - an ask is only a finding a verifier has confirmed or labelled plausible; a finding a finder raised that no verifier
-     has checked yet is one line under "Still being checked", never an ask;
-   - the verdict is provisional and the `Depth:` line begins `IN PROGRESS:`, naming each agent still running and when
-     it should end;
-   - an extension request in two lines: what the running steps can still change (which asks, which kinds of user), and
-     why this subject needs them. Kohen approves it; meanwhile nothing stops, and he may say stop.
+   (or at the time the extension's check named before the team started) the report goes out with what the verifier
+   has confirmed so far. In it:
+   - an ask is only a finding a verifier has confirmed or labelled plausible. A finding no verifier has checked yet is
+     one line under "Still being checked", tagged `could block merge` (`could block adoption` for a document) when its
+     finder tagged it blocking. While any such line exists, the verdict line names it, e.g. `Provisional: merge with
+     fixes, pending 2 findings that could block merge (being checked)`; no verdict reads as clean past an unchecked
+     blocker;
+   - the verdict is provisional: the Verdict line, the report's frontmatter verdict and its row in the reviews index
+     begin `Provisional:`, and the `Depth:` line begins `IN PROGRESS:`, naming each agent still running and the clock
+     time it should end;
+   - an `Extension:` line of two sentences: what the running steps can still change (which asks, which kinds of user),
+     and why this subject needs them. Kohen approves it; meanwhile nothing stops. If he says stop, the report is
+     finished as `INCOMPLETE:`, naming the stopped agents and every finding never verified.
 
-   Every step still runs to the end. The review is done only when the addendum is written: a `## Since the first report`
-   section with every finding verified after minute 30, and its first line says whether any ask of the first report was
-   added, reversed, downgraded or corrected (and which), so Kohen sees what the early answer cost. The verdict and the
-   `Depth:` line are then final, and the "How this was reviewed" table gives each agent's start and end minute.
+   Every step still runs to the end. The review is done only when the addendum is written: rewrite the verdict, the
+   asks, the summary lines, the draft comment, the frontmatter and the index row to the final state, and put
+   `## Since the first report` directly under the `Depth:` line, its first line saying which asks of the first report
+   were added, reversed, downgraded or corrected (or "none"), so Kohen sees what the early answer cost. The `Depth:`
+   line is then final, and the "How this was reviewed" table gives each agent's start and end minute. A skill that runs
+   the review and acts on it (`kc-dev`, `kc-plan`) acts only on the final report, whose `Depth:` line does not begin
+   `IN PROGRESS:`.
 
 ## 0. Load what this machine adds
 
@@ -171,11 +179,16 @@ How the team runs (each rule below is a cost or a loss seen in 14 earlier review
   to 25).
 - **An agent starts on its inputs, not on the slowest finder.** An agent that needs another agent's file (a ledger, a
   table) starts when that file is written, an interim one included, in the first slot a finished agent frees (the
-  design advocates finish first). Before it finishes it re-reads the final version of that file and checks its
-  conclusions against it, so an early start never audits half a table.
-- **Report by minute 25, then keep going.** Each finder writes its report so far by minute 25 of the review, with an
-  `## Unfinished` list of what it has not reached, and then carries on to the end of its task. It never cuts its work
+  design advocates finish first; the extension orders who takes the freed slots). Every report file begins
+  `Status: interim` or `Status: final`. An agent that started on an interim file waits for the final one, audits every
+  row it has not yet audited (new or changed), and names the versions it audited, so an early start never audits half
+  a table.
+- **Report by minute 25, then keep going.** Each finder's brief gives the clock time to write its report so far by
+  (minute 25 of the review, or five minutes before a later first-report time the extension's check set), with an
+  `## Unfinished` list of what it has not reached, and then it carries on to the end of its task. It never cuts its work
   to make the minute; what it finds later is verified for the addendum (depth contract 7).
+- **A roster of agents.** Keep `assets/<sha10>/roster.md`: each agent, its task, and running, done or respawned. The
+  verifier and the addendum work from it.
 - **No report is ever lost.** Each agent writes its full report to `assets/<sha10>/<role>.md` before its final message, and
   an interim report after about 40 tool calls. If the harness refuses file writes in a subagent, the agent returns the
   report as its final message and you save it at once. An agent that died (rate limit, quota reset) is respawned
@@ -193,9 +206,11 @@ disproves in one look costs more than the ten findings that were right.
 
 The verifier also checks the user picture: each After snippet is accepted at the head, each Before snippet at the base,
 and the outputs shown are the ones those commands print. The verifier works as the findings arrive: it starts with
-the first finder's report and takes each later report as it lands, so a finding is checked minutes after it exists, and
-it stays until the last finder (the extension's silent-failure agent, for one) has reported and been checked; it never
-finishes beside a running finder. Its last pass re-checks every claim that a later report contradicts or depends on.
+the first finder's report and takes each later report as it lands, blocking findings first, so a finding is checked
+minutes after it exists. It ends only when every agent on the roster (a respawned one and the extension's
+silent-failure agent included) is done and checked; it never finishes beside a running finder. Its last pass re-checks
+every claim that a later report contradicts or depends on. A report that lands after the verifier ended, or after it
+died, gets its own verifier pass before it reaches the report.
 Nothing reaches the report as verified that no verifier saw; a finding that was not verified is written as such. A verifier's report is saved to
 `assets/<sha10>/` like any other.
 
@@ -213,19 +228,19 @@ finding, a gap or a check. It moves the detail to the Evidence section at the en
 
 | Part | Rule |
 |---|---|
-| Verdict | Two sentences at most: the call, then the deciding reason told as what happens to a user. Then the `Depth:` line (how many Opus agents, which steps ran; or `INCOMPLETE:` and what did not). |
+| Verdict | Two sentences at most: the call, then the deciding reason told as what happens to a user. Then the `Depth:` line (how many Opus agents, which steps ran; `IN PROGRESS:` and what is still running in a first report, with the `Extension:` line under it; or `INCOMPLETE:` and what did not). A first report's verdict begins `Provisional:` (depth contract 7). |
 | Target | One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when the verdict is to replace X. |
 | Who and what | Name the features, targets, teams or commands an ask affects, with a count when there is one ("the checkout service in eu-west", "37 of 64 batches"). Never "everyone else", "other users" or "some cases". Call the author's code "the PR" and the asked-for change "the fix"; never "this change", "this way" or "the new behavior", which can mean either. |
 | Terms | Each term an ask needs that a user of the system would not know, defined once in plain words, before the asks. Coin none: use the names the code and its users already use. |
-| User picture | Right after the terms and before the asks, a **before and after of the user's experience**, so the impact is clear at a glance. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all; a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. |
+| User picture | Right after the terms and before the asks, a **before and after of the user's experience**, so the impact is clear at a glance. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all; a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. In a first report, a surface whose dry run is still running says "dry run running, ends about HH:MM", and each snippet says whether a verifier has checked it yet. |
 | Asks | Numbered, most important first, at most six. A finding that blocks merge is always an ask, whatever the cap or the length; lower-ranked ones go to Evidence, each with a one-line plain case, and the body says "N smaller findings in Evidence". |
 | One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one short paragraph, starting from what a user does and what the system then does, never from the code: **if** the user does X, **then** Y fails, **and doing Z** (the fix asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. Then the fix as an example: the exact command to run, the config lines to add, or the before and after of the name or output that changes (for instance `nightly.cfg` gains the line `retries = 3`; a saved job named `export` becomes `export-eu` and `export-us`). For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case) and still show the fix as an example. End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
 | Code is a footnote | The explanation never starts from code, and it must make sense with every code reference removed. The verdict, terms, draft comment and every section other than the asks hold none. An ask may add, after its paragraph and example, one short line `Key logic: <what it does in plain words> (path:line)`, at most two per ask, only where seeing that piece of logic makes the failure obvious; everything else goes in Evidence. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it anywhere. Internal shorthand and principle IDs stay in Evidence. Commit shas, PR and ticket numbers are facts. |
 | Unproven | A plausible finding says "(plausible, not proven)" in its ask. |
 | Draft comment | One Kohen could post if he wants to; never post it. At most 12 lines, written the same plain way: a bold imperative per ask that goes to the author, then at most two sentences (the change, and the exact command or ticket number). Numbers match the asks. No rationale, no riders ("check that…"), no placeholders. |
 | Symbols | A symbol (✅ ❌ ⚠️ 🔴) is never bare: say once, in the legend or the cell, what goes wrong and give an example. "Accepted" is a problem only when the result is silently wrong, so say "accepted, then X happens". No ASCII art. |
-| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture (which has its own budget), so about one and a half screens. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. |
-| End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, every step not done and why). |
+| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture (which has its own budget), so about one and a half screens. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. In a first report, "Still being checked" is one line (`N findings still being checked, M could block merge:`) plus one line for each of the M, and none of it counts against the budget. |
+| End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, its start and end minute, every step not done and why). |
 
 One ask, before and after:
 
@@ -251,8 +266,10 @@ Read the report from the top as Kohen would, and revise it until every answer is
 7. Is every "everyone", "others", "this change" or "this way" replaced by the named features, targets or commands, the
    PR or the fix?
 8. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
-9. In a first report: is every ask verified, every unchecked finding under "Still being checked", and every running
-   agent named with its end time? In the addendum: does its first line say which asks of the first report changed?
+9. In a first report: is every ask verified, every unchecked finding under "Still being checked" (blocking ones tagged),
+   the verdict marked `Provisional:` everywhere it appears, every running agent named with its end time, and the
+   `Extension:` line there? After the addendum: are the verdict, asks, draft comment, frontmatter and index row
+   rewritten to the final state, and does `## Since the first report` say which asks of the first report changed?
 
 ## 7. Stay for questions, and learn
 
