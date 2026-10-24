@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A verified first report comes at 30 minutes and the remaining steps follow as an addendum, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -12,7 +12,8 @@ the review below the five questions.
 ## Depth contract (no shortcut is allowed)
 
 Kohen wants every review to be the deepest one the code allows. Nothing below is waived by the focus, by an earlier
-review, by a small diff, or by time or budget (the one exception is tier 0 in rule 2).
+review or by a small diff (the one exception is tier 0 in rule 2). Kohen also wants the first answer within 30 minutes:
+time and budget decide when a step's result reaches him, never whether the step runs (rule 7).
 
 1. **Opus does the judging.** Look at the model you are running on (your system prompt names it). On Opus, you
    orchestrate and judge. On anything else you are only the orchestrator: the design, the diff pass, the caller
@@ -44,6 +45,20 @@ review, by a small diff, or by time or budget (the one exception is tier 0 in ru
    command that would settle it.
 6. **A limit is a reason to wait, not to skip.** On a rate limit or a slow step, wait and continue; never drop a step to
    finish sooner.
+7. **A first report at 30 minutes, the rest as an addendum, and nothing lower in quality.** At minute 30 of the review
+   (or at the time an extension named at the start, see the extension's check) the report goes out with what the
+   verifier has confirmed so far. In it:
+   - an ask is only a finding a verifier has confirmed or labelled plausible; a finding a finder raised that no verifier
+     has checked yet is one line under "Still being checked", never an ask;
+   - the verdict is provisional and the `Depth:` line begins `IN PROGRESS:`, naming each agent still running and when
+     it should end;
+   - an extension request in two lines: what the running steps can still change (which asks, which kinds of user), and
+     why this subject needs them. Kohen approves it; meanwhile nothing stops, and he may say stop.
+
+   Every step still runs to the end. The review is done only when the addendum is written: a `## Since the first report`
+   section with every finding verified after minute 30, and its first line says whether any ask of the first report was
+   added, reversed, downgraded or corrected (and which), so Kohen sees what the early answer cost. The verdict and the
+   `Depth:` line are then final, and the "How this was reviewed" table gives each agent's start and end minute.
 
 ## 0. Load what this machine adds
 
@@ -151,7 +166,16 @@ How the team runs (each rule below is a cost or a loss seen in 14 earlier review
   points to the sheet and says not to re-derive it; an agent still runs any query its own hypothesis needs.
 - **At most eight Opus agents at a time, helpers included.** The model's request limit is shared by every agent, and
   parallel agents trip it (the extension names the number); stage the rest rather than let agents die. Rate limits, not
-  agent count, set the speed.
+  agent count, set the speed. One review per quota at a time: a second review on the same quota slows both, and a
+  quota that runs out mid-review loses a whole wave (two reviews started 15 minutes apart lost theirs at minutes 7
+  to 25).
+- **An agent starts on its inputs, not on the slowest finder.** An agent that needs another agent's file (a ledger, a
+  table) starts when that file is written, an interim one included, in the first slot a finished agent frees (the
+  design advocates finish first). Before it finishes it re-reads the final version of that file and checks its
+  conclusions against it, so an early start never audits half a table.
+- **Report by minute 25, then keep going.** Each finder writes its report so far by minute 25 of the review, with an
+  `## Unfinished` list of what it has not reached, and then carries on to the end of its task. It never cuts its work
+  to make the minute; what it finds later is verified for the addendum (depth contract 7).
 - **No report is ever lost.** Each agent writes its full report to `assets/<sha10>/<role>.md` before its final message, and
   an interim report after about 40 tool calls. If the harness refuses file writes in a subagent, the agent returns the
   report as its final message and you save it at once. An agent that died (rate limit, quota reset) is respawned
@@ -168,9 +192,11 @@ head sha (or the document text). Drop what cannot be confirmed; label what is pl
 disproves in one look costs more than the ten findings that were right.
 
 The verifier also checks the user picture: each After snippet is accepted at the head, each Before snippet at the base,
-and the outputs shown are the ones those commands print. The verifier runs after the finders, not beside them: an agent that finishes late (the extension's silent-failure
-agent, for one) is a finder too, and its findings get a short second verifier pass. Nothing reaches the report as
-verified that no verifier saw; a finding that was not verified is written as such. A verifier's report is saved to
+and the outputs shown are the ones those commands print. The verifier works as the findings arrive: it starts with
+the first finder's report and takes each later report as it lands, so a finding is checked minutes after it exists, and
+it stays until the last finder (the extension's silent-failure agent, for one) has reported and been checked; it never
+finishes beside a running finder. Its last pass re-checks every claim that a later report contradicts or depends on.
+Nothing reaches the report as verified that no verifier saw; a finding that was not verified is written as such. A verifier's report is saved to
 `assets/<sha10>/` like any other.
 
 ## 6. Write the report
@@ -225,6 +251,8 @@ Read the report from the top as Kohen would, and revise it until every answer is
 7. Is every "everyone", "others", "this change" or "this way" replaced by the named features, targets or commands, the
    PR or the fix?
 8. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
+9. In a first report: is every ask verified, every unchecked finding under "Still being checked", and every running
+   agent named with its end time? In the addendum: does its first line say which asks of the first report changed?
 
 ## 7. Stay for questions, and learn
 
