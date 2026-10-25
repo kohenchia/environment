@@ -46,6 +46,12 @@ class Capture(unittest.TestCase):
         self.assertTrue((self.case / "base-nooption.log").exists())
         self.assertEqual((self.case / "cmd.txt").read_text().strip(), "uv run tool")
 
+    def test_a_command_that_reads_stdin_does_not_hang(self):
+        r = subprocess.run([sys.executable, str(TOOL), "capture", str(self.case), "--side", f"base={self.base}",
+                            "--", "cat"], capture_output=True, text=True, timeout=20, check=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual((self.case / "base.log").read_text(), "EXIT 0\n")
+
     def test_a_side_needs_a_name_and_an_existing_directory(self):
         r = run("capture", str(self.case), "--side", f"base={self.tmp / 'missing'}", "--", "true")
         self.assertNotEqual(r.returncode, 0)
@@ -151,6 +157,49 @@ class Check(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         ok = self.check("<!-- from: A2 -->\n```text\nmlc: warning: only in A2\n```\n")
         self.assertEqual(ok.returncode, 0, ok.stdout)
+
+    def test_a_fragment_of_a_line_does_not_pass(self):
+        r = self.check("```text\n  input map\nno default object\n```\n")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("2 not found", r.stdout)
+
+    def test_cut_text_is_anchored_at_the_ends_it_does_not_mark(self):
+        self.assertEqual(self.check("```text\nmlc: refused: no default …\n```\n").returncode, 0)
+        self.assertEqual(self.check("```text\n… carries it\n```\n").returncode, 0)
+        self.assertEqual(self.check("```text\nrefused: no default …\n```\n").returncode, 1)
+        self.assertEqual(self.check("```text\nmlc: refused: … target 396\n```\n").returncode, 1)
+
+    def test_a_config_saved_with_line_numbers_matches_without_them(self):
+        (self.ev / "A1/mlc_yaml.txt").write_text("12:  exgen_eval:\n13:    tier: release\n")
+        r = self.check("```yaml\n  exgen_eval:\n    tier: release\n```\n")
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_changed_indentation_fails(self):
+        r = self.check("```text\ninput map  X = Y\n```\n")
+        self.assertEqual(r.returncode, 1)
+
+    def test_annotations_are_skipped_only_in_config_blocks(self):
+        self.assertEqual(self.check("```yaml\n# features/x/mlc.yaml\n```\n").returncode, 0)
+        self.assertEqual(self.check("```json\n// features/x/dependency.json\n```\n").returncode, 0)
+        r = self.check("```text\n# the job fails on the pod\n```\n")
+        self.assertEqual(r.returncode, 1)
+
+    def test_fences_in_lists_and_quotes_are_checked(self):
+        r = self.check("- item\n\n  ```text\n  totally invented\n  ```\n")
+        self.assertEqual(r.returncode, 1)
+        r = self.check("> ```text\n> invented in a quote\n> ```\n")
+        self.assertEqual(r.returncode, 1)
+        ok = self.check("- item\n\n  ```text\n  mlc: warning: only in A2\n  ```\n")
+        self.assertEqual(ok.returncode, 0, ok.stdout)
+
+    def test_a_source_outside_the_evidence_folder_is_refused(self):
+        r = self.check("<!-- from: ../page.md -->\n```text\n<!-- from: ../page.md -->\n```\n")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("outside", r.stdout)
+
+    def test_a_longer_fence_holds_a_shorter_one(self):
+        r = self.check("````markdown\n```text\nmlc: warning: only in A2\n```\n````\n")
+        self.assertEqual(r.returncode, 1)  # the inner fence lines are page text, not captures
 
     def test_scripts_and_notes_are_not_evidence_unless_named(self):
         (self.ev / "gen_doc.py").write_text('add("evals.<eval>.input_mapping")\n')

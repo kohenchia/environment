@@ -7,7 +7,9 @@
   usecases.py check <page.md> <evidence-dir>
       Every line of every fenced block in the page must appear verbatim in one captured line under
       evidence-dir (in the files named by a `<!-- from: path, path -->` line just above the fence, when
-      there is one; scripts and notes, *.py *.sh *.md, count only when named). `…` marks cut text: each piece must appear, in order. A line starting with `# ` or `// `
+      there is one; scripts and notes, *.py *.sh *.md, count only when named). A line matches a whole captured
+      line, indentation included (a leading `N:` line number on the captured line is ignored); `…` marks cut text, and the pieces around it must appear in order, anchored
+      at each end the `…` does not mark. In a config block (yaml, json, …) a line starting with `# ` or `// `
       is an annotation and is skipped. A `<!-- not captured: reason -->` line above a fence skips that
       block and lists it. Exits 1 when any line is not found.
 
@@ -26,7 +28,9 @@ from pathlib import Path
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 FROM = re.compile(r"^<!--\s*from:\s*(.+?)\s*-->$")
 NOT_CAPTURED = re.compile(r"^<!--\s*not captured:\s*(.+?)\s*-->$")
-FENCE = re.compile(r"^(`{3,}|~{3,})")
+FENCE = re.compile(r"^((?:[ \t]*>)*[ \t]*)(`{3,}|~{3,})(.*)$")  # a fence, also inside a list item or a quote
+LINE_NO = re.compile(r"^\d+[:\t]")  # a file saved with its line numbers (grep -n, nl)
+ANNOTATED = {"yaml", "yml", "json", "jsonc", "toml", "ini", "cfg"}  # config blocks, where `# ` / `// ` lines are labels
 NOT_EVIDENCE = {".py", ".sh", ".md"}  # scripts and agents' notes, unless a from: line names the file
 
 
@@ -102,7 +106,8 @@ def capture(case: Path, sides: list[tuple[str, Path]], argv: list[str], shown: s
         (case / "cmd.txt").write_text(" ".join(argv) + "\n")
     summary = []
     for name, cwd in sides:
-        p = subprocess.run(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+        p = subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, check=False)
         text = ANSI.sub("", p.stdout.decode(errors="replace"))
         if text and not text.endswith("\n"):
             text += "\n"
@@ -112,23 +117,32 @@ def capture(case: Path, sides: list[tuple[str, Path]], argv: list[str], shown: s
     return 0
 
 
-def _pieces_in_order(line: str, candidate: str) -> bool:
-    pos = 0
-    for piece in (p.strip() for p in line.split("…")):
-        if not piece:
-            continue
-        i = candidate.find(piece, pos)
-        if i < 0:
-            return False
-        pos = i + len(piece)
-    return True
+def _matches(line: str, candidate: str) -> bool:
+    """line is candidate, or candidate with the text at each `…` cut out."""
+    if "…" not in line:
+        return line == candidate
+    parts = line.split("…")
+    first, last = parts[0].rstrip(), parts[-1].strip()
+    if first and not candidate.startswith(first):
+        return False
+    pos = len(first)
+    for piece in (p.strip() for p in parts[1:-1]):
+        if piece:
+            i = candidate.find(piece, pos)
+            if i < 0:
+                return False
+            pos = i + len(piece)
+    return not last or (candidate.endswith(last) and len(candidate) - len(last) >= pos)
 
 
 def _evidence(root: Path, sources: list[str] | None) -> tuple[list[str], list[str]]:
     files, missing = [], []
+    top = root.resolve()
     for src in sources or ["."]:
         p = root / src
-        if p.is_file():
+        if p.resolve() != top and top not in p.resolve().parents:
+            missing.append(f"{src} (outside {root})")
+        elif p.is_file():
             files.append(p)
         elif p.is_dir():
             files.extend(f for f in sorted(p.rglob("*")) if f.is_file() and f.suffix not in NOT_EVIDENCE)
@@ -153,12 +167,16 @@ def check(page: Path, root: Path) -> int:
         if not m:
             i += 1
             continue
-        marker, start = m.group(1), i
+        prefix, marker, lang, start = m.group(1), m.group(2), m.group(3).strip().lower(), i
         prev = text[i - 1].strip() if i else ""
+        if prev.startswith(">"):
+            prev = prev.lstrip("> ").strip()
+        indent = len(prefix)
+        closing = re.compile(r"^" + re.escape(prefix.rstrip(" \t")) + r"[ \t]*" + re.escape(marker[0]) + "{" + str(len(marker)) + r",}\s*$")
         j = i + 1
-        while j < len(text) and not text[j].startswith(marker):
+        while j < len(text) and not closing.match(text[j]):
             j += 1
-        body = text[i + 1:j]
+        body = [b[indent:] if b[:indent].strip(" \t>") == "" else b for b in text[i + 1:j]]
         i = j + 1
         if NOT_CAPTURED.match(prev):
             skipped.append(f"{page.name}:{start + 1} ({NOT_CAPTURED.match(prev).group(1)})")
@@ -171,11 +189,11 @@ def check(page: Path, root: Path) -> int:
         for src in missing:
             bad.append(f"{page.name}:{start} names a source that does not exist: {src}")
         for k, line in enumerate(body, start=start + 2):
-            s = line.strip()
-            if not s or s.startswith(("# ", "// ")):
+            s, line = line.strip(), line.rstrip()
+            if not s or (lang in ANNOTATED and s.startswith(("# ", "// "))):
                 continue
             checked += 1
-            if not any(_pieces_in_order(line, c) for c in evidence):
+            if not any(_matches(line, c) or _matches(line, LINE_NO.sub("", c, count=1)) for c in evidence):
                 bad.append(f"{page.name}:{k} not found in the captured files: {s[:120]}")
     for b in bad:
         print(b)

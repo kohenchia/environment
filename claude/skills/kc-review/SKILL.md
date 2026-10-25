@@ -338,8 +338,8 @@ text of at least one. The report's length budget does not apply to the page.
   captured file by pattern (the helper's `pull`, `block`, `exit_code` and `fence`), never typed, and a pattern that
   matches nothing stops the script. Its prose is the only hand-written text. A correction goes into the generator and
   the page is generated again, never edited by hand.
-- **Before the verifier**, `usecases.py check <page> assets/usecases` passes: every line of every fenced excerpt is in
-  a captured file (scripts and notes do not count). A block that cannot be, such as a template, carries a
+- **Before the verifier**, `usecases.py check <page> assets/usecases` passes: every line of every fenced excerpt is a
+  whole captured line, indentation included, with any cut marked `…` (scripts and notes do not count as captures). A block that cannot be, such as a template, carries a
   `<!-- not captured: why -->` line, and the check lists it for the verifier.
 - **One Opus verifier** that wrote none of the page checks every fenced excerpt against its log; reruns a sample byte
   for byte from the clean worktrees (one case per part at least, and every refusal an ask rests on), after normalising
