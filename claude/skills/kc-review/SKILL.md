@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A provisional first report of verified findings comes at 30 minutes when the model quota allows (the extension's check says when it does not), and the remaining steps follow as an addendum that rewrites it to the final state, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end) and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A provisional first report of verified findings comes at 30 minutes when the model quota allows (the extension's check says when it does not), and the remaining steps follow as an addendum that rewrites it to the final state, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end), and for code a companion page of every use case the change touches, each run before and after with its command, config, variables and exact warning, and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -61,7 +61,8 @@ time and budget decide when a step's result reaches him, never whether the step 
      and why this subject needs them. Kohen approves it; meanwhile nothing stops. If he says stop, the report is
      finished as `INCOMPLETE:`, naming the stopped agents and every finding never verified.
 
-   Every step still runs to the end. The review is done only when the addendum is written: rewrite the verdict, the
+   Every step still runs to the end. The review is done only when the addendum is written (with, for code, the verified
+   companion use-case page of step 7, which never delays the first report): rewrite the verdict, the
    asks, the summary lines, the user picture (every "dry run running" and "not yet checked" mark replaced), the draft
    comment, the frontmatter and the index row to the final state, remove the `Extension:` and "Still being checked"
    lines, and put a `**Since the first report:**` line under the `Depth:` and summary lines, saying which asks of the first report
@@ -147,7 +148,8 @@ Plus question 6: is the review itself consistent with the knowledge (step 0)?
 ## 4. The review team (required)
 
 For anything beyond a typo-level change to a document, spawn these, in parallel where they are independent, every one
-with `model: "opus"` and `effort: "high"` (Sonnet only for mechanical work: listing files, fetching, formatting). Give each the subject's
+with `model: "opus"` and `effort: "high"` (Sonnet only for mechanical work: listing files, fetching, formatting, and the
+use-case capture of step 7). Give each the subject's
 path and sha, the fact sheet (below), the knowledge file and the exact question, and ask for findings with `file:line`
 evidence and, for each, the user-level case it causes: what a user does, what fails for them, and what would make it work.
 
@@ -158,6 +160,8 @@ evidence and, for each, the user-level case it causes: what a user does, what fa
 | Consumer trace | Find every caller and consumer of every changed or removed symbol, field, flag, default and name, across all repos involved and in open PRs; and what the change should have touched but did not (docs, registrations, migrations, tests). When the change reaches more than three kinds of consumer, one agent per kind, never per repo, so the slowest agent shortens the wait without a slice missing a consumer |
 | Break-it pass | Given the design and the diff, find a realistic input, workflow or existing user that the change breaks or silently alters; name the case and the code, or list what was tried and found nothing |
 | Verifier (step 5) | Try to disprove each finding, each "no problem here" claim on a risky area, and the debate's factual claims |
+| Use-case capture (step 7, code only) | Sonnet, at most three: run every case of the companion page at the base and the head and record it; no judgment |
+| Use-case verifier (step 7, code only) | Check the companion page against the captures, rerun a sample, and rewrite or label every statement that was inferred rather than observed |
 
 Put this in every agent's brief: if it spawns helpers of its own, they too get `model: "opus"` and `effort: "high"`
 (a helper spawned without a model runs on the session's default, which is how two Sonnet helpers once appeared under
@@ -168,7 +172,8 @@ How the team runs (each rule below is a cost or a loss seen in 14 earlier review
 
 - **The user picture is a product of the team, not of memory.** The agent that runs the subject (dry runs, `--help`,
   config validation) at the base and at the head brings back the exact commands, config snippets and outputs for the
-  surfaces the diff changes; ask for them in its brief.
+  surfaces the diff changes; ask for them in its brief. Its runs use step 7's case folders, so the companion page
+  reuses them instead of running them again.
 - **One fact sheet, built once.** Before the finders start, collect raw facts into the review's `assets/<sha10>/` folder (the head's first ten characters): the
   PR metadata, the diff and the changed symbols, the open PRs that overlap it, and the repo's tests, linters and type
   checks run once, in a fresh environment of the review worktree (a stale shared environment gave false failures).
@@ -178,7 +183,7 @@ How the team runs (each rule below is a cost or a loss seen in 14 earlier review
   parallel agents trip it (the extension names the number); stage the rest rather than let agents die. Rate limits, not
   agent count, set the speed. One review per quota at a time: a second review on the same quota slows both, and a
   quota that runs out mid-review loses a whole wave (two reviews started 15 minutes apart lost theirs at minutes 7
-  to 25).
+  to 25). The companion page (step 7) is part of the review, not a second one, and runs under this rule.
 - **An agent starts on its inputs, not on the slowest finder.** An agent that needs another agent's file (a ledger, a
   table) starts when that file is written, an interim one included, in the first slot a finished agent frees (the
   design advocates finish first; the extension orders who takes the freed slots). Every report file begins
@@ -221,7 +226,8 @@ Nothing reaches the report as verified that no verifier saw; a finding that was 
 ## 6. Write the report
 
 Into the vault's `Reviews/` folder (the vault's location is in the global instructions; the extension may
-set the folder layout and a template), linked from `Reviews.md`.
+set the folder layout and a template), linked from `Reviews.md`. For code, the companion use-case page (step 7) sits
+beside it.
 
 The depth contract decides what the review finds; this step decides only how it is written. Kohen reads a report to
 decide, not to audit: he must be able to act on every ask without opening the code. Start from what a user does and
@@ -236,7 +242,7 @@ finding, a gap or a check. It moves the detail to the Evidence section at the en
 | Target | One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when the verdict is to replace X. |
 | Who and what | Name the features, targets, teams or commands an ask affects, with a count when there is one ("the checkout service in eu-west", "37 of 64 batches"). Never "everyone else", "other users" or "some cases". Call the author's code "the PR" and the asked-for change "the fix"; never "this change", "this way" or "the new behavior", which can mean either. |
 | Terms | Each term an ask needs that a user of the system would not know, defined once in plain words, before the asks. Coin none: use the names the code and its users already use. |
-| User picture | Right after the terms and before the asks, a **before and after of the user's experience**, so the impact is clear at a glance. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all; a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. In a first report, a surface whose dry run is still running says "dry run running, ends about HH:MM", and each snippet says whether a verifier has checked it yet. |
+| User picture | Right after the terms and before the asks, a **before and after of the user's experience**, so the impact is clear at a glance. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all; a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. In a first report, a surface whose dry run is still running says "dry run running, ends about HH:MM", and each snippet says whether a verifier has checked it yet. For code, the picture ends with one line linking the companion use-case page (step 7) and its number of cases; the picture is the one running example and never repeats the page's cases. In a first report that line says the page comes with the final report. |
 | Asks | Numbered, most important first, at most six. A finding that blocks merge is always an ask, whatever the cap or the length; lower-ranked ones go to Evidence, each with a one-line plain case, and the body says "N smaller findings in Evidence". |
 | One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one short paragraph, starting from what a user does and what the system then does, never from the code: **if** the user does X, **then** Y fails, **and doing Z** (the fix asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. Then the fix as an example: the exact command to run, the config lines to add, or the before and after of the name or output that changes (for instance `nightly.cfg` gains the line `retries = 3`; a saved job named `export` becomes `export-eu` and `export-us`). For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case) and still show the fix as an example. End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
 | Code is a footnote | The explanation never starts from code, and it must make sense with every code reference removed. The verdict, terms, draft comment and every section other than the asks hold none. An ask may add, after its paragraph and example, one short line `Key logic: <what it does in plain words> (path:line)`, at most two per ask, only where seeing that piece of logic makes the failure obvious; everything else goes in Evidence. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it anywhere. Internal shorthand and principle IDs stay in Evidence. Commit shas, PR and ticket numbers are facts. |
@@ -275,8 +281,97 @@ Read the report from the top as Kohen would, and revise it until every answer is
    `Extension:` line there? After the addendum: are the verdict, asks, user picture, draft comment, frontmatter and
    index row rewritten to the final state, the `Extension:` and "Still being checked" lines gone, and does the
    `**Since the first report:**` line say which asks of the first report changed?
+10. For code, in the final report: is the companion page there (or its one paragraph when nothing a user sees
+    changes), linked from the user picture and the reviews index, opened by its index table, and does every case show
+    the command, the config, the variables as printed, before, after, the exact warning or refusal and its "if the
+    user does X" line? Does `usecases.py check` pass on it, has its verifier rerun the sample, is every inferred
+    statement rewritten or labelled, and are the cases reasoned from code named?
 
-## 7. Stay for questions, and learn
+## 7. The companion use-case page (code only)
+
+Every review of code (a PR, a branch, a worktree) also writes a companion page beside the report: every situation the
+change touches, each run at the base and at the head, so Kohen sees its impact case by case. The report's user picture
+(step 6) shows one running example; the page is its exhaustive version, and the picture links to it instead of
+repeating it. A document review has no page: there is nothing to run before and after.
+
+**When.** The page is built once the findings are verified and belongs to the final report (to the addendum when there
+was a first report): it never delays the first report and never replaces a finding. A situation on the page that no
+finding covers is a new finding: it goes to the verifier (step 5) and into the report, not only onto the page. If
+nothing a user types, writes or sees changes, the page is one paragraph saying so, with the unchanged command run at
+base and head and its identical output; no padding. A review stopped on a wrong premise (step 1) has no page; a tier-0
+re-review keeps it with one line saying why it still holds at the new head; any other re-review reruns every case at
+the new head and adds the cases the new changes need.
+
+**Which cases.** Write the list before capturing anything, from the diff, the consumer trace and the verified findings:
+
+- the default path, where the user declares nothing new: one case per kind of user the consumer trace found;
+- each new option, flag, key or input: its happy path, then each way it fails (missing; misspelled, on each side of a
+  name and value; a value the system supplies itself; one that clashes with what the system sets; written in the wrong
+  place), alone and beside what it is usually run with;
+- the combinations the change alters: two features in one run, a multi-step flow, an existing option meeting the new one;
+- every verified finding a user can hit, so each ask has its case.
+
+**Each case shows**, in this order: the command the user runs, exactly; the config excerpt they write (every file the
+case needs, with its path, "same before and after" when it is), as it stands in the file; the variables or inputs the
+system resolves, as it prints them; **Before**, what the base prints for that input, with its exit code (for a new
+option, the base's own refusal or load error, as captured); **After**, what the head prints, with its exit code; the
+exact warning or refusal text, in full; and one line: **if** the user does X, **then** Y happens (fails, warns, or
+silently does Z), **and doing** W **makes it work** (or "nothing changes for you").
+
+**Layout.** Frontmatter; one paragraph (the base and head shas, how the cases were run, that nothing was created,
+submitted or posted, and which cases were reasoned from code); what the change does, in a few plain rows; the terms the
+cases need and the legend of marks, each saying what goes wrong; an **index table** (Case · Situation · Before ·
+After); the cases, in parts by kind of user, the default path first; a summary table (kind of user · before · after)
+and one line mapping the cases to the report's asks. Similar cases may share a table, one row each, with the verbatim
+text of at least one. The report's length budget does not apply to the page.
+
+**How it is built.**
+
+- **Capture agents** (Sonnet, at most three, one slice of the parts each): running and recording is mechanical. Each
+  runs its cases with `uv run --no-project python ~/.claude/skills/kc-review/usecases.py capture` (the helper beside
+  this skill) in the base and head review worktrees, into one folder per case under the review's `assets/usecases/`:
+  `cmd.txt`, the config as it was loaded, `base.log` and `head.log` (each ending `EXIT <n>`), and `notes.md` quoting
+  lines with their file and line. A config is changed in memory or in a scratch copy, never in a worktree, and both
+  worktrees are clean at the end. Nothing is submitted, set, registered or posted, on the PR or anywhere else; a case
+  that only a write could show is reasoned from code instead.
+- **A generator script** in `assets/usecases/` writes the page from the case folders. Every excerpt is pulled from a
+  captured file by pattern (the helper's `pull`, `block`, `exit_code` and `fence`), never typed, and a pattern that
+  matches nothing stops the script. Its prose is the only hand-written text. A correction goes into the generator and
+  the page is generated again, never edited by hand.
+- **Before the verifier**, `usecases.py check <page> assets/usecases` passes: every line of every fenced excerpt is in
+  a captured file (scripts and notes do not count). A block that cannot be, such as a template, carries a
+  `<!-- not captured: why -->` line, and the check lists it for the verifier.
+- **One Opus verifier** that wrote none of the page checks every fenced excerpt against its log; reruns a sample byte
+  for byte from the clean worktrees (one case per part at least, and every refusal an ask rests on), after normalising
+  shas and times; marks every statement observed (which log), inferred (which code or reproduction) or unsupported;
+  confirms the head has not moved; and lists the situations the page misses. Every inferred statement is rewritten to
+  what was observed or labelled `(inferred from <code or reproduction>, not observed)`; every unsupported one goes.
+  Nobody edits the page while it reads.
+
+The first such page needed 21 statements changed (three wrong outright) and six situations added. Write to avoid them:
+
+- **Before is what the base printed for that input**, never a history of the PR ("it was accepted at the previous
+  push") that no capture shows.
+- **A runtime outcome a dry run cannot show is "would"**, with what it rests on ("the job would run at priority 5:
+  overrides are applied before mappings"); a local reproduction is called one, with what it ran on.
+- **Like for like**: a comparison changes one thing on the same input; a different subject is not "the same case beside
+  others".
+- **Every count is recomputed at the head, with its denominator** ("37 of the 63 config files that have evals").
+- **What was not run is not claimed**: a target, feature or environment is run or dropped.
+- **"Works" means the intended effect was seen**; "accepted" means the input was taken and the effect not seen (a
+  misspelled variable is accepted and does nothing).
+- **The page describes the report's sha**: a newer head is a re-review (step 4), not a quiet recapture.
+
+**Where it lives.** Beside the report, named `<report name> — use cases and impact` unless the extension names it, with
+its evidence in `assets/usecases/`. The report's user picture and the reviews index row link to it. When the change
+cannot be run at all (no entry point, an environment this machine lacks), the page says so at the top and labels each
+case "reasoned from code, not run"; such a case shows no output block.
+
+**Quota.** The page is part of the review: its agents run in the review's session, under step 4's one-review-per-quota
+rule. A page added to a finished review is review work, and waits for another review running on the same quota as a
+review would.
+
+## 8. Stay for questions, and learn
 
 The review is a conversation, not a delivery. Stay in the session. When Kohen corrects the review (a
 missed issue, a wrong call, a comment he made on the PR that the review did not anticipate), add the
