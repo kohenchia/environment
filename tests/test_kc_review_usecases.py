@@ -24,7 +24,7 @@ class Capture(unittest.TestCase):
         for side, code in ((self.base, 1), (self.head, 0)):
             side.mkdir()
             (side / "tool.sh").write_text(
-                f"printf '\\033[1mstep type\\033[0m  EVAL\\n'; echo 'warn: careful' >&2; exit {code}\n")
+                f"printf '\\033[1mstep type\\033[0m  BATCH\\n'; echo 'warn: careful' >&2; exit {code}\n")
         self.case = self.tmp / "usecases/A1"
 
     def test_each_side_gets_its_log_with_ansi_stripped_and_the_exit_code_last(self):
@@ -33,7 +33,7 @@ class Capture(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         base = (self.case / "base.log").read_text().splitlines()
         self.assertEqual(base[-1], "EXIT 1")
-        self.assertIn("step type  EVAL", base)
+        self.assertIn("step type  BATCH", base)
         self.assertIn("warn: careful", base)
         self.assertEqual((self.case / "head.log").read_text().splitlines()[-1], "EXIT 0")
         self.assertEqual((self.case / "cmd.txt").read_text().strip(), "uv run tool --dry-run")
@@ -63,23 +63,23 @@ class Excerpts(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.log = self.tmp / "head.log"
         self.log.write_text(textwrap.dedent("""\
-            mlc: warning: a field no object carries
-            ── [eval] icloud:eval ──
-              step type          SOURCE_EVAL
-              model              paraserve,model_name=v11
+            tool: warning: a field no object carries
+            ── [job] shop:nightly ──
+              step type          BATCH
+              model              remote,name=v11
               instruction        A = 1
                                  B = 2
               input map          X = Y
                                  Z = W
-            ── [grade] icloud:eval ──
-              step type          SOURCE_EVAL
-            mlc: refused: the second line
+            ── [check] shop:nightly ──
+              step type          BATCH
+            tool: refused: the second line
             EXIT 1
             """))
 
     def test_pull_returns_the_nth_matching_line_verbatim(self):
-        self.assertEqual(usecases.pull(self.log, r"refused", prefix="mlc:"), "mlc: refused: the second line")
-        self.assertEqual(usecases.pull(self.log, r"^mlc:", nth=1), "mlc: refused: the second line")
+        self.assertEqual(usecases.pull(self.log, r"refused", prefix="tool:"), "tool: refused: the second line")
+        self.assertEqual(usecases.pull(self.log, r"^tool:", nth=1), "tool: refused: the second line")
 
     def test_pull_stops_loudly_when_nothing_matches(self):
         with self.assertRaises(SystemExit) as e:
@@ -87,16 +87,16 @@ class Excerpts(unittest.TestCase):
         self.assertIn("no such text", str(e.exception))
 
     def test_block_keeps_the_chosen_rows_and_their_continuation_lines(self):
-        got = usecases.block(self.log, r"── \[eval\]", keep=("step type", "input map"))
+        got = usecases.block(self.log, r"── \[job\]", keep=("step type", "input map"))
         self.assertEqual(got.splitlines(), [
-            "── [eval] icloud:eval ──",
-            "  step type          SOURCE_EVAL",
+            "── [job] shop:nightly ──",
+            "  step type          BATCH",
             "  input map          X = Y",
             "                     Z = W",
         ])
 
     def test_block_without_keep_takes_the_whole_block(self):
-        self.assertEqual(len(usecases.block(self.log, r"── \[eval\]").splitlines()), 7)
+        self.assertEqual(len(usecases.block(self.log, r"── \[job\]").splitlines()), 7)
 
     def test_exit_code_is_the_capture_marker_on_the_last_line(self):
         self.assertEqual(usecases.exit_code(self.log), 1)
@@ -116,8 +116,8 @@ class Check(unittest.TestCase):
         self.ev = self.tmp / "usecases"
         (self.ev / "A1").mkdir(parents=True)
         (self.ev / "A2").mkdir()
-        (self.ev / "A1/head.log").write_text("mlc: refused: no default object of target 396 carries it\n  input map  X = Y\nEXIT 1\n")
-        (self.ev / "A2/head.log").write_text("mlc: warning: only in A2\nEXIT 0\n")
+        (self.ev / "A1/head.log").write_text("tool: refused: no default object of target 12 carries it\n  input map  X = Y\nEXIT 1\n")
+        (self.ev / "A2/head.log").write_text("tool: warning: only in A2\nEXIT 0\n")
         self.page = self.tmp / "page.md"
 
     def check(self, body):
@@ -128,7 +128,7 @@ class Check(unittest.TestCase):
         r = self.check("""\
             # Use cases
             ```text
-            mlc: refused: no default object of target 396 carries it
+            tool: refused: no default object of target 12 carries it
               input map  X = Y
             ```
             """)
@@ -140,22 +140,22 @@ class Check(unittest.TestCase):
             # Use cases
 
             ```text
-            mlc: refused: no default object of the target carries it
+            tool: refused: no default object of the target carries it
             ```
             """)
         self.assertEqual(r.returncode, 1)
         self.assertIn("page.md:4", r.stdout)
 
     def test_an_ellipsis_marks_cut_text_and_the_rest_must_match_in_order(self):
-        ok = self.check("```text\nmlc: refused: no default … carries it\n```\n")
+        ok = self.check("```text\ntool: refused: no default … carries it\n```\n")
         self.assertEqual(ok.returncode, 0, ok.stdout)
-        bad = self.check("```text\nmlc: carries it … refused\n```\n")
+        bad = self.check("```text\ntool: carries it … refused\n```\n")
         self.assertEqual(bad.returncode, 1)
 
     def test_a_named_source_restricts_where_a_line_may_come_from(self):
-        r = self.check("<!-- from: A1/head.log -->\n```text\nmlc: warning: only in A2\n```\n")
+        r = self.check("<!-- from: A1/head.log -->\n```text\ntool: warning: only in A2\n```\n")
         self.assertEqual(r.returncode, 1)
-        ok = self.check("<!-- from: A2 -->\n```text\nmlc: warning: only in A2\n```\n")
+        ok = self.check("<!-- from: A2 -->\n```text\ntool: warning: only in A2\n```\n")
         self.assertEqual(ok.returncode, 0, ok.stdout)
 
     def test_a_fragment_of_a_line_does_not_pass(self):
@@ -164,14 +164,14 @@ class Check(unittest.TestCase):
         self.assertIn("2 not found", r.stdout)
 
     def test_cut_text_is_anchored_at_the_ends_it_does_not_mark(self):
-        self.assertEqual(self.check("```text\nmlc: refused: no default …\n```\n").returncode, 0)
+        self.assertEqual(self.check("```text\ntool: refused: no default …\n```\n").returncode, 0)
         self.assertEqual(self.check("```text\n… carries it\n```\n").returncode, 0)
         self.assertEqual(self.check("```text\nrefused: no default …\n```\n").returncode, 1)
-        self.assertEqual(self.check("```text\nmlc: refused: … target 396\n```\n").returncode, 1)
+        self.assertEqual(self.check("```text\ntool: refused: … target 12\n```\n").returncode, 1)
 
     def test_a_config_saved_with_line_numbers_matches_without_them(self):
-        (self.ev / "A1/mlc_yaml.txt").write_text("12:  exgen_eval:\n13:    tier: release\n")
-        r = self.check("```yaml\n  exgen_eval:\n    tier: release\n```\n")
+        (self.ev / "A1/settings.txt").write_text("12:  nightly_job:\n13:    tier: release\n")
+        r = self.check("```yaml\n  nightly_job:\n    tier: release\n```\n")
         self.assertEqual(r.returncode, 0, r.stdout)
 
     def test_changed_indentation_fails(self):
@@ -179,8 +179,8 @@ class Check(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
 
     def test_annotations_are_skipped_only_in_config_blocks(self):
-        self.assertEqual(self.check("```yaml\n# features/x/mlc.yaml\n```\n").returncode, 0)
-        self.assertEqual(self.check("```json\n// features/x/dependency.json\n```\n").returncode, 0)
+        self.assertEqual(self.check("```yaml\n# conf/x/settings.yaml\n```\n").returncode, 0)
+        self.assertEqual(self.check("```json\n// conf/x/chain.json\n```\n").returncode, 0)
         r = self.check("```text\n# the job fails on the pod\n```\n")
         self.assertEqual(r.returncode, 1)
 
@@ -189,7 +189,7 @@ class Check(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         r = self.check("> ```text\n> invented in a quote\n> ```\n")
         self.assertEqual(r.returncode, 1)
-        ok = self.check("- item\n\n  ```text\n  mlc: warning: only in A2\n  ```\n")
+        ok = self.check("- item\n\n  ```text\n  tool: warning: only in A2\n  ```\n")
         self.assertEqual(ok.returncode, 0, ok.stdout)
 
     def test_a_source_outside_the_evidence_folder_is_refused(self):
@@ -198,31 +198,31 @@ class Check(unittest.TestCase):
         self.assertIn("outside", r.stdout)
 
     def test_a_longer_fence_holds_a_shorter_one(self):
-        r = self.check("````markdown\n```text\nmlc: warning: only in A2\n```\n````\n")
+        r = self.check("````markdown\n```text\ntool: warning: only in A2\n```\n````\n")
         self.assertEqual(r.returncode, 1)  # the inner fence lines are page text, not captures
 
     def test_scripts_and_notes_are_not_evidence_unless_named(self):
-        (self.ev / "gen_doc.py").write_text('add("evals.<eval>.input_mapping")\n')
+        (self.ev / "gen_doc.py").write_text('add("jobs.<job>.inputs")\n')
         (self.ev / "A1/notes.md").write_text("the pod would fail\n")
-        r = self.check("```text\nevals.<eval>.input_mapping\nthe pod would fail\n```\n")
+        r = self.check("```text\njobs.<job>.inputs\nthe pod would fail\n```\n")
         self.assertEqual(r.returncode, 1)
         self.assertIn("2 not found", r.stdout)
         ok = self.check("<!-- from: A1/notes.md -->\n```text\nthe pod would fail\n```\n")
         self.assertEqual(ok.returncode, 0, ok.stdout)
 
     def test_a_missing_source_fails(self):
-        r = self.check("<!-- from: A9/head.log -->\n```text\nmlc: warning: only in A2\n```\n")
+        r = self.check("<!-- from: A9/head.log -->\n```text\ntool: warning: only in A2\n```\n")
         self.assertEqual(r.returncode, 1)
         self.assertIn("A9/head.log", r.stdout)
 
     def test_annotation_lines_are_skipped_and_uncaptured_blocks_are_listed(self):
         r = self.check("""\
             ```yaml
-            # features/icloud/mlc.yaml (same before and after)
+            # conf/shop/settings.yaml (same before and after)
             ```
             <!-- not captured: the field name is a template -->
             ```text
-            evals.<eval>.input_mapping
+            jobs.<job>.inputs
             ```
             """)
         self.assertEqual(r.returncode, 0, r.stdout)
