@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A provisional first report of verified findings comes at 30 minutes when the model quota allows (the extension's check says when it does not), and the remaining steps follow as an addendum that rewrites it to the final state, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a before-and-after of what the user writes and runs, each ask a failure a user would hit, the code evidence at the end), and for a PR a companion page of every use case it touches, each run before and after with its command, config, variables and exact warning, and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A provisional first report of verified findings comes at 30 minutes when the model quota allows (the extension's check says when it does not), and the remaining steps follow as an addendum that rewrites it to the final state, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a worked example of the idea the verdict rests on, a before-and-after of what the user writes and runs, each ask a failure a user would hit with the fix shown as an example and the use case that shows it, the code evidence at the end), and for a PR a companion page of every use case it touches, each run before and after with its command, config, variables and exact warning, and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -63,7 +63,8 @@ time and budget decide when a step's result reaches him, never whether the step 
 
    Every step still runs to the end. The review is done only when the addendum is written (with, for a PR, the verified
    companion use-case page of step 7, which never delays the first report): rewrite the verdict, the
-   asks, the summary lines, the user picture (every "dry run running" and "not yet checked" mark replaced), the draft
+   asks (with their `See it happen` lines), the summary lines, the user picture (every "dry run running" and "not yet
+   checked" mark replaced), the draft
    comment, the frontmatter and the index row to the final state, remove the `Extension:` and "Still being checked"
    lines, and put a `**Since the first report:**` line under the `Depth:` and summary lines, saying which asks of the first report
    were added, reversed, downgraded or corrected (or "none"), so Kohen sees what the early answer cost. The `Depth:`
@@ -234,6 +235,28 @@ decide, not to audit: he must be able to act on every ask without opening the co
 what the system does; code appears only as a pointer to the key piece of logic. Plain writing never drops a
 finding, a gap or a check. It moves the detail to the Evidence section at the end.
 
+### Plain words (Kohen, 2026-10-26)
+
+The test is a reader who has not seen the subject: they understand the report on the first read and decide fast. His
+questions are the measure. "What exactly does 'cannot feed' mean?" and "I'm still very unclear" each came from a report
+that was correct and was written in the subject's own words. So:
+
+- **Short sentences, everyday words, one idea each.** Say what a user does and what then happens ("you run X; the run
+  ends green and builds no package"), not what the code does.
+- **Never explain a phrase with itself.** A phrase from the subject's title, description or code ("can feed",
+  "dropped", "switched on", a coined noun) is not an explanation, not even inside a definition. For the idea the verdict
+  rests on, show the mechanism with a worked example before the asks (the *Worked example* row below). The reader should
+  be able to say the phrase back in their own words after reading it.
+- **Replace every word the system's users would not say** with what they do or see, or give its example value in the
+  same sentence. A word that cannot be replaced is defined once, by example, before the asks.
+- **Examples are the default, not an extra.** A rule, a refusal, a skipped step, a rename: show it with real names and
+  numbers (the command, the config lines, the before and after, a table of two to four rows), never only describe it.
+- **Ids are proofs, not explanations.** A run, ticket or object id may sit in a table cell as the evidence for a claim
+  ("run 4471 built the release"); it never carries the explanation, and rule or recipe numbers go to Evidence.
+
+When Kohen asks what a word or an ask in a report means, the report was not plain: answer him, then rewrite the report
+itself, and keep the earlier copy in `assets/` (`report-before-<what changed>-<date>.md`).
+
 ### The readability contract
 
 | Part | Rule |
@@ -241,15 +264,17 @@ finding, a gap or a check. It moves the detail to the Evidence section at the en
 | Verdict | Two sentences at most: the call, then the deciding reason told as what happens to a user. Then the `Depth:` line (how many Opus agents, which steps ran; `IN PROGRESS:` and what is still running in a first report, with the `Extension:` line under it; or `INCOMPLETE:` and what did not). A first report's verdict begins `Provisional:` (depth contract 7). |
 | Target | One recommendation that picks one target. Every ask moves toward it; never "if you keep X, fix Y" when the verdict is to replace X. |
 | Who and what | Name the features, targets, teams or commands an ask affects, with a count when there is one ("the checkout service in eu-west", "37 of 64 batches"). Never "everyone else", "other users" or "some cases". Call the author's code "the PR" and the asked-for change "the fix"; never "this change", "this way" or "the new behavior", which can mean either. |
-| Terms | Each term an ask needs that a user of the system would not know, defined once in plain words, before the asks. Coin none: use the names the code and its users already use. |
-| User picture | Right after the terms and before the asks, a **before and after of the user's experience**, so the impact is clear at a glance. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all; a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. In a first report, a surface whose dry run is still running says "dry run running, ends about HH:MM", and each snippet says whether a verifier has checked it yet. For a PR, the picture ends with one line linking the companion use-case page (step 7) and its number of cases; the picture is one running example (naming its case on the page) and does not reproduce the others. In a first report that line says the page comes with the final report. |
+| Terms | Each term an ask needs that a user of the system would not know, defined once in plain words with an example value, before the asks. Coin none: use the names the code and its users already use. A term whose meaning is a mechanism gets the worked example (next row), not a sentence. |
+| Worked example | Whenever the verdict or an ask leans on a phrase the subject coined or on a mechanism the reader would not know, a section right after the verdict block and before the asks, titled for the phrase (`## What "cannot feed" means`), shows it on one real case. First a small table of the real parts (step · what it reads · what it makes), then the catch in two sentences, then one table of the real commands a user runs with what happens before and after (✅ and ❌, each said once in words). If the subject does nothing until something else lands, say so in one sentence. This replaces a paragraph of definitions. It is the user picture's partner, and the two may be one section when they fit together. |
+| User picture | Right after the terms and before the asks, a **before and after of the user's experience**, so the impact is clear at a glance. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all (about 30 together with the worked example); a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. In a first report, a surface whose dry run is still running says "dry run running, ends about HH:MM", and each snippet says whether a verifier has checked it yet. For a PR, the picture ends with one line linking the companion use-case page (step 7) and its number of cases; the picture is one running example (naming its case on the page) and does not reproduce the others. In a first report that line says the page comes with the final report. |
 | Asks | Numbered, most important first, at most six. A finding that blocks merge is always an ask, whatever the cap or the length; lower-ranked ones go to Evidence, each with a one-line plain case, and the body says "N smaller findings in Evidence". |
 | One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one short paragraph, starting from what a user does and what the system then does, never from the code: **if** the user does X, **then** Y fails, **and doing Z** (the fix asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. Then the fix as an example: the exact command to run, the config lines to add, or the before and after of the name or output that changes (for instance `nightly.cfg` gains the line `retries = 3`; a saved job named `export` becomes `export-eu` and `export-us`). For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case) and still show the fix as an example. End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
+| See it happen | For a PR, directly under each ask's heading, one italic line naming the cases on the companion page (step 7) that show it: `*See it happen: [[<page>\|use cases]] B2, B3 (the failure); C7 (must keep working).*` Failure cases first, then any case the fix must not break. The IDs are the page's own (`A1`, `D5`). An ask no case can show says why in the same place (`*No use case: it only breaks on the next upgrade.*`). The page's "If… then…" line names the ask it supports, so the link runs both ways. The lines are written when the page exists, so a first report's asks carry `*See it happen: the use-case page comes with the final report.*` and the addendum fills them in. A document review has no page and no such line. |
 | Code is a footnote | The explanation never starts from code, and it must make sense with every code reference removed. The verdict, terms, draft comment and every section other than the asks hold none. An ask may add, after its paragraph and example, one short line `Key logic: <what it does in plain words> (path:line)`, at most two per ask, only where seeing that piece of logic makes the failure obvious; everything else goes in Evidence. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it anywhere. Internal shorthand and principle IDs stay in Evidence. Commit shas, PR and ticket numbers are facts. |
 | Unproven | A plausible finding says "(plausible, not proven)" in its ask. |
 | Draft comment | One Kohen could post if he wants to; never post it. At most 12 lines, written the same plain way: a bold imperative per ask that goes to the author, then at most two sentences (the change, and the exact command or ticket number). Numbers match the asks. No rationale, no riders ("check that…"), no placeholders. |
 | Symbols | A symbol (✅ ❌ ⚠️ 🔴) is never bare: say once, in the legend or the cell, what goes wrong and give an example. "Accepted" is a problem only when the result is silently wrong, so say "accepted, then X happens". No ASCII art. |
-| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture (which has its own budget), so about one and a half screens. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. In a first report, "Still being checked" is one line (`N findings still being checked, M could block merge:`, `adoption` for a document) plus one line for each of the M, and none of it counts against the budget. |
+| Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture and the worked example (together their own budget of about 30), so about one and a half screens plus the picture. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. In a first report, "Still being checked" is one line (`N findings still being checked, M could block merge:`, `adoption` for a document) plus one line for each of the M, and none of it counts against the budget. |
 | End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, its start and end minute, every step not done and why). |
 
 One ask, before and after:
@@ -259,20 +284,52 @@ One ask, before and after:
 | ❌ Before: Kohen cannot act on it without the code | 🔴 2. Fix `ready_inputs()` in `sched/plan.py:212`: it counts sibling nodes as producers, so `check_inputs` only warns. |
 | ✅ After | **2 · Count only the jobs that run before a report as the source of its table** · blocks merge. If a user submits one report that reads a misspelled table, `sales_dayly`, it is refused, as it should be. If they submit it beside a second report (37 of 64 batches have one), it only warns, because "the other report might create it". Neither does, so the report runs on an empty table and finishes green. With the fix, `report submit nightly sales_dayly` is refused in both cases: `no earlier job creates sales_dayly`. *Key logic: every job in the batch counts as a possible source (`plan.py:212`).* (E2) |
 
+A phrase from the subject, before and after:
+
+❌ Before, which only a reader who already knows the phrase can decode: *"The PR drops the jobs a run cannot feed."*
+
+✅ After, a section right after the verdict block:
+
+````markdown
+## What "cannot feed" means
+
+A release run is a chain, and each job reads what an earlier job made:
+
+| Job | Reads | Makes |
+|---|---|---|
+| build | the source | an image |
+| scan | the image | a report |
+| publish | the image **and** the report | the release |
+
+If a run skips *scan*, nothing makes the report, so *publish* has nothing to read: the run "cannot feed" it. The PR
+removes *publish* from such a run instead of letting it fail. The catch: *publish* can also read a report you hand it
+yourself (`--report r-41`), and the PR never looks.
+
+| You run | Before the PR | After the PR |
+|---|---|---|
+| `ship nightly` (all three jobs) | release made | release made ✅ |
+| `ship nightly --only build` | publish fails, run red | publish left out, run green, no release |
+| `ship nightly --only publish --report r-41` | release made from r-41 | publish left out: green, no release ❌ |
+````
+
 ### Before saving: the self-check
 
 Read the report from the top as Kohen would, and revise it until every answer is yes:
 
 1. Could Kohen act on every ask without opening the code?
 2. Is the user picture there, with a Before and an After for every changed config file, command and output, and does
-   each snippet say how it was produced (run, validated, or "not run")?
+   each snippet say how it was produced (run, validated, or "not run")? Is there a worked example for the phrase the
+   verdict rests on?
 3. Does every ask name a real user action, what fails for them, and the fix that makes it work, with real names and
    numbers, and show the fix as an example (the command, the config lines, the before and after)?
-4. Is every term either common or defined once above the asks?
+4. Is every term either common or defined once above the asks, by an example? Pick the three words in the verdict and
+   asks that come from the subject rather than from the user's vocabulary: could a reader who has not seen the subject
+   say what each means after reading the worked example, and is none of them explained with itself?
 5. Cover every code reference and re-read: does each ask still make sense? Search outside the asks for paths,
    `name:line`, `()` and principle IDs, and inside them for more than two per ask: is every other hit a name a user
    types or sees? Move the rest to Evidence.
-6. Do the title to the end of the draft comment fit about 40 lines (the user picture has its own budget)?
+6. Do the title to the end of the draft comment fit about 40 lines (the user picture and the worked example share their
+   own budget of about 30)?
 7. Is every "everyone", "others", "this change" or "this way" replaced by the named features, targets or commands, the
    PR or the fix?
 8. Did the writing lose nothing? Every confirmed finding is an ask, a lower-ranked item in Evidence, or a stated gap.
@@ -284,7 +341,8 @@ Read the report from the top as Kohen would, and revise it until every answer is
 10. For a PR, in the final report: is the companion page there (or its one paragraph when nothing a user sees
     changes, or "no use-case page: review stopped"), linked from the user picture and the reviews index, with its index
     table right under the opening paragraph, and does every case show the command, the config, the variables as
-    printed, before, after, the exact warning or refusal and its "if the user does X" line? Does `usecases.py check`
+    printed, before, after, the exact warning or refusal and its "if the user does X" line (naming the ask it supports)?
+    Does every ask carry its `See it happen` line, or say why it has no case? Does `usecases.py check`
     pass on it, has its verifier rerun the sample and listed unused case folders, is every inferred statement rewritten
     or labelled, and are the cases reasoned from code named?
 
@@ -298,7 +356,8 @@ writes it, so a `kc-dev` round never waits on one.
 
 **When.** The case list is written after the verifier's last pass (step 5), and no capture agent starts before the first
 report is saved: step 4's rule that an agent may start on an interim input does not apply here. The page belongs to the
-final report (to the addendum when there was a first report): it never delays the first report and never replaces a
+final report (to the addendum when there was a first report), together with the `See it happen` lines of its asks: it
+never delays the first report and never replaces a
 finding. A situation on the page that no finding covers is a new finding: it goes to the verifier and into the report,
 not only onto the page. If nothing a user types, writes or sees changes, the page is one paragraph saying so, with the
 unchanged command run at base and head and its identical output; no padding. A review stopped by Kohen or on a wrong
@@ -318,7 +377,8 @@ diff, the consumer trace and the verified findings:
   it is usually run with;
 - the combinations the PR alters: two features in one run, a multi-step flow, an existing option meeting the new one
   (one that adds to what the system loads, and one that replaces it);
-- every verified finding a user can hit, so each ask has its case.
+- every verified finding a user can hit, so each ask has its case (its ID goes in the ask's `See it happen` line, step
+  6, and its "If…" line names the ask).
 
 **Each case shows**, in this order: the command the user runs, exactly; the config excerpt they write (every file the
 case needs, with its path, "same before and after" when it is), as it stands in the file or as patched in memory,
@@ -326,10 +386,11 @@ labelled so; the variables or inputs the system resolves, as it prints them; **B
 input, with its exit code (for a new option, the base's own refusal or load error, as captured, and the same command
 without the option); **After**, what the head prints, with its exit code; the exact warning or refusal text, in full;
 and one line: **if** the user does X, **then** Y happens (fails, warns, or silently does Z), **and doing** W **makes it
-work** (or "nothing changes for you").
+work** (or "nothing changes for you"), ending `(ask N)` when a finding of the report is this case.
 
 **Layout.** Frontmatter; one paragraph (the base and head shas, how the cases were run, that nothing was created,
-submitted or posted, and which cases were reasoned from code); the **index table** (Case · Situation · Before · After),
+submitted or posted, and which cases were reasoned from code); the **index table** (Case · Situation · Before · After ·
+Ask),
 with the legend of marks under it, each mark saying what happens to the user (a mark for "works", the intended effect
 seen, is distinct from one for "accepted", the input taken and the effect not seen); what the PR does, in a few plain
 rows; the terms the cases need; the cases, in parts by kind of user, the default path first; a summary table (kind of
