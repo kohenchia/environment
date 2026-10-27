@@ -3,7 +3,8 @@
 
     stella            attach to her session (Ctrl+Z drops back to the shell; she keeps running)
     stella start      start her in the background if she is not running, without attaching
-    stella restart    restart her in place (same job, same window) so she reloads her manual and routines
+    stella restart    start her again with an empty conversation (same window, new session id; her store keeps what she
+                      learned), so she reloads her manual and routines and knows today's date
 
 She is an ordinary background session of Claude's daemon, named `stella`, running the agent file
 ~/.claude/agents/stella.md in her store ~/.local/share/stella. Nothing else is needed for her to exist.
@@ -28,7 +29,13 @@ import time
 from pathlib import Path
 
 STORE = Path.home() / ".local/share/stella"
-START = "Session start: do the start-of-session steps in your manual."
+
+
+def start_prompt() -> str:
+    """Her first message: the date too, because a fresh conversation has no other way to know what day it is."""
+    return f"Session start (today is {time.strftime('%A %Y-%m-%d')}): do the start-of-session steps in your manual."
+
+
 FLAGS = ["--dangerously-skip-permissions"]
 CAP_AFTER = 86400  # the compaction cap waits until stella-check has written her PR tasks to files for this long
 
@@ -104,7 +111,7 @@ def row() -> dict | None:
 
 def start() -> str:
     STORE.mkdir(parents=True, exist_ok=True)
-    claude("--bg", "-n", "stella", "--agent", "stella", "--model", "sonnet", *FLAGS, "--", START, cwd=STORE)
+    claude("--bg", "-n", "stella", "--agent", "stella", "--model", "sonnet", *FLAGS, "--", start_prompt(), cwd=STORE)
     for _ in range(15):
         r = row()
         if r:
@@ -124,13 +131,14 @@ def sessions():
 
 
 def restart() -> str:
-    """Restart her in place (same job id, same flags, her window gets its attach back) so she reloads her manual."""
+    """Restart her with an empty conversation (same name, flags and window, a new job id; the old job is removed) so she
+    reloads her manual and learns what day it is. What she learned lives in her store, not in the conversation."""
     r = row()
     if not r:
         return start()
     ks = sessions()
     try:
-        problems = ks.restart_with_prompt("stella", START, lambda line: print(line, flush=True))
+        problems = ks.fork("stella", start_prompt(), lambda line: print(line, flush=True), fresh=True)
         job = ks.resolve("stella")
     except ks.Failure as e:
         sys.exit(f"stella: {e}")

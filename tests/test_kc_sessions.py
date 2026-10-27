@@ -304,6 +304,20 @@ class Fork(unittest.TestCase):
             self.assertNotIn("--session-id", bg)
             self.assertNotIn("--settings", bg)
 
+    def test_a_fresh_fork_starts_an_empty_conversation_in_the_same_window(self):
+        with World() as w:
+            old = w.job("stella", state="blocked", running=True, flags=["--dangerously-skip-permissions"], created="2026-10-19T00:00:00.000Z")
+            w.pane("p1", attach=old, tab_label="stella")
+            p = w.run("kc-sessions", "fork", "--fresh", "stella")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            world = w.load()
+            new = [j for j, v in world["jobs"].items() if v["name"] == "stella"]
+            self.assertEqual(len(new), 1, new)
+            self.assertNotEqual(new[0], old)
+            self.assertEqual(world["panes"]["p1"]["fg"], f"attach:{new[0]}")
+            bg = [c for c in w.claude_calls() if c.startswith("--bg")][0]
+            self.assertNotIn("--resume", bg)
+
     def test_a_busy_session_is_not_forked(self):
         with World() as w:
             old = w.job("review", state="working", tempo="active", running=True)

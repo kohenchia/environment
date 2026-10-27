@@ -104,6 +104,12 @@ class Job:
         return self.worker is not None
 
     @property
+    def live_id(self) -> str:
+        """The conversation the daemon resumes. `session_id` is the one the job was created with; after a /clear the live
+        conversation has another id (`resumeSessionId`), and resuming the old one brings back a stale conversation."""
+        return (self.raw or {}).get("resumeSessionId") or self.session_id
+
+    @property
     def busy(self) -> bool:
         """In the middle of work: a turn is running, or subagents / background commands are in flight. A session that only
         waits for a wake or a cron is idle between turns, and restarting it loses nothing."""
@@ -210,7 +216,7 @@ def resolve(target: str, jobs: list[Job] | None = None) -> Job:
     """One job for an id or a name, or a Failure that lists the candidates."""
     jobs = load_jobs() if jobs is None else jobs
     for j in jobs:
-        if target in (j.id, j.session_id):
+        if target in (j.id, j.session_id, j.live_id):
             return j
     named = candidates(target, jobs)
     if not named:
@@ -550,7 +556,7 @@ def respawn(targets: list[str], wait_idle: float, log) -> int:
         if not wait_restarted(target_id, was):
             # a stopped job may not answer `respawn`: a bare resume (no flags) continues the same job in place
             if target_id == job.id and not any(j.running for j in load_jobs() if j.id == job.id):  # never beside a live worker: that forks
-                run("claude", "--bg", "--resume", job.session_id, "--", "Resumed: carry on where you left off.", cwd=job.cwd or None)
+                run("claude", "--bg", "--resume", job.live_id, "--", "Resumed: carry on where you left off.", cwd=job.cwd or None)
             if not wait_restarted(target_id, was):
                 log(f"{job.name} ({job.id}): no new worker seen after the respawn")
                 problems += 1
@@ -600,10 +606,10 @@ def restart_with_prompt(target: str, prompt: str, log) -> int:
         # the job is "stopped" a moment before its process is gone, and the daemon starts a COPY of a session that
         # still looks open: wait for the process to go
         deadline = time.time() + scaled(20)
-        while time.time() < deadline and session_open(job.session_id):
+        while time.time() < deadline and session_open(job.live_id):
             time.sleep(poll())
         time.sleep(scaled(1))
-    p = run("claude", "--bg", "--resume", job.session_id, "--", prompt, cwd=job.cwd)
+    p = run("claude", "--bg", "--resume", job.live_id, "--", prompt, cwd=job.cwd)
     if p.returncode != 0:
         raise Failure(f"claude --bg --resume failed: {(p.stderr or p.stdout).strip()[-200:]}")
     said = f"{p.stdout}\n{p.stderr}"
@@ -736,13 +742,15 @@ def retire(job_id: str, log, *, remove: bool, grown_since: int | None = None) ->
     return True
 
 
-def fork(target: str, prompt: str, log) -> int:
-    """Continue a conversation in bypass-permissions mode. The id has to change; nothing else may."""
+def fork(target: str, prompt: str, log, *, fresh: bool = False) -> int:
+    """Continue a conversation in bypass-permissions mode. The id has to change; nothing else may.
+    With `fresh` the new session starts an empty conversation (same name, flags, directory and windows) instead of
+    continuing the old one, and the old job is removed whatever it grew."""
     jobs = load_jobs()
     old = resolve(target, jobs)
     if old.busy:
         raise Failure(f"{old.name} is busy (state {old.state}, in flight {old.in_flight or 'none'}); try again when it is idle")
-    if not old.session_id or not old.cwd or not Path(old.cwd).is_dir():
+    if not old.live_id or not old.cwd or not Path(old.cwd).is_dir():
         raise Failure(f"{old.name} has no conversation to continue")
     try:
         before = attachments()
@@ -752,7 +760,7 @@ def fork(target: str, prompt: str, log) -> int:
     known = {j.id for j in jobs}
     size = transcript_turns(old)
     flags = ["--dangerously-skip-permissions", *copied_flags(old)]
-    p = run("claude", "--bg", "--resume", old.session_id, "-n", old.name, *flags, "--", prompt, cwd=old.cwd)
+    p = run("claude", "--bg", *([] if fresh else ["--resume", old.live_id]), "-n", old.name, *flags, "--", prompt, cwd=old.cwd)
     if p.returncode != 0:
         raise Failure(f"claude --bg --resume failed: {(p.stderr or p.stdout).strip()[-200:]}")
     new = None
@@ -764,8 +772,8 @@ def fork(target: str, prompt: str, log) -> int:
     if new is None:
         raise Failure(f"the continuation of {old.name} did not appear; the old session is untouched")
     lineage_set(old.id, new.id)
-    log(f"{old.name}: continued as {new.id} (was {old.id}, mode {old.mode} -> bypassPermissions)")
-    retire(old.id, log, remove=True, grown_since=size)
+    log(f"{old.name}: " + ("started afresh" if fresh else "continued") + f" as {new.id} (was {old.id}, mode {old.mode} -> bypassPermissions)")
+    retire(old.id, log, remove=True, grown_since=None if fresh else size)
     return restore_ledger(log)
 
 
@@ -908,6 +916,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("targets", nargs="+")
     r.add_argument("--wait-idle", type=float, default=0.0, metavar="SECONDS")
     f = sub.add_parser("fork")
+    f.add_argument("--fresh", action="store_true", help="start an empty conversation instead of continuing the old one")
     f.add_argument("target")
     f.add_argument("--prompt", default="Continue where you left off. The session was restarted in bypass-permissions mode.")
     t = sub.add_parser("retire")
@@ -944,7 +953,7 @@ def main(argv: list[str] | None = None) -> int:
         if a.cmd == "restart":
             return 1 if restart_with_prompt(a.target, a.prompt, say) else 0
         if a.cmd == "fork":
-            return 1 if fork(a.target, a.prompt, say) else 0
+            return 1 if fork(a.target, a.prompt, say, fresh=a.fresh) else 0
         if a.cmd == "retire":
             return 0 if retire(a.id, say, remove=a.rm) else 1
         if a.cmd == "check":
