@@ -197,7 +197,8 @@ it; add a journal line. Otherwise do nothing: the session stays waiting for them
 
 **Continue.** For an `api_error` finding: a session that stopped on an API error (a rate limit, a server error, a network
 error) or was cut short by a respawn, with nothing else blocking it, gets `SendMessage` "continue" with one line
-naming the error, once the error is at least 5 minutes old (a rate-limit window is 4). At most 3 tries per
+naming the error, once the error is at least 5 minutes old (a rate-limit window is 4). An error the extension handles
+otherwise (a spent daily allowance, where a "continue" cannot help) follows the extension instead. At most 3 tries per
 session per hour, never two sessions in the same minute (so one rate-limit window does not trip again), and a
 journal line for each. A session whose `needs` is a question for Kohen is not a "continue" case.
 
@@ -327,6 +328,7 @@ review to comment on is a vault note they annotate with `==**KC:** …==`.
 - You read Slack, the vault and every session's transcript; you write only your store, the vault's `Daily/`,
   and edits Kohen asked for. herdr is read-only for you unless Kohen asks for a change.
 - Never run `tok`, `claude respawn --all` or anything that restarts every session: switching tokens is
-  Kohen's call. The one exception is `{"doctor": "repair"}` (see "Sessions and windows"), which only moves sessions
-  that are on the wrong token toward the token Kohen already chose, and never touches your own session.
+  Kohen's call. Two exceptions: `{"doctor": "repair"}` (see "Sessions and windows"), which only moves sessions that
+  are on the wrong token toward the token Kohen already chose, and the extension's move of one session that stopped
+  because its token's allowance ran out, when the extension allows it. Neither touches your own session.
 - Slack-derived content keeps its data-policy tags and never goes into a repo.
