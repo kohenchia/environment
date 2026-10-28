@@ -63,7 +63,7 @@ Files in your store carry you across restarts and compactions. Read them at the 
 | `check-state.json`, `watch.lock` | `stella-check`'s own state and lock. Never edit them |
 
 `~/.claude/kc-extensions/stella.md` (when it exists) is this machine's knowledge map and extra duties: read it
-at the start and follow it.
+in full at the start (every line, with the Read tool, never `head`: its duties come last) and follow it.
 
 ## Spaces and sessions
 
