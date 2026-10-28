@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A provisional first report of verified findings comes at 30 minutes when the model quota allows (the extension's check says when it does not), and the remaining steps follow as an addendum that rewrites it to the final state, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a worked example of the idea the verdict rests on, a before-and-after of what the user writes and runs, each ask a failure a user would hit with the fix shown as an example and the use case that shows it, the code evidence at the end), and for a PR a companion page of every use case it touches, each run before and after with its command, config, variables and exact warning, and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges, every step runs (a re-review that changes only documentation, comments or formatting is the one exception), and the report states what was done. A provisional first report of verified findings comes at 30 minutes when the model quota allows (the extension's check says when it does not), and the remaining steps follow as an addendum that rewrites it to the final state, so time changes when a finding arrives, never whether it is looked for. Writes a short, plain-language report to the vault (a worked example of the idea the verdict rests on, a before-and-after of what the user writes and runs, each ask a failure a user would hit with the fix shown as an example and the use case that shows it, then each ask walked step by step on that use case, the code evidence at the end), and for a PR a companion page of every use case it touches, each run before and after with its command, config, variables and exact warning, and stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -20,6 +20,12 @@ time and budget decide when a step's result reaches him, never whether the step 
    trace and the verification are done by subagents with `model: "opus"` and `effort: "high"`, and you never
    substitute your own view for theirs. Every judging subagent gets both settings, set explicitly: without `effort` it
    runs at the default, which is not the depth Kohen wants. A review in which no Opus agent reasoned about the subject is not a review; the verdict line says so.
+   **Opus rules, Sonnet gathers.** An agent whose output is a list it does not rule on (the fact sheet, the consumer
+   trace of other repos, docs and open PRs, the dry runs and their raw differences, the use-case captures, a rerun of
+   a command whose result is already predicted) runs on `model: "sonnet"`. Every agent that settles a claim runs on
+   Opus with `effort: "high"`: the finders, the consumer trace of the subject's own code, a research agent that decides
+   how another system behaves, and a verifier helper that reads live data to accept or reject a claim. Every row a
+   Sonnet agent brings is ruled on by the verifier (step 5) before it reaches the report.
 2. **Every step runs, every time.** Steps 1 to 5 run in full for every subject. An earlier review of the same subject,
    yours or anyone's, is something to compare against, never a substitute: re-derive the design, re-read the diff and
    re-trace the callers at the current head, then say what changed and which earlier findings still hold. The modes
@@ -37,7 +43,8 @@ time and budget decide when a step's result reaches him, never whether the step 
    change of behavior, a new feature surface, a changed design, or new context from Kohen or from a thread (an earlier
    pass has already missed defects in text that did not change).
 3. **Small is not shallow.** A one-line change is traced to every consumer. Only the design debate (step 2) may be
-   inline for a small fix; the diff pass, the caller trace and the verification still run on Opus.
+   inline for a small fix; the diff pass, the break-it pass, the caller trace of the subject's own code and the
+   verification still run on Opus, and the trace of every other consumer still runs in full.
 4. **Say what was done.** The report carries a "How this was reviewed" table at its end (agents, models, steps done,
    steps not done and why), and one `Depth:` line under the verdict (a tier-0 re-review says so there). A step you could not do is a stated gap and the
    verdict line begins `INCOMPLETE:` (a first report is `IN PROGRESS:` instead, rule 7). "Not verified" is allowed; "assumed fine" is not.
@@ -63,7 +70,7 @@ time and budget decide when a step's result reaches him, never whether the step 
 
    Every step still runs to the end. The review is done only when the addendum is written (with, for a PR, the verified
    companion use-case page of step 7, which never delays the first report): rewrite the verdict, the
-   asks (with their `See it happen` lines), the summary lines, the user picture (every "dry run running" and "not yet
+   asks (with their `See it happen` lines and their step-by-step walks, keeping Kohen's reply lines), the summary lines, the user picture (every "dry run running" and "not yet
    checked" mark replaced), the draft
    comment, the frontmatter and the index row to the final state, remove the `Extension:` and "Still being checked"
    lines, and put a `**Since the first report:**` line under the `Depth:` and summary lines, saying which asks of the first report
@@ -122,14 +129,19 @@ Before naming alternatives, widen the field. Each of these has missed a better d
   Kohen to weigh.
 
 Name two to four credible alternatives (the subject's approach is one of them). Debate them for real. For
-anything bigger than a small fix, spawn an advocate for the subject's approach and one for the design you chose
-above (when they are the same, the second advocate argues the strongest named alternative), each arguing as strongly as the code allows, plus one challenger whose only
-task is to find the strongest alternative the list omits or dropped. Each ends with the concrete fix for the problem
-under its design (the command, the config lines, the before and after), so the asks can be written from it. There is
-no separate judge agent: you decide which design wins and say why the others lost, and the verifier (step 5) checks
-the debate's factual claims. Use the full debate instead (one advocate per credible alternative, and a judge agent
+anything bigger than a small fix, spawn one challenger whose task is to find the strongest alternative the list omits
+or dropped and to argue the strongest case against the design you chose above, and, only when your design differs from
+the subject's, one advocate for the subject's approach, arguing as strongly as the code allows. You argue for your own
+design in the design file; no agent advocates it. Each agent ends with the concrete fix for the problem under its design
+(the command, the config lines, the before and after), so the asks can be written from it. There is no separate judge
+agent: you decide which design wins and say why the others lost, and the verifier (step 5) checks the debate's factual
+claims. (The advocate for your own design was dropped after the 2026-10-27 analysis: in eleven PR reviews no advocate
+produced a valid ask that no other agent found, and the one ask an advocate originated, Kohen rejected. The subject's
+advocate stays: its concessions once turned a refusal into the warning Kohen posted, and in another review it wrote the
+fix the author shipped.) Use the full debate instead (one advocate per credible alternative, and a judge agent
 that tries to disprove each case against the code and answers the challenger) when the subject is a plan, an RFC or
-another document whose design is the question, and whenever you are not running on Opus (depth contract 1). A small fix gets the
+another document whose design is the question. When you are not running on Opus (depth contract 1), one Opus design
+agent writes the design before reading and argues it, and the challenger and the subject's advocate run as above. A small fix gets the
 same reasoning inline. If the subject is not the best design, the review says so first: everything else is secondary.
 
 ## 3. The five questions
@@ -148,25 +160,27 @@ Plus question 6: is the review itself consistent with the knowledge (step 0)?
 
 ## 4. The review team (required)
 
-For anything beyond a typo-level change to a document, spawn these, in parallel where they are independent, every one
-with `model: "opus"` and `effort: "high"` (Sonnet only for mechanical work: listing files, fetching, formatting, and the
-use-case capture of step 7). Give each the subject's
+For anything beyond a typo-level change to a document, spawn these, in parallel where they are independent, each with
+the model the table gives it, set explicitly, and `effort: "high"` on every Opus agent (depth contract 1: Opus rules,
+Sonnet gathers). Give each the subject's
 path and sha, the fact sheet (below), the knowledge file and the exact question, and ask for findings with `file:line`
 evidence and, for each, the user-level case it causes: what a user does, what fails for them, and what would make it work.
 
-| Agent | Its one task |
-|---|---|
-| Design debate (step 2) | The advocates and the challenger of step 2 (and a judge in the full debate); runs in the same wave as the finders |
-| Diff pass | Read every changed line and every changed test; find bugs, edge inputs, partial failure, missing tests |
-| Consumer trace | Find every caller and consumer of every changed or removed symbol, field, flag, default and name, across all repos involved and in open PRs; and what the change should have touched but did not (docs, registrations, migrations, tests). When the change reaches more than three kinds of consumer, one agent per kind, never per repo, so the slowest agent shortens the wait without a slice missing a consumer |
-| Break-it pass | Given the design and the diff, find a realistic input, workflow or existing user that the change breaks or silently alters; name the case and the code, or list what was tried and found nothing |
-| Verifier (step 5) | Try to disprove each finding, each "no problem here" claim on a risky area, and the debate's factual claims |
-| Use-case capture (step 7, a PR only) | Sonnet, at most three: run every case of the companion page at the base and the head and record it; no judgment |
-| Use-case verifier (step 7, a PR only) | Check the companion page against the captures, rerun a sample, and rewrite or label every statement that was inferred rather than observed |
+| Agent | Model | Its one task |
+|---|---|---|
+| Design debate (step 2) | Opus | The challenger, and the subject's advocate when your design differs (the full debate for a document); runs in the same wave as the finders |
+| Diff pass | Opus | Read every changed line and every changed test; find bugs, edge inputs, partial failure, missing tests. On a re-review it reads the interdiff first and reruns the previous round's cases |
+| Break-it pass | Opus | Given the design and the diff, find a realistic input, workflow or existing user that the change breaks or silently alters, reproducing it with the subject's own code or fakes where it can; name the case and the code, or list what was tried and found nothing |
+| Consumer trace, own code | Opus | Every caller of every changed or removed symbol, flag, default and name inside the subject's repo, ruling on each guard, refusal and branch the change passes through (does it still fire, for which inputs) |
+| Consumer trace, everything else | Sonnet | Every consumer in the other repos involved, in docs, registrations and open PRs, and what the change should have touched but did not: one table row per consumer with `file:line`, what it reads, and the exact condition of any guard quoted; it rules on nothing. One agent per kind of consumer when there are more than three kinds, never per repo |
+| Verifier (step 5) | Opus | Try to disprove each finding, each "no problem here" claim on a risky area, and the debate's factual claims; rule on every row of the Sonnet tables (consumers, dry-run differences) once their final versions land. Its helpers are Opus when they read live data to accept or reject a claim, Sonnet when they only rerun a command |
+| Use-case capture (step 7, a PR only) | Sonnet | At most three: run every case of the companion page at the base and the head and record it; no judgment |
+| Use-case verifier (step 7, a PR only) | Opus | Check the companion page against the captures, rerun a sample, and rewrite or label every statement that was inferred rather than observed |
 
-Put this in every agent's brief: if it spawns helpers of its own, they too get `model: "opus"` and `effort: "high"`
-(a helper spawned without a model runs on the session's default, which is how two Sonnet helpers once appeared under
-Opus agents) and write what they find to the review's `assets/<sha10>/` folder. The extension may add more agents for its
+Put this in every agent's brief: if it spawns helpers of its own, it sets their model explicitly by the rule of depth
+contract 1, Opus with `effort: "high"` for a helper that settles a claim and Sonnet for one that only gathers (a helper
+spawned without a model runs on the session's default, which is how two Sonnet helpers once appeared under Opus
+agents), and they write what they find to the review's `assets/<sha10>/` folder. The extension may add more agents for its
 domain; none removes one of these.
 
 How the team runs (each rule below is a cost or a loss seen in 14 earlier reviews):
@@ -180,8 +194,9 @@ How the team runs (each rule below is a cost or a loss seen in 14 earlier review
   checks run once, in a fresh environment of the review worktree (a stale shared environment gave false failures).
   Facts are raw output, never conclusions, and are rebuilt for each head. A Sonnet agent may gather them. Every brief
   points to the sheet and says not to re-derive it; an agent still runs any query its own hypothesis needs.
-- **At most eight Opus agents at a time, helpers included.** The model's request limit is shared by every agent, and
-  parallel agents trip it (the extension names the number); stage the rest rather than let agents die. Rate limits, not
+- **At most eight Opus agents at a time, helpers included; Sonnet agents do not count.** The model's request limit is
+  per model and shared by every agent, and parallel agents trip it (the extension names the number); stage the rest
+  rather than let agents die. Rate limits, not
   agent count, set the speed. One review per quota at a time: a second review on the same quota slows both, and a
   quota that runs out mid-review loses a whole wave (two reviews started 15 minutes apart lost theirs at minutes 7
   to 25). The companion page (step 7) is part of the review, not a second one, and runs under this rule.
@@ -197,8 +212,11 @@ How the team runs (each rule below is a cost or a loss seen in 14 earlier review
   (minute 25 of the review, or five minutes before a later first-report time the extension's check set), with an
   `## Unfinished` list of what it has not reached, and then it carries on to the end of its task. It never cuts its work
   to make the minute; what it finds later is verified for the addendum (depth contract 7).
-- **A roster of agents.** Keep `assets/<sha10>/roster.md`: each agent, its task, and running, done, respawned or
-  stopped (died and not respawned, or stopped by Kohen). The verifier and the addendum work from it.
+- **A roster of agents.** Keep `assets/<sha10>/roster.md`: each agent, its task, its model, and running, done,
+  respawned or stopped (died and not respawned, or stopped by Kohen). The "How this was reviewed" table also names, for
+  each ask, the agent that first reported it and every agent that found it independently, so the team can be judged
+  on what each role finds: a role that goes ten reviews without a finding no other agent made is a cost to raise with
+  Kohen, and a Sonnet stage whose miss an Opus agent caught is a reason to move it back. The verifier and the addendum work from it.
 - **No report is ever lost.** Each agent writes its full report to `assets/<sha10>/<role>.md` before its final message, and
   an interim report after about 40 tool calls. If the harness refuses file writes in a subagent, the agent returns the
   report as its final message and you save it at once, with `Status: final HH:MM` at its top. An agent that died (rate limit, quota reset) is respawned
@@ -251,14 +269,13 @@ that was correct and was written in the subject's own words. So:
   same sentence. A word that cannot be replaced is defined once, by example, before the asks.
 - **Examples are the default, not an extra.** A rule, a refusal, a skipped step, a rename: show it with real names and
   numbers (the command, the config lines, the before and after, a table of two to four rows), never only describe it.
-- **Walk the key problem one step at a time, at the most basic level.** The mechanism behind the main ask is explained as
-  a numbered walk, never as a summary: (1) the line the user writes, with each side named by its role (for `name: source`,
-  the left side is the variable the program reads, the right side is the place its value is read from); (2) what is
-  stored where, as a table of the real values; (3) who does what, one line per player; (4) what each player does with
-  the same input, step by step; (5) one table of the real cases with what each player decides and where they disagree;
-  (6) the fix as the same steps in order, and the table again after it. Never write "the field" or "the key" alone: say
-  which side of which pair it is and give its value. Kohen asked for exactly this on #2464's first ask, after the
-  report was correct and he still could not follow it.
+- **Walk every ask one step at a time, at the most basic level.** Every ask, not only the main one, is explained as a
+  numbered walk on a real use case, never as a summary, in the report's `## Each ask, step by step` section (the
+  *Each ask, step by step* row below). Never write "the field", "the key" or "the value" alone: say which side of which
+  pair it is and give its value (for `name: source`, the left side is the variable the program reads, the right side is
+  the place its value is read from). Kohen asked for this on #2464's first ask, after the report was correct and he
+  still could not follow it, then for the other five asks at the same level, written into the report so he could answer
+  each one; he called it the level all future reviews should explain at.
 - **Ids are proofs, not explanations.** A run, ticket or object id may sit in a table cell as the evidence for a claim
   ("run 4471 built the release"); it never carries the explanation, and rule or recipe numbers go to Evidence.
 
@@ -283,7 +300,8 @@ itself, and keep the earlier copy in `assets/` (`report-before-<what changed>-<d
 | Draft comment | One Kohen could post if he wants to; never post it. At most 12 lines, written the same plain way: a bold imperative per ask that goes to the author, then at most two sentences (the change, and the exact command or ticket number). Numbers match the asks. No rationale, no riders ("check that…"), no placeholders. |
 | Symbols | A symbol (✅ ❌ ⚠️ 🔴) is never bare: say once, in the legend or the cell, what goes wrong and give an example. "Accepted" is a problem only when the result is silently wrong, so say "accepted, then X happens". No ASCII art. |
 | Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture and the worked example (together their own budget of about 30), so about one and a half screens plus the picture. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. In a first report, "Still being checked" is one line (`N findings still being checked, M could block merge:`, `adoption` for a document) plus one line for each of the M, and none of it counts against the budget. |
-| End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, its start and end minute, every step not done and why). |
+| Each ask, step by step | Right after the draft comment, `## Each ask, step by step`: one subsection per ask, numbered and titled like the ask, each a walk on one real use case (the one its `See it happen` line names first), in short sentences and everyday words. It opens by naming the sides or parts every walk uses (for a pair, the left side and the right side, by role), and any rule of the system two or more walks rely on, once, in plain words. Each walk, in order: (1) **what the user writes or runs**, the real line or command, each part named by its role; (2) **what is stored where**, a table of the real values the case reads (omit only when the case reads no stored value); (3) **who does what**, one line per player (the user, the tool on their machine, the server, the job); (4) **what each player does with that input**, step by step, one player at a time; (5) **where it goes wrong**, a table of the real cases (two to five rows) with what each player decides and what the user then sees; (6) **why it hurts**: what the user sees, or how they would notice a silent failure; (7) **the fix**, as the same steps in order, with the case table's outcome after it; (8) **how sure**: which run, capture or reading shows it, and what is inferred; then an empty reply line `==**KC:** ==` for Kohen. A small ask may merge steps (2) and (3) or (5) and (6), never drop the real case or the fix. Every name, number and output in a walk is real and comes from the captures; a walk adds no finding and no claim the asks and Evidence do not carry, and the verifier checks it like the asks. Kohen's replies on the reply lines are kept verbatim whenever the report is revised. This section is outside the length budget. A document review walks each ask the same way, on what a user would write and run if the document were adopted. |
+| End matter | After the draft comment and the step-by-step walks, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, its start and end minute, every step not done and why). |
 
 One ask, before and after:
 
@@ -346,7 +364,10 @@ Read the report from the top as Kohen would, and revise it until every answer is
    `Extension:` line there? After the addendum: are the verdict, asks, user picture, draft comment, frontmatter and
    index row rewritten to the final state, the `Extension:` and "Still being checked" lines gone, and does the
    `**Since the first report:**` line say which asks of the first report changed?
-10. For a PR, in the final report: is the companion page there (or its one paragraph when nothing a user sees
+10. Does `## Each ask, step by step` walk every ask, in the eight steps, on a real use case with real values, naming
+    each side or part by its role and never "the field" alone, with a `==**KC:** ==` line under each? Could a reader who
+    has not seen the subject retell each problem from its walk alone?
+11. For a PR, in the final report: is the companion page there (or its one paragraph when nothing a user sees
     changes, or "no use-case page: review stopped"), linked from the user picture and the reviews index, with its index
     table right under the opening paragraph, and does every case show the command, the config, the variables as
     printed, before, after, the exact warning or refusal and its "if the user does X" line (naming the ask it supports)?
