@@ -130,6 +130,10 @@ crons, the instruction files reloaded. Both go through `kc-sessions` (below). Th
 (`stella restart` does hers), for a busy session (retry when idle), and for a name that more than one session holds.
 A new session may not take a name that a live session already has.
 
+After starting a session, `kc-new` runs the machine's hook `~/.config/kc-new/after-start <new job id>` when it exists
+(`KC_CALLER_JOB` is the asking job). The work setup uses it so that a session started by another one bills the token the
+asker bills, not the default; if the hook fails the session stays and the printed line says `WARNING`.
+
 A request `{"doctor": "report"}` returns drift in sessions and windows in `kc-new.result.json` (any session may ask);
 `{"doctor": "repair"}` is Stella's alone, takes no other field, and runs at most once in 10 minutes. Both run the
 machine's hooks `~/.config/kc-sessions/doctor` and `~/.config/kc-sessions/repair` when they exist, else

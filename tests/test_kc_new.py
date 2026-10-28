@@ -96,6 +96,30 @@ esac'''
         self.assertNotEqual(p.returncode, 0)
         self.assertEqual(self.calls(), [])
 
+    def test_the_machines_after_start_hook_gets_the_new_job_and_the_caller(self):
+        hooks = self.home / ".config/kc-new"
+        hooks.mkdir(parents=True)
+        hook = hooks / "after-start"
+        hook.write_text(f'#!/bin/sh\necho "hook $1 $KC_CALLER_JOB" >> {self.log}\n')
+        hook.chmod(0o755)
+        self.request(name="child")
+        p = self.run_helper()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("hook bbbb2222 aaaa1111", self.calls())
+
+    def test_a_failing_after_start_hook_leaves_the_session_and_says_so(self):
+        hooks = self.home / ".config/kc-new"
+        hooks.mkdir(parents=True)
+        hook = hooks / "after-start"
+        hook.write_text("#!/bin/sh\necho boom >&2; exit 1\n")
+        hook.chmod(0o755)
+        self.request(name="child")
+        p = self.run_helper()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("started session child", p.stdout)
+        self.assertIn("WARNING: the after-start hook failed: boom", p.stdout)
+        self.assertTrue(any(c.startswith("herdr") for c in self.calls()))
+
     def test_an_existing_space_gets_a_window(self):
         self.request(space="existing", name="second-task")
         p = self.run_helper()

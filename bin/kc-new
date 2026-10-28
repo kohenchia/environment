@@ -41,6 +41,10 @@ they exist (the work setup installs them), else `kc-sessions check` / `kc-sessio
 
 A new session may not take a name that a live session already has.
 
+After it starts a session, kc-new runs the machine's hook `~/.config/kc-new/after-start <new job id>` when it exists
+(environment KC_CALLER_JOB = the job that asked). The work setup uses it so that a session started by another one bills
+the token the asker bills. A hook that fails does not undo the session: the line kc-new prints says so.
+
 Standard library only.
 """
 
@@ -152,6 +156,21 @@ def start_session(req: dict) -> str:
             return row["id"]
         time.sleep(1)
     raise RuntimeError(f"session {req['name']} did not show up in `claude agents`")
+
+
+def after_start(request: Path, sid: str) -> str:
+    """Run the machine's after-start hook for the new session; returns a warning, or "" when there is none."""
+    hook = home() / ".config/kc-new/after-start"
+    if not (hook.is_file() and os.access(hook, os.X_OK)):
+        return ""
+    try:
+        p = subprocess.run([str(hook), sid], capture_output=True, text=True, timeout=300,
+                           env=dict(os.environ, KC_CALLER_JOB=caller_job(request)), start_new_session=True)
+    except subprocess.TimeoutExpired:
+        return "the after-start hook timed out"
+    if p.returncode != 0:
+        return f"the after-start hook failed: {(p.stderr or p.stdout).strip()[-200:]}"
+    return ""
 
 
 def find(x, key: str):
@@ -329,13 +348,15 @@ def handle(request: Path) -> tuple[bool, str]:
     except (ValueError, RuntimeError) as e:
         result.write_text(json.dumps({"ok": False, "error": str(e)}))
         return False, f"kc-new: {e}"
+    warning = after_start(request, sid)
     try:
         place(req, sid)
     except RuntimeError as e:
         result.write_text(json.dumps({"ok": False, "id": sid, "error": str(e)}))
         return False, f"kc-new: session {req['name']} ({sid}) started, but no window: {e}. Attach with: claude attach {sid}"
-    result.write_text(json.dumps({"ok": True, "id": sid, "name": req["name"], "space": req["space"]}))
-    return True, f"kc-new: started session {req['name']} ({sid}) in space {req['space']}"
+    result.write_text(json.dumps({"ok": not warning, "id": sid, "name": req["name"], "space": req["space"],
+                                  **({"warning": warning} if warning else {})}))
+    return not warning, f"kc-new: started session {req['name']} ({sid}) in space {req['space']}" + (f"; WARNING: {warning}" if warning else "")
 
 
 def pending() -> list[Path]:
