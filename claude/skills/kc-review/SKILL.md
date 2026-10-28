@@ -251,6 +251,14 @@ that was correct and was written in the subject's own words. So:
   same sentence. A word that cannot be replaced is defined once, by example, before the asks.
 - **Examples are the default, not an extra.** A rule, a refusal, a skipped step, a rename: show it with real names and
   numbers (the command, the config lines, the before and after, a table of two to four rows), never only describe it.
+- **Walk the key problem one step at a time, at the most basic level.** The mechanism behind the main ask is explained as
+  a numbered walk, never as a summary: (1) the line the user writes, with each side named by its role (for `name: source`,
+  the left side is the variable the program reads, the right side is the place its value is read from); (2) what is
+  stored where, as a table of the real values; (3) who does what, one line per player; (4) what each player does with
+  the same input, step by step; (5) one table of the real cases with what each player decides and where they disagree;
+  (6) the fix as the same steps in order, and the table again after it. Never write "the field" or "the key" alone: say
+  which side of which pair it is and give its value. Kohen asked for exactly this on #2464's first ask, after the
+  report was correct and he still could not follow it.
 - **Ids are proofs, not explanations.** A run, ticket or object id may sit in a table cell as the evidence for a claim
   ("run 4471 built the release"); it never carries the explanation, and rule or recipe numbers go to Evidence.
 
