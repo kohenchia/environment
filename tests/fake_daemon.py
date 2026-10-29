@@ -32,11 +32,26 @@ HOME = Path(os.environ["HOME"])
 SHELL_PROMPT = "kohen@mac ~ %"
 
 
+def adopt_renames(w: dict) -> None:
+    """A rename made outside the fake (a tool writing state.json with nameSource "user", as the agents view does) is the
+    job's name from then on; render() would otherwise write the old one back."""
+    for jid, j in w["jobs"].items():
+        try:
+            st = json.loads((HOME / ".claude/jobs" / jid / "state.json").read_text())
+        except (OSError, ValueError):
+            continue
+        if st.get("nameSource") == "user" and st.get("name") and st["name"] != j["name"]:
+            j["name"], j["name_source"] = st["name"], "user"
+
+
 def load() -> dict:
-    return json.loads(WORLD.read_text())
+    w = json.loads(WORLD.read_text())
+    adopt_renames(w)
+    return w
 
 
 def save(w: dict) -> None:
+    adopt_renames(w)
     WORLD.write_text(json.dumps(w, indent=1))
     render(w)
 
@@ -59,7 +74,7 @@ def render(w: dict) -> None:
         (d / "state.json").write_text(json.dumps({
             "state": j["state"], "tempo": j.get("tempo", "idle"), "name": j["name"], "sessionId": j["sessionId"],
             "resumeSessionId": j["sessionId"], "daemonShort": jid, "template": j.get("template", "bg"),
-            "respawnFlags": json.dumps(j["flags"]), "cwd": j["cwd"], "createdAt": j["createdAt"],
+            "respawnFlags": json.dumps(j["flags"]), **({"nameSource": j["name_source"]} if j.get("name_source") else {}), "cwd": j["cwd"], "createdAt": j["createdAt"],
             "inFlight": j.get("inFlight", {"tasks": 0, "queued": 0, "kinds": []}),
             "linkScanPath": j["transcript"], "backend": "daemon"}))
     for d in jobs.iterdir() if jobs.exists() else []:
@@ -279,6 +294,34 @@ def herdr(argv: list[str]) -> int:
             p["screen"].append(text)
         save(w)
         return 0
+    if a == ["tab", "rename"]:
+        w["tabs"][argv[2]]["label"] = argv[3]
+        save(w)
+        return reply({"type": "tab_info"})
+    if a == ["pane", "move"]:
+        pid, p = argv[2], w["panes"][argv[2]]
+        label = argv[argv.index("--label") + 1] if "--label" in argv else pid
+        if "--new-tab" in argv:
+            ws = argv[argv.index("--workspace") + 1]
+        else:  # --new-workspace
+            ws = f"w{len(w['workspaces']) + 1}"
+            while ws in w["workspaces"]:
+                ws += "x"
+            w["workspaces"][ws] = {"label": label}
+            label = argv[argv.index("--tab-label") + 1] if "--tab-label" in argv else label
+        old_tab = p["tab"]
+        tab = f"{ws}:t{len(w['tabs']) + 1}"
+        while tab in w["tabs"]:
+            tab += "x"
+        w["tabs"][tab] = {"ws": ws, "label": label}
+        p["tab"] = tab
+        new_pid = f"{ws}:p{len(w['panes']) + 1}"  # a pane moved into another workspace gets a new id
+        w["panes"][new_pid] = w["panes"].pop(pid)
+        if not any(q["tab"] == old_tab for q in w["panes"].values()):
+            w["tabs"].pop(old_tab)
+        save(w)
+        return reply({"type": "pane_move", "move_result": {"pane": {"pane_id": new_pid, "tab_id": tab, "workspace_id": ws},
+                                                           "previous_pane_id": pid}})
     if a == ["agent", "list"]:
         agents = []
         for k, p in w["panes"].items():

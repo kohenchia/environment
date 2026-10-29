@@ -39,6 +39,17 @@ A third kind reports on, or repairs, the state of the sessions and windows:
 Report and repair run the machine's hooks `~/.config/kc-sessions/doctor` and `~/.config/kc-sessions/repair` when
 they exist (the work setup installs them), else `kc-sessions check` / `kc-sessions repair`.
 
+A fourth and a fifth kind move a session's window and rename a session, neither restarting it:
+
+    $CLAUDE_JOB_DIR/tmp/kc-new.json     {"move": "2332-include-consistency", "space": "reports"}
+                                        {"rename": "2332-include-consistency", "to": "include-consistency"}
+
+`move` puts the window that runs `claude attach <id>` in the space as a new tab (the space is made when none has that
+name); it refuses a name that more than one session holds and a session with no window or with more than one. `rename`
+changes the session's name the way the agents view does (its state.json) and the title of its window when that shows the
+old name; the new name is lower-case letters, digits and dashes. It refuses `stella`, a busy session (retry when it is
+idle), a name that more than one session holds, and a name a live session already has. Neither takes other fields.
+
 A new session may not take a name that a live session already has.
 
 After it starts a session, kc-new runs the machine's hook `~/.config/kc-new/after-start <new job id>` when it exists
@@ -131,11 +142,11 @@ def run(*cmd: str, cwd: str | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=60)
 
 
-def refuse_live_name(name: str) -> None:
+def refuse_live_name(name: str, advice: str = "restart it with a restart request or pick another name") -> None:
     ks = sessions()
     live = [j for j in ks.load_jobs() if j.name == name and (j.running or j.state in ("working", "blocked"))]
     if live:
-        raise ValueError(f"a session called {name} already exists ({live[0].id}); restart it with a restart request or pick another name")
+        raise ValueError(f"a session called {name} already exists ({live[0].id}); {advice}")
 
 
 def start_session(req: dict) -> str:
@@ -279,6 +290,98 @@ def restart_session(req: dict) -> tuple[bool, str, dict]:
     return not problems, line, info
 
 
+SESSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$")
+
+
+def resolve_target(field: str, value) -> object:
+    """The one job a request names, or ValueError (no such session, or a name that more than one session holds)."""
+    ks = sessions()
+    if not isinstance(value, str) or not SESSION.match(value):
+        raise ValueError(f"{field} must be the name of a session")
+    try:
+        return ks.resolve(value)
+    except ks.Failure as e:
+        raise ValueError(str(e))
+
+
+def attached_panes(job_id: str) -> list[str]:
+    """Every herdr pane that runs `claude attach <job_id>`."""
+    ks = sessions()
+    try:
+        return [pane for pane, (job, _) in ks.attachments().items() if job == job_id]
+    except ks.Failure as e:
+        raise RuntimeError(str(e))
+
+
+def move_session(req: dict) -> tuple[bool, str, dict]:
+    """Move a session's window (the pane running `claude attach`) into a space, made when none has that name. The session
+    is not touched: the pane keeps its process, so nothing restarts."""
+    ks = sessions()
+    if set(req) - {"move", "space"}:
+        raise ValueError('a move request has only "move" and "space"')
+    space = req.get("space")
+    if not isinstance(space, str) or not SPACE.match(space):
+        raise ValueError("space must be 1-61 characters: letters, digits, space, dot, dash, underscore, #")
+    job = resolve_target("move", req.get("move"))
+    panes = attached_panes(job.id)
+    if not panes:
+        raise ValueError(f"no herdr window attaches {job.name} ({job.id}); open one with `claude attach {job.id}`")
+    if len(panes) > 1:
+        raise ValueError(f"{len(panes)} windows attach {job.name} ({job.id}): {', '.join(panes)}; close the extra ones first")
+    table = {p.id: p for p in ks.panes()}
+    here = table.get(panes[0])
+    if here is not None and here.workspace == space:
+        return True, f"kc-new: {job.name} is already in space {space}", {"ok": True, "moved": job.name, "id": job.id, "space": space,
+                                                                         "pane": panes[0], "unchanged": True}
+    wid = space_id(space)
+    if wid:
+        reply = herdr("pane", "move", panes[0], "--new-tab", "--workspace", wid, "--label", job.name, "--no-focus")
+    else:
+        reply = herdr("pane", "move", panes[0], "--new-workspace", "--label", space, "--tab-label", job.name, "--no-focus")
+    pane = find(find(reply, "move_result"), "pane_id") or panes[0]
+    was = f"{here.workspace}/{here.tab}" if here else "unknown"
+    return True, f"kc-new: moved {job.name} ({job.id}) from {was} to space {space}" + ("" if wid else " (new)"), {
+        "ok": True, "moved": job.name, "id": job.id, "space": space, "pane": pane, "was": was, "created_space": not wid}
+
+
+def rename_session(req: dict) -> tuple[bool, str, dict]:
+    """Give a session another name (its state.json, as the agents view does) and the window's title with it. Not for stella,
+    not for a busy session, not to a name a live session has."""
+    ks = sessions()
+    if set(req) - {"rename", "to"}:
+        raise ValueError('a rename request has only "rename" and "to"')
+    new = req.get("to")
+    if not isinstance(new, str) or not NAME.match(new):
+        raise ValueError("to must be lower-case letters, digits and dashes, 1-49 characters")
+    job = resolve_target("rename", req.get("rename"))
+    if job.name == "stella" or job.template == "stella" or new == "stella":
+        raise ValueError("stella is not renamed (her session and her tooling go by that name)")
+    if new == job.name:
+        raise ValueError(f"{job.name} is already called {new}")
+    if job.busy:
+        raise ValueError(f"{job.name} is busy; retry when it is idle")
+    refuse_live_name(new, "pick another name")
+    old = job.name
+    try:
+        ks.rename_job(job.id, new)
+    except ks.Failure as e:
+        raise RuntimeError(str(e))
+    info: dict = {"ok": True, "renamed": old, "to": new, "id": job.id}
+    warning = ""
+    try:
+        panes = attached_panes(job.id)
+        table = {p.id: p for p in ks.panes()} if panes else {}
+        titled = sorted({table[p].tab_id for p in panes if p in table and table[p].tab == old})
+        for tab in titled:
+            herdr("tab", "rename", tab, new)
+        info["windows"] = titled
+    except RuntimeError as e:
+        warning = f"the session is renamed, but its window title is not: {e}"
+    if warning:
+        info.update(ok=False, warning=warning)
+    return not warning, f"kc-new: renamed {old} ({job.id}) to {new}" + (f"; WARNING: {warning}" if warning else ""), info
+
+
 def caller_job(request: Path) -> str:
     return request.parent.parent.name
 
@@ -334,9 +437,14 @@ def handle(request: Path) -> tuple[bool, str]:
         loaded = json.loads(raw)
     except ValueError:
         loaded = None
-    if isinstance(loaded, dict) and ("restart" in loaded or "doctor" in loaded):
+    kinds = [k for k in ("restart", "move", "rename", "doctor") if isinstance(loaded, dict) and k in loaded]
+    if kinds:
         try:
-            ok, line, info = restart_session(loaded) if "restart" in loaded else doctor(loaded, request)
+            if len(kinds) > 1:
+                raise ValueError(f"a request is one of restart, move, rename or doctor, not {' and '.join(kinds)}")
+            kind = kinds[0]
+            ok, line, info = doctor(loaded, request) if kind == "doctor" else {
+                "restart": restart_session, "move": move_session, "rename": rename_session}[kind](loaded)
         except (ValueError, RuntimeError) as e:
             result.write_text(json.dumps({"ok": False, "error": str(e)}))
             return False, f"kc-new: {e}"

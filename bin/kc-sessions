@@ -231,6 +231,32 @@ def resolve(target: str, jobs: list[Job] | None = None) -> Job:
                   f"`kc-sessions retire <id>`")
 
 
+def rename_job(job_id: str, new: str) -> None:
+    """Rename a job the way the agents view does: its state.json takes the new `name` with `nameSource` "user", and the
+    worker follows. The `-n` in respawnFlags keeps the old name, as it does for every job renamed in the agents view
+    (the name in state.json wins). The daemon rewrites state.json by itself, so the change is read back and, if a
+    concurrent write undid it, made again."""
+    path = home() / ".claude/jobs" / job_id / "state.json"
+    for _ in range(3):
+        try:
+            st = json.loads(path.read_text())
+        except (OSError, ValueError) as e:
+            raise Failure(f"cannot read the state of {job_id}: {e}")
+        stamp = datetime.now(timezone.utc)
+        st.update(name=new, nameSource="user", updatedAt=stamp.strftime("%Y-%m-%dT%H:%M:%S.") + f"{stamp.microsecond // 1000:03d}Z")
+        tmp = path.with_name(f"state.json.{os.getpid()}.tmp")
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            json.dump(st, f, indent=2, ensure_ascii=False)
+        os.replace(tmp, path)
+        time.sleep(poll())
+        try:
+            if json.loads(path.read_text()).get("name") == new:
+                return
+        except (OSError, ValueError):
+            pass
+    raise Failure(f"{job_id} did not keep the name {new}: the daemon keeps writing the old one")
+
+
 def duplicate_names(jobs: list[Job]) -> dict[str, list[Job]]:
     """Names held by more than one job where no recorded fork says which one is current and which is old."""
     out = {}

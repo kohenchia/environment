@@ -279,6 +279,171 @@ class RestartAndDoctor(unittest.TestCase):
             self.assertEqual(p.returncode, 1)
             self.assertEqual(self.result(d)["report"], [f"hook ran for {caller}", "drift: token"])
 
+class MoveAndRename(unittest.TestCase):
+    """The move and rename requests, against the fake daemon and the fake herdr (tests/fakeworld.py)."""
+
+    request = RestartAndDoctor.request
+    result = RestartAndDoctor.result
+
+    def where(self, w, job):
+        """(space label, tab label) of the window that attaches the job."""
+        world = w.load()
+        pane = next(p for p in world["panes"].values() if p["fg"] == f"attach:{job}")
+        tab = world["tabs"][pane["tab"]]
+        return world["workspaces"][tab["ws"]]["label"], tab["label"]
+
+    def moves(self, w):
+        return [c for c in w.calls() if c.startswith("herdr pane move")]
+
+    def test_move_puts_the_window_in_an_existing_space_without_restarting_the_session(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("reports-docs", state="blocked", running=True)
+            w.pane("p1", "w1:t1", attach=job, ws="w1", ws_label="work", tab_label="reports-docs")
+            w.pane("p2", "w2:t2", ws="w2", ws_label="reports")
+            d = self.request(w, caller, move="reports-docs", space="reports")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertEqual(self.where(w, job), ("reports", "reports-docs"))
+            self.assertEqual(w.claude_calls(), [])  # not restarted
+            self.assertIn(job, w.load()["workers"])
+            r = self.result(d)
+            self.assertEqual((r["ok"], r["moved"], r["id"], r["was"], r["created_space"]), (True, "reports-docs", job, "work/reports-docs", False))
+            self.assertIn("--new-tab --workspace w2 --label reports-docs --no-focus", self.moves(w)[0])
+            self.assertEqual(w.typed(), [])  # nothing typed into any pane
+
+    def test_move_makes_the_space_when_none_has_the_name(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("reports-docs", state="blocked", running=True)
+            w.pane("p1", attach=job, tab_label="reports-docs")
+            d = self.request(w, caller, move="reports-docs", space="brand new")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertEqual(self.where(w, job), ("brand new", "reports-docs"))
+            self.assertTrue(self.result(d)["created_space"])
+            self.assertIn("--new-workspace --label brand new --tab-label reports-docs --no-focus", self.moves(w)[0])
+
+    def test_move_to_the_space_it_is_already_in_does_nothing(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("reports-docs", state="blocked", running=True)
+            w.pane("p1", attach=job, ws_label="work")
+            d = self.request(w, caller, move="reports-docs", space="work")
+            self.assertEqual(w.run("kc-new").returncode, 0)
+            self.assertTrue(self.result(d)["unchanged"])
+            self.assertEqual(self.moves(w), [])
+
+    def test_move_refuses_what_it_cannot_do_and_moves_nothing(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("has-window", state="blocked", running=True)
+            w.job("no-window", state="blocked", running=True)
+            two = w.job("two-windows", state="blocked", running=True)
+            w.job("twin", state="done", running=True)
+            w.job("twin", state="working", running=True)
+            w.pane("p1", attach=job)
+            w.pane("p2", attach=two)
+            w.pane("p3", attach=two)
+            for req in ({"move": "no-window", "space": "s"}, {"move": "two-windows", "space": "s"}, {"move": "twin", "space": "s"},
+                        {"move": "nobody", "space": "s"}, {"move": "has-window", "space": "x; rm -rf ~"}, {"move": "has-window"},
+                        {"move": "has-window", "space": "s", "force": True}, {"move": "has-window", "rename": "x", "space": "s"}):
+                d = self.request(w, caller, **req)
+                p = w.run("kc-new")
+                self.assertNotEqual(p.returncode, 0, req)
+                self.assertFalse(self.result(d)["ok"], req)
+            self.assertEqual(self.moves(w), [])
+            self.assertIn("more than one session", self.request_error(w, caller, move="twin", space="s"))
+
+    def request_error(self, w, caller, **req):
+        d = self.request(w, caller, **req)
+        w.run("kc-new")
+        return self.result(d)["error"]
+
+    def test_rename_changes_the_name_and_the_window_title_without_restarting(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("2332-include-consistency", state="blocked", running=True)
+            w.pane("p1", attach=job, tab_label="2332-include-consistency")
+            w.pane("p2", "w1:t2", tab_label="2332-include-consistency")  # a shell window with the same title: not the session's
+            d = self.request(w, caller, rename="2332-include-consistency", to="include-consistency")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            state = json.loads((w.home / ".claude/jobs" / job / "state.json").read_text())
+            self.assertEqual((state["name"], state["nameSource"]), ("include-consistency", "user"))
+            self.assertEqual(self.where(w, job), ("work", "include-consistency"))
+            self.assertEqual(w.load()["tabs"]["w1:t2"]["label"], "2332-include-consistency")
+            self.assertEqual(w.claude_calls(), [])  # not restarted
+            self.assertIn(job, w.load()["workers"])
+            self.assertEqual(self.result(d), {"ok": True, "renamed": "2332-include-consistency", "to": "include-consistency", "id": job, "windows": ["w1:t1"]})
+            # the new name resolves, the old one is gone, and the name survives the daemon's next write
+            w.ctl("noop")
+            self.request(w, caller, rename="include-consistency", to="again-2")
+            self.assertEqual(w.run("kc-new").returncode, 0)
+
+    def test_rename_leaves_a_window_title_that_is_not_the_name(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("old-name", state="blocked", running=True)
+            w.pane("p1", attach=job, tab_label="my own title")
+            d = self.request(w, caller, rename="old-name", to="new-name")
+            self.assertEqual(w.run("kc-new").returncode, 0)
+            self.assertEqual(self.where(w, job), ("work", "my own title"))
+            self.assertEqual(self.result(d)["windows"], [])
+
+    def test_rename_without_herdr_still_renames_and_says_the_title_is_not(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            job = w.job("old-name", state="blocked", running=True)
+            w.pane("p1", attach=job, tab_label="old-name")
+            w.opt("herdr_down", True)
+            d = self.request(w, caller, rename="old-name", to="new-name")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("WARNING: the session is renamed, but its window title is not", p.stdout)
+            self.assertEqual(json.loads((w.home / ".claude/jobs" / job / "state.json").read_text())["name"], "new-name")
+            self.assertFalse(self.result(d)["ok"])
+
+    def test_rename_refuses_stella_a_busy_session_a_live_name_and_a_bad_name(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            w.job("stella", state="blocked", running=True)
+            busy = w.job("busy", state="working", tempo="active", running=True)
+            w.job("taken", state="blocked", running=True)
+            ok = w.job("quiet", state="blocked", running=True)
+            w.job("twin", state="done", running=True)
+            w.job("twin", state="working", running=True)
+            cases = [({"rename": "stella", "to": "helper"}, "stella is not renamed"),
+                     ({"rename": "quiet", "to": "stella"}, "stella is not renamed"),
+                     ({"rename": "busy", "to": "free-name"}, "busy; retry when it is idle"),
+                     ({"rename": "quiet", "to": "taken"}, "already exists"),
+                     ({"rename": "twin", "to": "free-name"}, "more than one session"),
+                     ({"rename": "nobody", "to": "free-name"}, "no session called nobody"),
+                     ({"rename": "quiet", "to": "Bad Name"}, "lower-case letters"),
+                     ({"rename": "quiet", "to": "-dash"}, "lower-case letters"),
+                     ({"rename": "quiet"}, "lower-case letters"),
+                     ({"rename": "quiet", "to": "quiet"}, "already called"),
+                     ({"rename": "quiet", "to": "free-name", "force": True}, "only"),
+                     ({"rename": "quiet", "to": "free-name", "move": "quiet", "space": "s"}, "one of restart")]
+            for req, why in cases:
+                d = self.request(w, caller, **req)
+                p = w.run("kc-new")
+                self.assertNotEqual(p.returncode, 0, req)
+                self.assertIn(why, self.result(d)["error"], req)
+            names = sorted(v["name"] for v in w.load()["jobs"].values())
+            self.assertEqual(names, sorted(["caller", "stella", "busy", "taken", "quiet", "twin", "twin"]))
+            self.assertEqual(w.claude_calls(), [])
+            del busy, ok
+
+    def test_rename_may_take_the_name_of_a_stopped_session(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            w.job("retired", state="stopped")
+            job = w.job("quiet", state="blocked", running=True)
+            self.request(w, caller, rename="quiet", to="retired")
+            self.assertEqual(w.run("kc-new").returncode, 0)
+            self.assertEqual(json.loads((w.home / ".claude/jobs" / job / "state.json").read_text())["name"], "retired")
+
 
 if __name__ == "__main__":
     unittest.main()
