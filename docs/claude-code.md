@@ -142,8 +142,8 @@ $CLAUDE_JOB_DIR/tmp/kc-new.json   {"move": "<session name>", "space": "<herdr sp
 | `move` | moves the window that runs `claude attach <id>` into the space as a new tab (`herdr pane move --new-tab`, or `--new-workspace` when no space has that name); the pane keeps its process | a name more than one session holds; a session with no window, or with more than one; a request for the space it is already in answers `ok` and changes nothing |
 | `rename` | writes the new `name` (with `nameSource: "user"`) into the job's `state.json`, as the agents view does, reads it back, and renames the window's tab when its title is the old name. `new` is lower-case letters, digits, dashes | `stella`; a busy session (retry when idle); a name more than one session holds; a name a live session already has |
 
-A rename leaves `-n <old name>` in the job's saved flags, as every rename made in the agents view does: the name in
-`state.json` wins. If herdr is unreachable the session is still renamed and the printed line says `WARNING`.
+A rename may leave `-n <old name>` in the job's saved flags, as a rename made in the agents view does: the name in
+`state.json` wins, and it survives a restart in place (checked on a throwaway session). If herdr is unreachable the session is still renamed and the printed line says `WARNING`.
 
 After starting a session, `kc-new` runs the machine's hook `~/.config/kc-new/after-start <new job id>` when it exists
 (`KC_CALLER_JOB` is the asking job). The work setup uses it so that a session started by another one bills the token the
