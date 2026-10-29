@@ -316,7 +316,8 @@ def panes() -> list[Pane]:
     tab_label: dict[str, tuple[str, str]] = {}
     ws_reply = herdr_json("workspace", "list")
     if ws_reply is None:
-        raise Failure("herdr is not answering")
+        why = run("herdr", "workspace", "list", timeout=30)
+        raise Failure("herdr is not answering" + (f" (exit {why.returncode}: {(why.stderr or why.stdout).strip()[-150:] or 'no reply'})"))
     for w in walk_dicts(ws_reply):
         wid = w.get("workspace_id") or w.get("id")
         if isinstance(wid, str) and isinstance(w.get("label"), str):
