@@ -23,7 +23,8 @@ they win).
 
 - **Stella** is my personal assistant and overall agent manager, in a permanent session of her own (`stella`). She keeps
   quiet unless I ask for the status, and then shows my priorities and a table of the sessions waiting on me with how
-  many tasks each has for me. She answers a waiting session from my canon when it settles the question with certainty,
+  many tasks each has for me. She answers a waiting session from my canon when it settles the question with certainty, and
+  overnight (her manual sets the window) with the session's own reversible default, logged for my morning,
   keeps my PRs moving through their sessions, tells a session that stopped on an API error to continue, restarts a
   session that is not in bypass mode so she can direct it, learns my preferences, keeps the daily log, my priorities
   and an audit of my memories and instructions in files I read when I want, and starts a session in a new space for
@@ -154,12 +155,17 @@ commit. If an earlier document is wrong, correct it in the new plan *and* fix th
 **Provenance** section at the end, with the sha they were measured against.
 
 **Standard sections**, in order, omitting empty ones: summary, Scope (in and out), the problem, what the
-plan delivers, Work items (numbered table), how we know it is right (acceptance bar and exact commands),
-Decisions, Risks, Open questions, Provenance.
+plan delivers, Work items (numbered table), Delivery (the PRs, what each stacks on, its reviewer and ticket, the
+merge order), how we know it is right (acceptance bar and exact commands), Decisions, Decision closure, Risks, Open
+questions, Provenance.
 
 - **Decisions** are numbered and permanent (`P4-D3 · …`); each states the alternative and why it lost.
+- **Decision closure** lists every choice a builder will face (names, PR split, merge order, tickets, reviewers,
+  fallbacks, warn or refuse, edge cases, docs, out of scope), each answered by me or given a default I accepted or
+  delegated. `kc-plan` step 5 has the list. A builder takes those defaults without asking.
 - **Risks** name the mitigation, preferring structural mitigations to intentions.
-- **Open questions** are only ones needing human judgment.
+- **Open questions** are only ones that cannot be settled before building, each with the default the builder takes
+  meanwhile.
 - Preserve my inline `==**KC:** …==` comments verbatim when revising a plan I annotated.
 
 ## Writing PR descriptions

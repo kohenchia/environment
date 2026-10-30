@@ -1,6 +1,6 @@
 ---
 name: kc-plan
-description: Write a plan for a development task or a project into the vault - researched against the real code, in Kohen's plan style. No code is written and nothing outside the vault changes. Use when Kohen types /kc-plan <task or project>, or asks for a plan, design doc or implementation plan.
+description: Write a plan for a development task or a project into the vault - researched against the real code, in Kohen's plan style, and not done until every choice a builder will face is answered by Kohen or has a default he accepted (the decision closure). No code is written and nothing outside the vault changes. Use when Kohen types /kc-plan <task or project>, or asks for a plan, design doc or implementation plan.
 ---
 
 # kc-plan
@@ -45,6 +45,10 @@ each ask is applied or answered in the plan.
 - **Test a rule before proposing it.** Any rule, threshold or heuristic the plan introduces (a check that
   fails a step, a limit, a classifier) is run offline against real known-good and known-bad cases, and the
   plan records the numbers. A rule that fails a healthy case is not proposed.
+- **Check what a decision assumes exists.** A decision that relies on something outside the plan's own code (a
+  value another library records, a field a system stores, a rule another team must approve, the inputs of the
+  acceptance case) is checked at its source before the plan rests on it. One plan's check read a failed-call count
+  that the library never records; the builder found out mid-build and had to stop and ask.
 
 ## 3. Debate the approach
 
@@ -65,14 +69,63 @@ The global instructions' "Writing project plans" section is the style; follow it
 with what ships and what stays the same; describe what the change does, not how; define every term and
 invent none; precise facts; evidence in a Provenance section at the end, with the sha it was measured
 against. Standard sections in order, omitting empty ones: summary, Scope, the problem, what it delivers,
-Work items (numbered table), how we know it is right (acceptance bar and exact commands), Decisions
-(numbered, each with the alternative and why it lost), Risks (with structural mitigations), Open
-questions, Provenance.
+Work items (numbered table), Delivery (below), how we know it is right (acceptance bar and exact commands),
+Decisions (numbered, each with the alternative and why it lost), Decision closure (step 5), Risks (with
+structural mitigations), Open questions, Provenance.
 
 Every command in "how we know it is right" is real: run it, or at least parse it (`--help`, `--dry-run`),
 against `origin/main`. A command naming a path or option that does not exist is a defect in the plan.
 
-## 5. Review it before handing it over
+A plan for code always has a **Delivery** section after the Work items: one row per PR (what it holds, the PR it
+stacks on, its reviewer, its ticket with priority, milestone and due date, who files the ticket and when), then
+the merge order. The merge order also says, for each open PR by someone else that touches the same code, which one
+lands first and who ports the other's changes.
+
+## 5. Close every decision before calling it done
+
+A plan is not done until a builder could build all of it without ending a turn on a question. Kohen's time is
+the scarce part: one plan's build worked 3.5 hours and sat 9.9 hours waiting on eight choices the plan had never
+put to him (a module name, a merge order, whether to file a ticket, warn or refuse), each with a recommended answer
+attached.
+
+**Enumerate every choice the builder will face**, against the plan as written, and give each one a row in a
+`## Decision closure` table (`Choice · Answer · Settled by`). "None" is an answer; a missing row is not.
+
+| Choice | The plan states |
+|---|---|
+| Names and placement | every new public name (module, file, class or function another module imports, CLI flag, config key, pipeline or environment variable, the term the user docs use) and where each lives |
+| PR split and stacking | each PR and what it holds, split by dependency: a part that needs nothing else in the plan is its own PR, never bundled into one that waits |
+| Merge order | the order, and the rule for every open PR by someone else on the same code (who lands first, who ports) |
+| Tickets | one ticket per PR with its priority, milestone and due date; who files each and when; what happens to a defect found while building that predates the work (default: a follow-up ticket, never this plan's PRs) |
+| Reviewers | who reviews each PR and who requests them |
+| Fallbacks | for every decision resting on something not yet built, verified or approved by someone else: what the builder does if it is false or late |
+| Warn or refuse | each new check and each edge it meets: refuse, warn or allow, with the message, and the exit code of a dry run that would be refused for real |
+| Edge-case scope | which inputs are in and which are deferred, checked against the real inputs of every acceptance case |
+| Docs | which PR changes which docs, and what they say while a dependency is still pending |
+| Out of scope | what the builder must not take on even when it finds it: neighbouring fixes, more PRs than the Delivery table, design changes. These become follow-up tickets |
+| Acceptance | every real run or registration the proof needs, and who triggers it |
+
+**Settle each row one of three ways**, and say which in the `Settled by` column:
+
+- `Kohen, <date>`: his answer, verbatim.
+- `default, accepted` or `default, delegated`: a recommended default he accepted, or a kind of choice he gave to the
+  builder ("you own the merge order and registration"). Record his words and the date.
+- `default, pending`: your recommendation, which needs his yes. His go to build (`/kc-dev <plan>`, "start building")
+  accepts every pending default that he has not overruled, and the plan says so in one line above the table.
+
+**Ask once, at the end of the research and debate, never in waves.** Put every row that is not yet
+`Kohen` or `accepted` to him in one numbered batch, each with your recommendation and its cost. When an answer reverses
+an earlier one, re-run the whole table: a reversal reopens every row it touches, and those go back to him in the next
+single batch.
+
+**Open questions are only the rows that cannot be settled before building**: they need a result the build produces,
+or an answer from someone other than Kohen. Each names the default the builder takes meanwhile, what it changes if
+the answer differs, and whether it blocks merge. A question with no default is a defect in the plan.
+
+The review (next step) is handed the closure table as part of its focus: a choice missing from the table, or an open
+question with no default, is an ask tagged `blocks adoption`.
+
+## 6. Review it before handing it over
 
 Run `/kc-review <plan path>` on the finished plan (it reviews documents at full depth) and treat its asks
 as the next revision: apply each one, or answer it in the plan, then review again. Act only on the final report
@@ -86,8 +139,9 @@ is in question: report the verdict and the reviewer's target, and review a revis
 direction), and a review of the plan's second revision (the third review, counting the first) that still has an ask tagged
 `blocks adoption` (put what blocks to him).
 
-## 6. Finish
+## 7. Finish
 
 Link the plan from the project's index note and `Projects.md` if the vault keeps one. Report the path,
-the review verdict and its report, the decisions taken, and the open questions for Kohen.
-`/kc-dev <plan path>` builds it.
+the review verdict and its report, the decisions taken, and the closure count (`14 choices: 6 answered by Kohen,
+5 defaults accepted or delegated, 2 pending his go, 1 open with a default`). The end-of-turn list holds the one batch
+of pending rows, each with its default. `/kc-dev <plan path>` builds it and takes every default.

@@ -50,7 +50,9 @@ A personal assistant in a permanent background session named `stella`, started i
 her manual. She automates routine operations, starts a session in a space (through `kc-new`) for a task Kohen gives
 her, and does not otherwise manage other sessions. Kohen watches their sessions themselves, so the only thing she
 reports is how many are waiting for them. She answers a waiting session herself when the canon settles it with
-certainty, learns Kohen's preferences into proposed canon, and in the background writes a daily log of every session
+certainty and, in the overnight window her manual sets in one line (23:00-07:00 Pacific), with the session's own
+default when that is reversible, not outward-facing and no change of scope, logging each in `overnight.md` for the
+first status of the morning. She learns Kohen's preferences into proposed canon, and in the background writes a daily log of every session
 that worked (`/kc-log day`), keeps proposed priorities from their Slack, and audits memories, instructions and skills
 weekly. Those results go into files in her store (`priorities.md`, `canon.md`, `audit.md`), which Kohen reads when
 they want. Her manual, memory files and routines are in her agent file; no other session loads it. Her daily and

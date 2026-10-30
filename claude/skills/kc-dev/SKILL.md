@@ -27,8 +27,9 @@ stricter, it wins.
   for git.
 - Grep for two or three existing implementations of the same pattern and match them. Before removing or
   renaming anything public, grep every caller.
-- Ask only for decisions that are genuinely Kohen's: something the order, the plan, the code and sensible
-  defaults cannot settle. Batch the questions; never ask what reading the code answers.
+- Read the plan's Decision closure and Delivery sections: they settle names, the PR split, the merge order,
+  tickets, reviewers, fallbacks and warn-or-refuse. Kohen's go to build accepts every default the plan records, so
+  take each one without asking again.
 
 ## 2. Decide the design, briefly
 
@@ -37,7 +38,29 @@ sentence, the design, and why it beats the next-best alternative. When more than
 debate them with subagents (one advocate each, one judge who tries to disprove them) and pick one. Say the
 chosen design to Kohen in a few lines, then build; do not wait for approval unless the order says to.
 
-## 3. Build
+## 3. Keep going: decisions while building
+
+Never end a turn on a decision while there is work it does not block. One build ended its turns on eight calls,
+seven of them already carrying the builder's own recommendation. It worked 3.5 hours and waited 9.9.
+
+- **A choice the plan settled** (or the order, the code, or the repo's conventions settle) is not a question: take
+  it.
+- **A choice nobody foresaw**: decide it the way the plan's decisions point, the reversible way, and write it down
+  (in the plan's Decision closure with `taken while building`, or the PR description when there is no plan). Then
+  keep going.
+- **A call that is genuinely Kohen's** (anything outward-facing, a contract the order did not name, a scope change
+  that adds or drops a deliverable, or a row the plan marks as his): take the default if one is reversible and keep
+  building on it. If none is, park that part and build everything else.
+- **Batch the calls into the end-of-turn list after the PR is up**, never one question per finding. Each call states
+  the default taken and is marked `blocks merge` (the PR must not merge until he answers) or `can wait` (the
+  default stands until he overrules it). A call that is not `blocks merge` is `can wait`.
+
+**Caps per task.** The plan's Delivery table is the PR count (with no plan: one PR per order, plus a docs companion
+the repo requires). A further PR, a split, or work outside the plan's work items is a `can wait` call; until Kohen
+says yes, the work becomes a follow-up ticket. A defect found that predates the work is a follow-up ticket, never a
+fix in this PR.
+
+## 4. Build
 
 - Work in a worktree made with the `wta` helper (`zsh -i -c 'wta <repo> <branch>'`), never with raw
   `git worktree` or a native worktree tool. Personal tooling repos may be edited in place when the order
@@ -46,24 +69,32 @@ chosen design to Kohen in a few lines, then build; do not wait for approval unle
 - Delegate mechanical steps to subagents when it helps; set `model` on each (Sonnet by default, Opus only
   for the deepest judgment). You stay responsible for every line.
 
-## 4. Verify before claiming done
+## 5. Verify before claiming done
 
 Run the repo's gates (format, lint, type check, tests) and exercise the change for real as far as local
 and dry runs allow. Evidence before assertions: quote the commands and their results. If anything fails,
 say so with the output.
 
-For a non-trivial change, run `/kc-review` on the committed branch and act on its final report (not a provisional
-first report, whose `Depth:` line begins `IN PROGRESS:`): apply each ask,
-decline one only with code evidence, or bring a real judgment call to Kohen.
+For a non-trivial change, run `/kc-review` on the committed branch, **one round per PR**, and act on its final report
+(not a provisional first report, whose `Depth:` line begins `IN PROGRESS:`):
 
-## 5. Commit and push
+- every `blocks merge` ask is fixed, with a test that fails without the fix, or declined with code evidence, or
+  put to Kohen as a `blocks merge` call;
+- a `can follow` ask goes into the one fix commit after the review only when it is small (a few lines in files the
+  PR already changes, no new behaviour). That is the cap on fast-follow work in a PR. Every other one becomes a
+  follow-up ticket, drafted where the plan's ticket rule says, and one `can wait` call lists them;
+- the fixes are verified by the gates and the tests, not reviewed again: the report says "fixes verified, not
+  re-reviewed". A second round runs only when Kohen asks for one.
+
+## 6. Commit and push
 
 Commit with the repo's message conventions. Push the branch: a push to the public
 `~/github/environment` is checked by the machine's leak check and goes through when it finds nothing (on a
 hit it is denied: rewrite the hits generically, amend, push again); other pushes are not gated. Never put a
 bypass on a push, and never open a PR unless asked.
 
-## 6. Report
+## 7. Report
 
 Lead with what changed for the user (a before/after picture when it helps), then what was verified and
-how, then anything left open. End with the status block.
+how, then anything left open. End with the status block: the calls of step 3, each marked `blocks merge` or
+`can wait` with the default taken, `blocks merge` first.
