@@ -50,6 +50,15 @@ changes the session's name the way the agents view does (its state.json) and the
 old name; the new name is lower-case letters, digits and dashes. It refuses `stella`, a busy session (retry when it is
 idle), a name that more than one session holds, and a name a live session already has. Neither takes other fields.
 
+A sixth kind stops a session and removes its record, so a throwaway can be cleaned up from the sandbox:
+
+    $CLAUDE_JOB_DIR/tmp/kc-new.json     {"retire": "reports-docs"}
+
+Only the session that started it through kc-new may ask (kc-new records who started whom in
+~/.local/state/kc-sessions/started.json), and Stella, for any session. It refuses `stella`, the asker itself, a busy session
+(retry when idle) and a name that more than one session holds. A session that runs in a git worktree is stopped but its
+record stays. The window falls back to its shell and is left open.
+
 A new session may not take a name that a live session already has.
 
 After it starts a session, kc-new runs the machine's hook `~/.config/kc-new/after-start <new job id>` when it exists
@@ -386,6 +395,55 @@ def caller_job(request: Path) -> str:
     return request.parent.parent.name
 
 
+def started_file() -> Path:
+    return sessions().state_dir() / "started.json"
+
+
+def started_by() -> dict:
+    try:
+        return json.loads(started_file().read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def record_started(sid: str, caller: str) -> None:
+    """Remember which session started a session, so that only that one (and Stella) may retire it later."""
+    ks = sessions()
+    with ks.state_lock():
+        data = started_by()
+        data[sid] = caller
+        ks.write_json_atomic(started_file(), data)
+
+
+def retire_session(req: dict, request: Path) -> tuple[bool, str, dict]:
+    """Stop a session and remove its record. Only the session that started it through kc-new may ask (so a throwaway can be
+    cleaned up from the sandbox), and Stella, who manages them all; never stella, the asker, or a busy session. A session in
+    a git worktree is stopped but its record is kept (kc-sessions retire decides)."""
+    ks = sessions()
+    if set(req) - {"retire"}:
+        raise ValueError('a retire request has only "retire"')
+    job = resolve_target("retire", req.get("retire"))
+    caller = caller_job(request)
+    asker = next((j for j in ks.load_jobs() if j.id == caller), None)
+    by_stella = asker is not None and asker.name == "stella" and asker.template == "stella"
+    if job.id == caller:
+        raise ValueError("a session does not retire itself")
+    if job.name == "stella" or job.template == "stella":
+        raise ValueError("stella is not retired by this helper")
+    if not by_stella and started_by().get(job.id) != caller:
+        raise ValueError(f"{job.name} ({job.id}) was not started by this session through kc-new; only the session that started it, or Stella, may retire it")
+    if job.busy:
+        raise ValueError(f"{job.name} is busy; retry when it is idle")
+    lines: list[str] = []
+    if not ks.retire(job.id, lines.append, remove=True):
+        raise RuntimeError(f"{job.name} ({job.id}) was not retired: " + "; ".join(lines))
+    with ks.state_lock():
+        data = started_by()
+        if data.pop(job.id, None) is not None:
+            ks.write_json_atomic(started_file(), data)
+    return True, f"kc-new: retired {job.name} ({job.id}): " + "; ".join(lines), {"ok": True, "retired": job.name, "id": job.id, "log": lines}
+
+
 def doctor(req: dict, request: Path) -> tuple[bool, str, dict]:
     """Report on, or repair, the sessions and windows. Repair is Stella's alone, parameterless and rate-limited."""
     ks = sessions()
@@ -437,14 +495,14 @@ def handle(request: Path) -> tuple[bool, str]:
         loaded = json.loads(raw)
     except ValueError:
         loaded = None
-    kinds = [k for k in ("restart", "move", "rename", "doctor") if isinstance(loaded, dict) and k in loaded]
+    kinds = [k for k in ("restart", "move", "rename", "retire", "doctor") if isinstance(loaded, dict) and k in loaded]
     if kinds:
         try:
             if len(kinds) > 1:
-                raise ValueError(f"a request is one of restart, move, rename or doctor, not {' and '.join(kinds)}")
+                raise ValueError(f"a request is one of restart, move, rename, retire or doctor, not {' and '.join(kinds)}")
             kind = kinds[0]
-            ok, line, info = doctor(loaded, request) if kind == "doctor" else {
-                "restart": restart_session, "move": move_session, "rename": rename_session}[kind](loaded)
+            ok, line, info = {"doctor": doctor, "retire": retire_session, "restart": lambda r, _: restart_session(r),
+                              "move": lambda r, _: move_session(r), "rename": lambda r, _: rename_session(r)}[kind](loaded, request)
         except (ValueError, RuntimeError) as e:
             result.write_text(json.dumps({"ok": False, "error": str(e)}))
             return False, f"kc-new: {e}"
@@ -456,6 +514,10 @@ def handle(request: Path) -> tuple[bool, str]:
     except (ValueError, RuntimeError) as e:
         result.write_text(json.dumps({"ok": False, "error": str(e)}))
         return False, f"kc-new: {e}"
+    try:
+        record_started(sid, caller_job(request))
+    except OSError:
+        pass  # only the later retire is lost
     warning = after_start(request, sid)
     try:
         place(req, sid)

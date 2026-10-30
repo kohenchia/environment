@@ -145,6 +145,12 @@ $CLAUDE_JOB_DIR/tmp/kc-new.json   {"move": "<session name>", "space": "<herdr sp
 A rename may leave `-n <old name>` in the job's saved flags, as a rename made in the agents view does: the name in
 `state.json` wins, and it survives a restart in place (checked on a throwaway session). If herdr is unreachable the session is still renamed and the printed line says `WARNING`.
 
+A third, `{"retire": "<session name>"}`, stops a session and removes its record (`kc-sessions retire --rm`; a session
+in a git worktree is stopped but kept). It exists because a sandboxed session cannot run `claude stop`: **only the session that
+started the session through `kc-new` may ask** (`kc-new` records who started whom in `~/.local/state/kc-sessions/started.json`),
+and Stella for any. It refuses `stella`, the asker itself, a busy session, and a name more than one session holds. The
+window falls back to its shell and stays open.
+
 After starting a session, `kc-new` runs the machine's hook `~/.config/kc-new/after-start <new job id>` when it exists
 (`KC_CALLER_JOB` is the asking job). The work setup uses it so that a session started by another one bills the token the
 asker bills, not the default; if the hook fails the session stays and the printed line says `WARNING`.

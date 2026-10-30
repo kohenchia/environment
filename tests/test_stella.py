@@ -20,21 +20,28 @@ def link_stella_check(w):
 
 
 class StellaRestart(unittest.TestCase):
-    def test_restart_keeps_the_job_the_flags_and_the_window(self):
+    """`stella restart` starts an empty conversation (a fork --fresh): a new job id, the same name, flags and window, the old
+    job stopped and removed, so there is never a second Stella."""
+
+    def test_restart_starts_an_empty_conversation_keeping_the_name_the_flags_and_the_window(self):
         with World() as w:
             link_stella_check(w)
             job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
             w.pane("p1", attach=job, tab_label="Stella")
-            before = w.snapshot()
             p = w.run("stella", "restart", env={"PATH": f"{w.bin}:/usr/bin:/bin"})
             # the last step execs `claude attach`, which the fake does not provide: that is the only failure allowed
-            self.assertIn("restarted in place", p.stdout, p.stdout + p.stderr)
-            self.assertEqual(before, w.snapshot())
-            self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{job}")
-            self.assertEqual(sum(1 for j in w.load()["jobs"].values() if j["name"] == "stella"), 1)
+            self.assertIn("started afresh", p.stdout, p.stdout + p.stderr)
+            world = w.load()
+            stellas = [j for j, v in world["jobs"].items() if v["name"] == "stella"]
+            self.assertEqual(len(stellas), 1)
+            self.assertNotEqual(stellas[0], job)  # the id changes; the old record is gone
+            self.assertEqual(world["panes"]["p1"]["fg"], f"attach:{stellas[0]}")
+            self.assertEqual(sorted(world["jobs"][stellas[0]]["flags"]), sorted(["--dangerously-skip-permissions", "--agent", "stella", "--model", "opus"]))
             calls = w.claude_calls()
-            self.assertEqual(calls[0], f"stop {job}")
-            self.assertTrue(calls[1].startswith(f"--bg --resume {job}-0000-4000-8000-000000000000 -- Session start"), calls)
+            self.assertTrue(calls[0].startswith("--bg -n stella --dangerously-skip-permissions --agent stella"), calls)
+            self.assertNotIn("--resume", calls[0])  # an empty conversation, not a continuation
+            self.assertIn("Session start (today is", calls[0])
+            self.assertEqual(calls[1:3], [f"stop {job}", f"rm {job}"])
 
     def test_waiting_for_a_wake_is_not_busy(self):
         with World() as w:  # state working, tempo idle, one session cron: Stella between her routines
@@ -42,35 +49,17 @@ class StellaRestart(unittest.TestCase):
             job = w.job("stella", state="working", running=True, flags=STELLA_FLAGS,
                         in_flight={"tasks": 1, "queued": 0, "kinds": ["session_cron"], "wake": {"at": 1}})
             p = w.run("stella", "restart")
-            self.assertIn("restarted in place", p.stdout, p.stdout + p.stderr)
-            self.assertEqual(w.claude_calls()[0], f"stop {job}")
+            self.assertIn("started afresh", p.stdout, p.stdout + p.stderr)
+            self.assertIn(f"stop {job}", w.claude_calls())
 
-    def test_a_daemon_fork_without_a_note_is_followed_not_duplicated(self):
+    def test_a_busy_stella_is_not_restarted(self):
         with World() as w:
             link_stella_check(w)
-            job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
-            w.pane("p1", attach=job)
-            w.opt("always_fork", True)  # the daemon forks even a bare resume
-            w.opt("no_note", True)  # and does not say so
+            w.job("stella", state="working", tempo="active", running=True, flags=STELLA_FLAGS)
             p = w.run("stella", "restart")
-            self.assertIn("a fork", p.stdout, p.stdout + p.stderr)
-            new = [j for j, v in w.load()["jobs"].items() if v["name"] == "stella" and j != job]
-            self.assertEqual(len(new), 1)
-            self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{new[0]}")
-
-    def test_a_copy_the_daemon_announces_is_undone_and_the_job_restarts_in_place(self):
-        with World() as w:
-            link_stella_check(w)
-            job = w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
-            w.pane("p1", attach=job)
-            w.opt("always_fork", True)  # the daemon starts a copy and says so
-            p = w.run("stella", "restart")
-            self.assertIn("instead of continuing it", p.stdout, p.stdout + p.stderr)
-            stellas = [j for j, v in w.load()["jobs"].items() if v["name"] == "stella"]
-            self.assertEqual(stellas, [job])  # the copy is gone, the job is the same
-            self.assertIn(job, w.load()["workers"])
-            self.assertEqual(w.load()["panes"]["p1"]["fg"], f"attach:{job}")
-            self.assertTrue(any(c.startswith(f"respawn {job}") for c in w.claude_calls()), w.claude_calls())
+            self.assertNotEqual(p.returncode, 0)
+            self.assertIn("busy", p.stderr + p.stdout)
+            self.assertEqual(w.claude_calls(), [])
 
 
 class StellaSettings(unittest.TestCase):

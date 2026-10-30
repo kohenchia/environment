@@ -445,5 +445,70 @@ class MoveAndRename(unittest.TestCase):
             self.assertEqual(json.loads((w.home / ".claude/jobs" / job / "state.json").read_text())["name"], "retired")
 
 
+class Retire(unittest.TestCase):
+    """The retire request: only the session that started a session through kc-new, or Stella, may stop and remove it."""
+
+    request = RestartAndDoctor.request
+    result = RestartAndDoctor.result
+
+    def started(self, w, **who):
+        f = w.home / "kcs/started.json"
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps(who))
+        return f
+
+    def test_the_session_that_started_one_retires_it_and_the_record_of_that_goes(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            other = w.job("other", state="blocked", running=True)
+            child = w.job("throwaway", state="done", running=True)
+            f = self.started(w, **{child: caller, other: "someone"})
+            d = self.request(w, caller, retire="throwaway")
+            p = w.run("kc-new")
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertEqual(w.claude_calls(), [f"stop {child}", f"rm {child}"])
+            self.assertNotIn(child, w.load()["jobs"])
+            self.assertEqual(json.loads(f.read_text()), {other: "someone"})
+            self.assertTrue(self.result(d)["ok"])
+            self.assertIn(other, w.load()["jobs"])
+
+    def test_a_session_started_by_kc_new_is_recorded_with_its_starter(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            self.request(w, caller, space="s", dir=str(w.home / "github"), name="kid", prompt="x")
+            w.run("kc-new")  # the fake herdr has no `workspace create`: no window, but the session started
+            kid = next(j for j, v in w.load()["jobs"].items() if v["name"] == "kid")
+            self.assertEqual(json.loads((w.home / "kcs/started.json").read_text()), {kid: caller})
+
+    def test_stella_retires_any_session(self):
+        with World() as w:
+            stella = w.job("stella", state="blocked", running=True)
+            w.ctl("set", stella, "template", json.dumps("stella"))
+            child = w.job("somebodys", state="done", running=True)
+            self.request(w, stella, retire="somebodys")
+            self.assertEqual(w.run("kc-new").returncode, 0)
+            self.assertNotIn(child, w.load()["jobs"])
+
+    def test_retire_refuses_a_stranger_stella_itself_a_busy_session_and_a_twin(self):
+        with World() as w:
+            caller = w.job("caller", state="blocked", running=True)
+            w.job("stranger", state="done", running=True)
+            w.job("stella", state="blocked", running=True)
+            busy = w.job("busy", state="working", tempo="active", running=True)
+            w.job("twin", state="done", running=True)
+            twin2 = w.job("twin", state="working", running=True)
+            self.started(w, **{busy: caller, twin2: caller})
+            cases = [({"retire": "stranger"}, "was not started by this session"), ({"retire": "stella"}, "stella is not retired"),
+                     ({"retire": "caller"}, "does not retire itself"), ({"retire": "busy"}, "busy; retry when it is idle"),
+                     ({"retire": "twin"}, "more than one session"), ({"retire": "nobody"}, "no session called nobody"),
+                     ({"retire": "busy", "force": True}, "only")]
+            for req, why in cases:
+                d = self.request(w, caller, **req)
+                self.assertNotEqual(w.run("kc-new").returncode, 0, req)
+                self.assertIn(why, self.result(d)["error"], req)
+            self.assertEqual(w.claude_calls(), [])
+            self.assertEqual(len(w.load()["jobs"]), 6)
+
+
 if __name__ == "__main__":
     unittest.main()
