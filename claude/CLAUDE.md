@@ -161,8 +161,9 @@ questions, Provenance.
 
 - **Decisions** are numbered and permanent (`P4-D3 · …`); each states the alternative and why it lost.
 - **Decision closure** lists every choice a builder will face (names, PR split, merge order, tickets, reviewers,
-  fallbacks, warn or refuse, edge cases, docs, out of scope), each answered by me or given a default I accepted or
-  delegated. `kc-plan` step 5 has the list. A builder takes those defaults without asking.
+  fallbacks, warn or refuse, edge cases, docs, out of scope), each answered by me, given a default I accepted or
+  delegated, or left as a default my go to build accepts (never one that authorises an outward act or changes a
+  contract). `kc-plan` step 5 has the list. A builder takes those defaults without asking.
 - **Risks** name the mitigation, preferring structural mitigations to intentions.
 - **Open questions** are only ones that cannot be settled before building, each with the default the builder takes
   meanwhile.

@@ -28,8 +28,8 @@ stricter, it wins.
 - Grep for two or three existing implementations of the same pattern and match them. Before removing or
   renaming anything public, grep every caller.
 - Read the plan's Decision closure and Delivery sections: they settle names, the PR split, the merge order,
-  tickets, reviewers, fallbacks and warn-or-refuse. Kohen's go to build accepts every default the plan records, so
-  take each one without asking again.
+  tickets, reviewers, fallbacks and warn-or-refuse. Kohen's go to build accepts every default the plan records except
+  the rows marked `needs his yes` (`kc-plan` step 5), so take each one without asking again.
 
 ## 2. Decide the design, briefly
 
@@ -48,17 +48,21 @@ seven of them already carrying the builder's own recommendation. It worked 3.5 h
 - **A choice nobody foresaw**: decide it the way the plan's decisions point, the reversible way, and write it down
   (in the plan's Decision closure with `taken while building`, or the PR description when there is no plan). Then
   keep going.
-- **A call that is genuinely Kohen's** (anything outward-facing, a contract the order did not name, a scope change
-  that adds or drops a deliverable, or a row the plan marks as his): take the default if one is reversible and keep
-  building on it. If none is, park that part and build everything else.
-- **Batch the calls into the end-of-turn list after the PR is up**, never one question per finding. Each call states
-  the default taken and is marked `blocks merge` (the PR must not merge until he answers) or `can wait` (the
-  default stands until he overrules it). A call that is not `blocks merge` is `can wait`.
+- **A call that is genuinely Kohen's** (a contract the order did not name, a scope change that adds or drops a
+  deliverable, or a row the plan marks `needs his yes`): build on the default if one is reversible. If none is, park
+  that part and build everything else.
+- **An outward-facing step is never a default you take** (a ticket filed or edited, a reviewer requested, a PR opened
+  that the order or the plan did not ask for, a post or reply anywhere, a registration, a real run): prepare it (the
+  exact command or text), list it as a call, and build everything that does not depend on it.
+- **Batch the calls into the end-of-turn list once the branch is pushed** (and its PR is up, when the order or the
+  plan's Delivery table asks for one), never one question per finding. Each call states the default taken and is
+  marked `blocks merge` (the PR must not merge until he answers) or `can wait` (the default stands until he overrules
+  it). A call that is not `blocks merge` is `can wait`.
 
 **Caps per task.** The plan's Delivery table is the PR count (with no plan: one PR per order, plus a docs companion
 the repo requires). A further PR, a split, or work outside the plan's work items is a `can wait` call; until Kohen
-says yes, the work becomes a follow-up ticket. A defect found that predates the work is a follow-up ticket, never a
-fix in this PR.
+says yes, the work becomes a follow-up ticket. A defect found along the way that predates the work, and that the order
+does not need fixed, is a follow-up ticket, never a fix in this PR.
 
 ## 4. Build
 
@@ -78,23 +82,26 @@ say so with the output.
 For a non-trivial change, run `/kc-review` on the committed branch, **one round per PR**, and act on its final report
 (not a provisional first report, whose `Depth:` line begins `IN PROGRESS:`):
 
-- every `blocks merge` ask is fixed, with a test that fails without the fix, or declined with code evidence, or
-  put to Kohen as a `blocks merge` call;
+- every `blocks merge` ask is fixed, with a test that fails without the fix (where nothing can be tested, the gate or
+  check that shows it), or declined with code evidence, or put to Kohen as a `blocks merge` call;
 - a `can follow` ask goes into the one fix commit after the review only when it is small (a few lines in files the
   PR already changes, no new behaviour). That is the cap on fast-follow work in a PR. Every other one becomes a
-  follow-up ticket, drafted where the plan's ticket rule says, and one `can wait` call lists them;
+  follow-up ticket, drafted where the plan's ticket rule says (with no plan, under "Follow-ups" in the PR
+  description), and one `can wait` call lists them;
 - the fixes are verified by the gates and the tests, not reviewed again: the report says "fixes verified, not
-  re-reviewed". A second round runs only when Kohen asks for one.
+  re-reviewed". A second round runs only when Kohen asks for one. A verdict that the shape is wrong is a `blocks merge`
+  call: rebuild toward the review's target and ask him whether to review it again.
 
 ## 6. Commit and push
 
 Commit with the repo's message conventions. Push the branch: a push to the public
 `~/github/environment` is checked by the machine's leak check and goes through when it finds nothing (on a
 hit it is denied: rewrite the hits generically, amend, push again); other pushes are not gated. Never put a
-bypass on a push, and never open a PR unless asked.
+bypass on a push, and never open a PR unless asked: the plan's Delivery table, with Kohen's go to build, asks for the
+PRs it lists.
 
 ## 7. Report
 
 Lead with what changed for the user (a before/after picture when it helps), then what was verified and
-how, then anything left open. End with the status block: the calls of step 3, each marked `blocks merge` or
-`can wait` with the default taken, `blocks merge` first.
+how, then anything left open. End with the end-of-turn tables of the global instructions: each call of step 3 is a
+"Needs you" row, marked `blocks merge` or `can wait` with the default taken, `blocks merge` first.

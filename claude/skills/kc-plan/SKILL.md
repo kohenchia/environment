@@ -31,8 +31,8 @@ each ask is applied or answered in the plan.
 - Trace every relevant code path across every repo involved, to the implementations, not the
   abstractions. Read both sides of each cross-repo call.
 - Use parallel subagents for multi-repo research (set `model`: Sonnet by default), then synthesize.
-- Resolve ambiguity by reading code. The only open questions a plan may carry are ones that need Kohen's
-  judgment.
+- Resolve ambiguity by reading code. A question that needs Kohen's judgment is a Decision closure row (step 5),
+  put to him in the one batch; the plan's Open questions are only what step 5 allows there.
 - **Check it is not already solved.** Before designing, search merged and open PRs, and the tickets, for the
   same symptom and the same code (`gh pr list --state all --search …`, `git log origin/main -- <paths>`).
   Work already landed or in flight changes the problem; a plan that duplicates it is the wrong plan.
@@ -105,18 +105,27 @@ attached.
 | Out of scope | what the builder must not take on even when it finds it: neighbouring fixes, more PRs than the Delivery table, design changes. These become follow-up tickets |
 | Acceptance | every real run or registration the proof needs, and who triggers it |
 
-**Settle each row one of three ways**, and say which in the `Settled by` column:
+**Settle each row one of these ways**, and say which in the `Settled by` column:
 
 - `Kohen, <date>`: his answer, verbatim.
 - `default, accepted` or `default, delegated`: a recommended default he accepted, or a kind of choice he gave to the
   builder ("you own the merge order and registration"). Record his words and the date.
 - `default, pending`: your recommendation, which needs his yes. His go to build (`/kc-dev <plan>`, "start building")
   accepts every pending default that he has not overruled, and the plan says so in one line above the table.
+- `needs his yes`: a row whose answer authorises an outward-facing act (a ticket filed with its fields, a reviewer
+  requested, a registration or real run, a merge order that makes someone else port their work) or changes a contract
+  (anything the extension reserves for him). His go does not accept these: each needs `Kohen, <date>` or `default,
+  accepted`. Until then the builder builds on the recommendation, and only the step the row authorises waits.
+- `taken while building`: a choice nobody foresaw, decided by the builder (`kc-dev` step 3). A revision keeps it unless
+  Kohen overrules it.
 
-**Ask once, at the end of the research and debate, never in waves.** Put every row that is not yet
-`Kohen` or `accepted` to him in one numbered batch, each with your recommendation and its cost. When an answer reverses
-an earlier one, re-run the whole table: a reversal reopens every row it touches, and those go back to him in the next
-single batch.
+An answer Stella relays at night is never Kohen's: it does not settle a row.
+
+**Ask once, never in waves.** Put every row that is not yet `Kohen` or `accepted` to him in one numbered batch, each
+with your recommendation and its cost, in the end-of-turn list of step 7, after the review (step 6) has added its rows.
+Do not stop at this step to ask. When step 6 must stop for him, the whole batch goes with that stop. When an answer
+reverses an earlier one, re-run the whole table: a reversal reopens every row it touches, and those go back to him in
+the next single batch.
 
 **Open questions are only the rows that cannot be settled before building**: they need a result the build produces,
 or an answer from someone other than Kohen. Each names the default the builder takes meanwhile, what it changes if
@@ -131,7 +140,8 @@ Run `/kc-review <plan path>` on the finished plan (it reviews documents at full 
 as the next revision: apply each one, or answer it in the plan, then review again. Act only on the final report
 (its `Depth:` line does not begin `IN PROGRESS:`), never on a provisional first report. Stop when the verdict is
 `Adopt as written`, or `Adopt after changes` with no ask tagged `blocks adoption` left. If a decision only
-Kohen can make blocks the verdict, stop and put it to him rather than choosing for him.
+Kohen can make blocks the verdict, stop and put it to him rather than choosing for him, with the whole closure batch
+(step 5).
 
 Two more places to stop and ask Kohen, because every further round is a full-team review that costs as much as the
 first (one plan used three rounds on a design he then shelved): a verdict of `Rework` or `Do not adopt` (the direction
@@ -144,4 +154,6 @@ direction), and a review of the plan's second revision (the third review, counti
 Link the plan from the project's index note and `Projects.md` if the vault keeps one. Report the path,
 the review verdict and its report, the decisions taken, and the closure count (`14 choices: 6 answered by Kohen,
 5 defaults accepted or delegated, 2 pending his go, 1 open with a default`). The end-of-turn list holds the one batch
-of pending rows, each with its default. `/kc-dev <plan path>` builds it and takes every default.
+of pending rows, each with its default. `/kc-dev <plan path>` builds it and takes every default his go accepts. When
+Kohen says to build in this session ("start building"), run `/kc-dev <plan path>` here before writing any code, so its
+rules govern the build.

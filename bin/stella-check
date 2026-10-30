@@ -19,8 +19,8 @@ cannot or will not act on, kind by kind (the numbers are in "Stella calm - plan"
   - blocked: once per episode of a session being blocked (it is blocked for 15 minutes, counted from the job's
     timeline, not from a file touch). The wording of what it needs changing is not a new episode; leaving the blocked
     state and coming back is. Not a wake: a session whose last message marks its asks as Kohen's (a "Needs you" table,
-    "Who acts", "NEXT FOR YOU": the manual forbids answering what the session marked as his call), or that has not been
-    given work yet. A "blocked" job whose detail reads "API Error" is an api_error. Sessions already blocked when this
+    "Who acts", "NEXT FOR YOU": outside the overnight window the manual forbids answering what the session marked as his
+    call, and inside it her hourly check reads those sessions itself), or that has not been given work yet. A "blocked" job whose detail reads "API Error" is an api_error. Sessions already blocked when this
     state first loads are known, not news.
   - api_error: a session stopped on an API error or a rate limit for 5 minutes, again each hour for 3 hours.
   - act and orphan (the PR helper's items): a conflict counts once it has held for two helper runs on the same sha
