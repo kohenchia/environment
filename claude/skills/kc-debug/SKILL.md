@@ -39,5 +39,11 @@ Lead with a picture of what happens (the sequence, the before/after, a table per
 example), then the root cause in one sentence, the evidence (file:line, log lines, commands and their
 output), the fix you recommend, and how to confirm it. Say what you could not confirm.
 
+A report or note written into the vault follows one more rule. **Angle brackets.** Obsidian reads a bare `<name>` as an HTML tag: the text vanishes and, alone on a line, it stops
+markdown rendering until the next blank line. Write every placeholder or quoted argument as inline code (`` `<pr>` ``)
+or as `&lt;pr&gt;`, never bare, and a `|` inside a table cell as `\|`. Before saving, run
+`python3 ~/.claude/skills/kc-review/mdcheck.py <file>` on each file written to the vault; it must print nothing
+(`--fix` wraps complete tags; the safe forms by context are in kc-review, "Text Obsidian can render").
+
 If it cost real effort to find, offer to record it: a note in the vault's `Notes/` (via the vault's
 investigation template, if it has one) for how a system works, or a memory for how agents should work.

@@ -370,6 +370,36 @@ yourself (`--report r-41`), and the PR never looks.
 | `ship nightly --only publish --report r-41` | release made from r-41 | publish left out: green, no release ❌ |
 ````
 
+### Text Obsidian can render (Kohen, 2026-10-30)
+
+Obsidian reads a bare `<word>` as an HTML tag. Two things go wrong, and both look like "the markdown before or after it
+did not render":
+
+| What you wrote | What Obsidian does |
+|---|---|
+| `# settings (--train-<key>, --<step>-<key>)` (inline, in a heading, cell, list item or callout) | `<key>` and `<step>` are taken as tags: the text vanishes from the page and the rest of the line sits inside an element that is never closed |
+| `<target>` alone on a line, then `- item **b**` under it | The line starts an HTML block: no bold, list, table or link renders until the next blank line |
+
+Write every placeholder, command argument or `<...>` you quote as code:
+
+| Where it appears | Safe | Not safe |
+|---|---|---|
+| Paragraph, list item, callout title or body | `` `<pr>` `` (backticks) | bare `<pr>`; `&lt;pr&gt;` inside backticks shows the entity text |
+| Heading | `` `<pr>` ``, or words when the heading is linked as `[[note#heading]]` | bare `<pr>` |
+| Table cell | `` `<pr>` ``; a line break is a bare `<br>`; a pipe in a cell, even inside backticks or in `[[note\|alias]]`, is written `\|` | bare `<pr>`; an unescaped pipe (it ends the cell, so the row gets a cell too many) |
+| Link text | `` [see `<pr>`](url) `` | bare `<pr>` |
+| Wikilink alias | no placeholder: write the alias in plain words | any `<...>` (not verified that Obsidian decodes entities or code in an alias) |
+| Command or output shown in a block | a code fence: nothing inside is read as a tag | a command with `<pr>` in prose |
+| Prose where backticks look wrong | `&lt;pr&gt;`, or `\<pr>` | bare `<pr>` |
+
+Still allowed bare: `<br>` in a table cell, an HTML comment `<!-- from: ... -->`, a `<https://...>` link, and the
+`<dataSource:slack>` and `<dataPolicy:slack>` tags the extension requires. Never `<details>`, `<div>` or any other
+block tag: markdown inside it does not render. A `<` that cannot start a tag (`a < b`, `<0.60`, `x<-1`) is plain text,
+but `n<m` is not (a letter follows), so code it too.
+
+Checked by parsing the samples with markdown-it (CommonMark), which Obsidian follows for these cases; Obsidian itself
+could not be opened to look. `mdcheck.py` below finds every bare tag and every table row with the wrong cell count.
+
 ### Before saving: the self-check
 
 Read the report from the top as Kohen would, and revise it until every answer is yes:
@@ -408,6 +438,10 @@ Read the report from the top as Kohen would, and revise it until every answer is
     Does every ask carry its `See it happen` line, or say why it has no case? Does `usecases.py check`
     pass on it, has its verifier rerun the sample and listed unused case folders, is every inferred statement rewritten
     or labelled, and are the cases reasoned from code named?
+12. Run `python3 ~/.claude/skills/kc-review/mdcheck.py <report> [<use-case page>]` on every file you wrote in the
+    vault, including the index row's file when you edited it. It prints nothing and exits 0 when no bare `<tag>` sits
+    outside code and no table row has the wrong number of cells. Fix each line it names (`--fix` wraps complete tags in
+    backticks and changes nothing else; a `|` in a cell you escape by hand) and run it again until it is silent.
 
 ## 7. The companion use-case page (a PR only)
 

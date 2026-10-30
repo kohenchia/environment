@@ -65,6 +65,11 @@ new notes.
    than adding a near-duplicate.
 5. **Obsidian Sync is usually running**, and today's note is the file most likely to be
    open. Mention in your reply that you edited it.
+6. **Angle brackets.** Obsidian reads a bare `<name>` as an HTML tag: the text vanishes and, alone on a line, it stops
+   markdown rendering until the next blank line. Write every placeholder or quoted argument as inline code (`` `<pr>` ``)
+   or as `&lt;pr&gt;`, never bare, and a `|` inside a table cell as `\|`. Before saving, run
+   `python3 ~/.claude/skills/kc-review/mdcheck.py <file>` on each file written to the vault; it must print nothing
+   (`--fix` wraps complete tags; the safe forms by context are in kc-review, "Text Obsidian can render").
 
 ## Promote what's durable
 

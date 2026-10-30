@@ -76,6 +76,12 @@ structural mitigations), Open questions, Provenance.
 Every command in "how we know it is right" is real: run it, or at least parse it (`--help`, `--dry-run`),
 against `origin/main`. A command naming a path or option that does not exist is a defect in the plan.
 
+**Angle brackets.** Obsidian reads a bare `<name>` as an HTML tag: the text vanishes and, alone on a line, it stops
+markdown rendering until the next blank line. Write every placeholder or quoted argument as inline code (`` `<pr>` ``)
+or as `&lt;pr&gt;`, never bare, and a `|` inside a table cell as `\|`. Run
+`python3 ~/.claude/skills/kc-review/mdcheck.py <file>` on the plan before step 6; it must print nothing
+(`--fix` wraps complete tags; the safe forms by context are in kc-review, "Text Obsidian can render").
+
 A plan for code always has a **Delivery** section after the Work items: one row per PR (what it holds, the PR it
 stacks on, its reviewer, its ticket with priority, milestone and due date, who files the ticket and when), then
 the merge order. The merge order also says, for each open PR by someone else that touches the same code, which one

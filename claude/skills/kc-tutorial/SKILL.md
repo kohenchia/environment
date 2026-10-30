@@ -122,6 +122,11 @@ convention — don't copy it, and don't rewrite those pages just to convert them
    checking and who would know. Do not paper over a gap with plausible prose.
 4. **No task tracking.** Work tracking lives in Kohen's task list (the extension says
    where), not the vault. Checkboxes are only for unresolved factual questions.
+5. **Angle brackets.** Obsidian reads a bare `<name>` as an HTML tag: the text vanishes and, alone on a line, it stops
+   markdown rendering until the next blank line. Write every placeholder or quoted argument as inline code (`` `<pr>` ``)
+   or as `&lt;pr&gt;`, never bare, and a `|` inside a table cell as `\|`. Before saving, run
+   `python3 ~/.claude/skills/kc-review/mdcheck.py <file>` on each file written to the vault; it must print nothing
+   (`--fix` wraps complete tags; the safe forms by context are in kc-review, "Text Obsidian can render"). A page that needs real HTML (an old inline `<svg>`) passes `--allow svg,...`.
 
 ## Finish the job
 
