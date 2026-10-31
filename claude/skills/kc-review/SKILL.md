@@ -393,7 +393,8 @@ Write every placeholder, command argument or `<...>` you quote as code:
 | Prose where backticks look wrong | `&lt;pr&gt;`, or `\<pr>` | bare `<pr>` |
 
 Still allowed bare: `<br>` in a table cell, an HTML comment `<!-- from: ... -->`, a `<https://...>` link, and the
-`<dataSource:slack>` and `<dataPolicy:slack>` tags the extension requires. Never `<details>`, `<div>` or any other
+`<dataSource:slack>` and `<dataPolicy:slack>` tags the extension requires (Obsidian renders nothing below them, so
+that section goes last in the file). Never `<details>`, `<div>` or any other
 block tag: markdown inside it does not render. A `<` that cannot start a tag (`a < b`, `<0.60`, `x<-1`) is plain text,
 but `n<m` is not (a letter follows), so code it too.
 

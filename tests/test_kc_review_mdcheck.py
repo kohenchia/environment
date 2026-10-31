@@ -88,6 +88,19 @@ class BareTags(unittest.TestCase):
         self.assertEqual(after, "# a (--train-`<key>`, --`<step>`-`<key>`) and `<ok>`\n\ncd `<worktree>` && run `x` `<scratch opt.cfg>`\n")
 
 
+class SlackBlock(unittest.TestCase):
+    BLOCK = "## Slack context\n\n<dataSource:slack>\n- a said b\n</dataSource:slack>\n\n<dataPolicy:slack>\npolicy\n</dataPolicy:slack>\n"
+
+    def test_text_after_the_slack_block_is_flagged(self):
+        r, _ = check(self.BLOCK + "\n## Evidence and coverage\n\nlost to the renderer\n")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(":10: text after </dataPolicy:slack>", r.stdout)
+
+    def test_the_slack_block_last_passes(self):
+        r, _ = check("## Evidence\n\nfine\n\n" + self.BLOCK)
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+
 class TablePipes(unittest.TestCase):
     def test_a_pipe_inside_backticks_or_a_wikilink_alias_splits_the_cell(self):
         r, _ = check("""\

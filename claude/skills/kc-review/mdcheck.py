@@ -9,6 +9,8 @@ Exit 1 and print `file:line: message` for each of:
     lists) rendering until the next blank line. Write it as `<name>` in backticks, or as &lt;name&gt;.
   - a table row whose unescaped `|` count differs from its header (a `|` in a cell, even inside backticks or in
     [[note|alias]], must be written `\\|`).
+  - anything below `</dataPolicy:slack>`: Obsidian does not render the markdown after the Slack tags, so the Slack
+    section must be the last thing in the file.
 Allowed bare: <br>, <kbd>, <sub>, <sup>, <mark>, <u>, <wbr>, <!-- comments -->, <https://...> autolinks and the
 Slack data tags <dataSource:slack>, <dataPolicy:slack>. --allow adds tag names (an old page with inline <svg>).
 --fix wraps each complete bare tag in backticks (the only change it makes) and still reports what it cannot fix.
@@ -117,6 +119,17 @@ def check(path, fix=False, allow=frozenset()):
     return problems
 
 
+def slack_last(path):
+    lines = Path(path).read_text().split("\n")
+    closes = [i for i, l in enumerate(lines) if l.strip() == "</dataPolicy:slack>"]
+    if closes and any(l.strip() for l in lines[closes[-1] + 1:]):
+        return [(closes[-1] + 2, "text after </dataPolicy:slack>: Obsidian does not render markdown after the Slack tags; move the Slack section to the end of the file")]
+    opens = [i for i, l in enumerate(lines) if l.strip() == "<dataSource:slack>"]
+    if opens and not closes:
+        return [(opens[0] + 1, "<dataSource:slack> without a closing </dataPolicy:slack>")]
+    return []
+
+
 def main(argv):
     fix = "--fix" in argv
     allow = set()
@@ -129,7 +142,7 @@ def main(argv):
             args.append(a)
     bad = 0
     for path in args:
-        for line, msg in check(path, fix, frozenset(allow)):
+        for line, msg in check(path, fix, frozenset(allow)) + slack_last(path):
             print(f"{path}:{line}: {msg}")
             bad += 1
     return 1 if bad else 0
