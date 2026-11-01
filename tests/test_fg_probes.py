@@ -101,6 +101,10 @@ class StandIn(unittest.TestCase):
             p.wait(timeout=10)
             return json.loads((tmp / "hup-B.json").read_text())
 
+    def test_a_stopped_server_answering_at_once_is_interrupted(self):
+        rec = self.hup('echo \'{"error":{"code":"server_not_running"}}\'; exit 1')
+        self.assertEqual(rec["verdict"], "interrupted")
+
     def test_pane_gone_and_herdr_answering_is_a_closed_window(self):
         rec = self.hup('echo "pane not found" >&2; exit 1')
         self.assertEqual(rec["verdict"], "closed")
@@ -137,6 +141,100 @@ class Report(unittest.TestCase):
             self.assertIn("x\\|y", r.table())
             self.assertEqual(r.save(), {"PASS": 1, "FAIL": 1, "SKIP": 1})
             self.assertTrue((Path(t) / "summary.md").exists())
+
+
+class Fixes(unittest.TestCase):
+    """The review's blocking findings, each pinned by a test."""
+
+    def test_a_stopped_server_is_an_interrupted_session_not_a_closed_window(self):
+        said = '{"error":{"code":"server_not_running","message":"herdr server is not running"}}'
+        self.assertEqual(fp.hup_verdict(True, 1, said), "interrupted")
+        self.assertEqual(fp.hup_verdict(True, 1, "pane not found"), "closed")
+        self.assertEqual(fp.hup_verdict(False, None, "timeout"), "interrupted")
+
+    def test_only_probe_made_jobs_are_cleaned_up(self):
+        with tempfile.TemporaryDirectory() as t:
+            jobs = Path(t)
+            for jid, state in (("aaaa1111", {"name": "fg-probe-v-fork"}),
+                               ("bbbb2222", {"name": "kohen-real-work", "sessionId": "other"}),
+                               ("cccc3333", {"name": "copy", "forkParentSessionId": "probe-sid"})):
+                (jobs / jid).mkdir()
+                (jobs / jid / "state.json").write_text(json.dumps(state))
+            old, fp.JOBS = fp.JOBS, jobs
+            try:
+                self.assertEqual(sorted(fp.probe_jobs(["aaaa1111", "bbbb2222", "cccc3333"], "probe-sid")),
+                                 ["aaaa1111", "cccc3333"])
+            finally:
+                fp.JOBS = old
+
+    def test_the_subscription_names_pane_moved(self):
+        self.assertEqual(fp.SUBSCRIBE, {"subscriptions": [{"type": "pane.moved"}]})
+
+    def test_a_move_event_must_name_the_pane_we_moved(self):
+        events = [{"event": "pane.moved", "data": {"previous_pane_id": "w1:p9", "pane_id": "w2:p1"}},
+                  {"event": "pane.moved", "data": {"previous_pane_id": "w1:p5", "pane_id": "w3:p1"}}]
+        self.assertEqual(fp.moved_event(events, "w1:p5")["data"]["pane_id"], "w3:p1")
+        self.assertIsNone(fp.moved_event(events, "w1:p7"))
+
+    def test_agents_are_read_from_the_result(self):
+        reply = {"id": "x", "result": {"agents": [{"pane_id": "w1:p2", "agent": "claude"}]}}
+        self.assertEqual(fp.agents_in(reply), [{"pane_id": "w1:p2", "agent": "claude"}])
+
+    def test_an_unreadable_session_list_runs_no_herdr_probe(self):
+        with tempfile.TemporaryDirectory() as t:
+            res = fp.Results(Path(t))
+            old_sessions, old_start = fp.Herdr.sessions, fp.Herdr.start
+            fp.Herdr.sessions = staticmethod(lambda: None)
+            started = []
+            fp.Herdr.start = lambda self: started.append(1) or False
+            try:
+                fp.p3_p4_p6_herdr(res, Path(t), [], {"P3"})
+            finally:
+                fp.Herdr.sessions, fp.Herdr.start = old_sessions, old_start
+            self.assertEqual(started, [])
+            self.assertEqual(res.rows[0]["status"], "FAIL")
+
+    def test_the_wrapper_records_the_launcher_pid_and_passes_the_exit_code(self):
+        with tempfile.TemporaryDirectory() as t:
+            pidfile = Path(t) / "launcher.pid"
+            p = subprocess.run([sys.executable, str(PATH), "wrap", "--pidfile", str(pidfile), "--",
+                                sys.executable, "-c", "import sys; sys.exit(3)"])
+            self.assertEqual(p.returncode, 3)
+            self.assertTrue(pidfile.read_text().isdigit())
+
+    def test_the_probes_never_inherit_kohens_herdr_window(self):
+        old = dict(os.environ)
+        os.environ.update(HERDR_SOCKET_PATH="/tmp/main.sock", HERDR_PANE_ID="w1:p1", TERM_PROGRAM="herdr",
+                          CLAUDECODE="1")
+        try:
+            env = fp.clean_env()
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+        self.assertFalse([k for k in env if k.startswith("HERDR_")])
+        self.assertNotIn("CLAUDECODE", env)
+        self.assertNotIn("TERM_PROGRAM", env)
+
+    def test_a_recycled_pid_is_never_signalled(self):
+        me = os.getpid()
+        began = fp.started_at(me)
+        self.assertIsNotNone(began)
+        self.assertTrue(fp.same_process(me, began))
+        self.assertFalse(fp.same_process(me, began - 3600))  # same pid, another process's start time
+        self.assertFalse(fp.signal_if_same(me, began - 3600, signal.SIGTERM))  # and we are still here
+        utc = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(began))
+        self.assertTrue(fp.same_process(me, utc))  # a registry procStart string
+
+    def test_refuses_while_probe_sessions_from_an_earlier_run_are_live(self):
+        old_reg, old_env = fp.registry, dict(os.environ)
+        fp.registry = lambda: [{"pid": os.getpid(), "name": "fg-probe-a", "kind": "interactive"}]
+        os.environ.pop("CLAUDECODE", None)
+        try:
+            self.assertEqual(fp.main(["--only", "P1"]), 2)
+        finally:
+            fp.registry = old_reg
+            os.environ.clear()
+            os.environ.update(old_env)
 
 
 if __name__ == "__main__":
