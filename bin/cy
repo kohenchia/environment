@@ -272,11 +272,22 @@ def transcript(sid: str | None) -> Path | None:
     return hits[0] if hits else None
 
 
-def records(path: Path | None) -> list[dict]:
+def records(path: Path | None, tail: int | None = None) -> list[dict]:
+    """A transcript's records; with `tail`, only those in its last `tail` bytes (transcripts reach hundreds of MB)."""
     if not path or not path.exists():
         return []
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - tail) if tail else 0)
+            data = f.read().decode("utf-8", "replace")
+    except OSError:
+        return []
+    lines = data.splitlines()
+    if tail and size > tail:
+        lines = lines[1:]  # the first line is cut
     out = []
-    for line in path.read_text(errors="replace").splitlines():
+    for line in lines:
         try:
             out.append(json.loads(line))
         except ValueError:
@@ -865,6 +876,7 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--effort")
     ap.add_argument("--agent")
     ap.add_argument("--token", help="the token to bill (a pin); default: the machine's default")
+    ap.add_argument("--token-of", metavar="KEY", help="a new session bills what session KEY is pinned to (kc-new: the asker)")
     ap.add_argument("--prompt-file")
     ap.add_argument("prompt", nargs="*")
     a = ap.parse_args(argv)
@@ -914,7 +926,7 @@ def main(argv: list[str]) -> int:
         print(f"cy: {name} is already live in {busy}", file=sys.stderr)
         return 1
     sid = str(uuid.uuid4())
-    spec = {"key": sid, "id": sid, "name": name, "token": a.token, "model": a.model, "effort": a.effort,
+    spec = {"key": sid, "id": sid, "name": name, "token": a.token, "parent": a.token_of, "model": a.model, "effort": a.effort,
             "agent": a.agent, "prompt": prompt, "prompt_file": a.prompt_file, "mode": "bypassPermissions",
             "started_by": os.environ.get("CY_STARTED_BY")}
     return Loop(spec).run()

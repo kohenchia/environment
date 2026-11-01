@@ -163,6 +163,26 @@ machine's hooks `~/.config/kc-sessions/doctor` and `~/.config/kc-sessions/repair
 `kc-sessions check` / `kc-sessions repair`. Run `kc-new` as the only command of its Bash call: combined with another command it runs in the sandbox, where
 `claude stop` and `claude --bg --resume` fail with `sandbox_apply: Operation not permitted`.
 
+### Sessions in `cy` windows
+
+A session that is not a background job (a `cy` window, or a plain `claude`) writes its request to
+`~/.local/state/kc-new/requests/<its CLAUDE_CODE_SESSION_ID>.json` instead; the answer is `<that id>.result.json` beside
+it. Requests about a `cy` window, and new sessions, go through `cy` once the switch has happened
+(`~/.local/state/cy/enabled`); before it, only for names starting `fg-probe`. Then:
+
+| Request | Does |
+|---|---|
+| a new session | opens a window in the space running `cy -n NAME --prompt-file <file>`: the prompt is saved under `~/.local/state/kc-new/prompts/`, so no length limit or shell quoting applies, and `cy` deletes it once read. `--token-of <the asker>` gives it the asker's pin, if it has one. Refused for a name a live session holds: "`cy: NAME is already live in <space> / <window>`" |
+| `restart` | queued for `cy-follow`, which restarts the session in its window once it is idle, keeping its conversation, mode and model; takes `prompt`, `fresh` (a new conversation under the same session) and `token`. `force` is accepted and changes nothing |
+| `rename`, `retire` | queued the same way. Only the session that started a window (its launch file's `started_by`) and Stella may retire it; the window closes once it has ended, and its conversation stays resumable with `cy -r NAME` |
+| `move` | moves the window's pane into the space; the follower follows the move |
+| `{"branch": NAME, "to": NEW, "space": S}` | opens a window in S running `cy -r NAME --branch NEW`: a copy of the conversation as a new session |
+
+A queued request answers `queued`, naming the request's file; `cy-follow` writes its verdict beside it as
+`<request>.result.json` (`done`, `refused: …` or `dropped: …`), and `cag` shows it pending until then. Do not resend a
+queued request. A request about a plain `claude` session is refused with `cag adopt NAME`, which moves it into a `cy`
+window.
+
 ## Restarting sessions without disturbing anything: `kc-sessions`
 
 Two restarts exist and they differ:

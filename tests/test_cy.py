@@ -161,6 +161,13 @@ class Loop(unittest.TestCase):
             self.assertEqual(calls, [f"project {loop['id']}", f"default {loop['id']}"])
             self.assertEqual((w.loops()[0]["token"], w.loops()[0]["pinned"]), ("project", True))
 
+    def test_token_of_gives_the_hook_the_askers_key_once(self):
+        with World() as w:
+            self.hook(w, 'echo "$@" >> "$HOME/hook.log"\necho token=personal\n')
+            w.cy("-n", "probe-kid2", "--token-of", "asker-key", env={"FAKE_CLAUDE_EXIT": "0"})
+            kid = w.loops()[0]["id"]
+            self.assertEqual((w.home / "hook.log").read_text().splitlines(), [f"default {kid} asker-key"])
+
     def test_a_branch_gives_the_hook_its_parent_once(self):
         with World() as w:
             self.hook(w, 'echo "$@" >> "$HOME/hook.log"\necho token=personal\n')

@@ -294,6 +294,20 @@ def herdr(argv: list[str]) -> int:
             p["screen"].append(text)
         save(w)
         return 0
+    if a in (["tab", "create"], ["workspace", "create"]):  # a new tab (in a new workspace) with one shell pane
+        opt = lambda k: argv[argv.index(k) + 1] if k in argv else None
+        if a[0] == "workspace":
+            ws = f"w{len(w['workspaces']) + 1}"
+            w["workspaces"][ws] = {"label": opt("--label") or ws}
+        else:
+            ws = opt("--workspace")
+        tab = f"{ws}:t{len(w['tabs']) + 1}"
+        w["tabs"][tab] = {"ws": ws, "label": (opt("--label") if a[0] == "tab" else None) or tab}
+        pane = f"{ws}:p{len(w['panes']) + 1}"
+        w["panes"][pane] = {"tab": tab, "cwd": opt("--cwd") or "", "fg": "shell", "screen": ["kohen@mac ~ %"]}
+        save(w)
+        return reply({"type": f"{a[0]}_create", "workspace": {"workspace_id": ws}, "tab": {"tab_id": tab},
+                      "root_pane": {"pane_id": pane}})
     if a == ["tab", "rename"]:
         w["tabs"][argv[2]]["label"] = argv[3]
         save(w)

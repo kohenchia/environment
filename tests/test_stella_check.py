@@ -27,25 +27,28 @@ class World:
         self.home = Path(self.t.name)
         self.store = self.home / ".local/share/stella"
         self.store.mkdir(parents=True)
-        (self.store / "check-state.json").write_text(json.dumps({"rules": 2, "sessions": []}))  # a state under today's rules
+        (self.store / "check-state.json").write_text(json.dumps({"rules": 3, "pr_rules": 3, "sessions": []}))  # today's rules
 
-    def job(self, jid, name, state="blocked", age=0, **fields):
-        d = self.home / ".claude/jobs" / jid
-        d.mkdir(parents=True, exist_ok=True)
-        p = d / "state.json"
-        p.write_text(json.dumps({"name": name, "state": state, **fields}))
-        t = time.time() - age
-        os.utime(p, (t, t))
-
-    def timeline(self, jid, *entries, text="x" * 50):
-        """The daemon's timeline of a job: (minutes ago, state) pairs, oldest first; `text` is the message of each."""
-        d = self.home / ".claude/jobs" / jid
-        d.mkdir(parents=True, exist_ok=True)
-        lines = []
-        for ago, state in entries:
-            at = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - ago * 60))
-            lines.append(json.dumps({"at": at, "state": state, "detail": "", "text": text}))
-        (d / "timeline.jsonl").write_text("\n".join(lines) + "\n")
+    def session(self, sid, name, reply="Which branch should I base this on?", age=0, *, status="idle", api_error=False,
+                worked=True, extra=(), at=None):
+        """A live session as `cag` reads it: a registry row and a transcript whose last reply was `age` seconds ago.
+        `worked`: it was given work (a tool call before the reply); `extra`: records appended after the reply."""
+        stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
+        t = at or time.time() - age
+        recs = [{"type": "user", "message": {"content": "go"}, "timestamp": stamp(t - 60)}]
+        if worked:
+            recs.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]},
+                         "timestamp": stamp(t - 30)})
+        recs.append({"type": "assistant", "message": {"content": [{"type": "text", "text": reply}]}, "timestamp": stamp(t),
+                     **({"isApiErrorMessage": True} if api_error else {})})
+        recs += [dict(r, timestamp=stamp(time.time() - r.pop("ago", 0))) for r in (dict(x) for x in extra)]
+        tr = self.home / ".claude/projects/p" / f"{sid}.jsonl"
+        tr.parent.mkdir(parents=True, exist_ok=True)
+        tr.write_text("\n".join(json.dumps(r) for r in recs) + "\n")
+        reg = self.home / ".claude/sessions"
+        reg.mkdir(parents=True, exist_ok=True)
+        (reg / f"{sid}.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": sid, "name": name, "status": status,
+                                                    "kind": "bg"}))
 
     def ledger(self, **entries):
         h = self.store / "approved-prs"
@@ -77,32 +80,33 @@ class World:
 
 
 class Findings(unittest.TestCase):
-    def test_a_session_blocked_for_15_minutes_wakes_once(self):
+    def test_a_session_waiting_on_a_question_for_15_minutes_wakes_once(self):
         with World() as w:
-            w.job("a1", "phase-10", age=10 * 60, needs="which branch?")
+            w.session("a1", "phase-10", age=10 * 60)
             self.assertEqual(w.once(), [])  # 10 minutes: not yet
-            w.job("a1", "phase-10", age=16 * 60, needs="which branch?")
+            w.session("a1", "phase-10", age=16 * 60)
             new = w.once()
             self.assertEqual([(f["kind"], f["session"]) for f in new], [("blocked", "phase-10")])
             self.assertEqual(w.once(), [])  # still blocked: not news again
 
     def test_stella_and_old_records_are_ignored(self):
         with World() as w:
-            w.job("s1", "stella", age=20 * 60)
-            w.job("o1", "ancient", age=5 * 3600)
+            w.session("s1", "stella", age=20 * 60)
+            w.session("o1", "ancient", age=5 * 3600)
             self.assertEqual(w.once(), [])
 
     def test_an_api_error_wakes_after_5_minutes(self):
         with World() as w:
-            w.job("e1", "tracker", state="done", age=2 * 60, detail="API Error: 500")
+            w.session("e1", "tracker", "API Error: 500", age=2 * 60, api_error=True)
             self.assertEqual(w.once(), [])
-            w.job("e1", "tracker", state="done", age=6 * 60, detail="API Error: 500")
+            w.session("e1", "tracker", "API Error: 500", age=6 * 60, api_error=True)
             self.assertEqual([f["kind"] for f in w.once()], ["api_error"])
 
-    def test_a_failed_session_is_an_api_error_after_5_minutes(self):
+    def test_a_dialog_waiting_for_15_minutes_wakes_once(self):
         with World() as w:
-            w.job("f1", "tracker", state="failed", age=6 * 60, needs="Retry later")
-            self.assertEqual([f["kind"] for f in w.once()], ["api_error"])
+            w.session("d1", "tracker", "Running the gate.", age=16 * 60, status="waiting")
+            self.assertEqual([(f["kind"], f["waiting"]) for f in w.once()], [("blocked", "dialog")])
+            self.assertEqual(w.once(), [])
 
     def test_every_pr_bucket_wakes_and_pr_tasks_are_written(self):
         with World() as w:
@@ -137,7 +141,7 @@ class Findings(unittest.TestCase):
 
     def test_events_log_gets_a_line_per_wake(self):
         with World() as w:
-            w.job("a1", "phase-10", age=20 * 60, needs="?")
+            w.session("a1", "phase-10", age=20 * 60)
             w.once()
             w.once()
             lines = (w.store / "events.log").read_text().splitlines()
@@ -170,14 +174,14 @@ class Findings(unittest.TestCase):
             new = w.once()
             self.assertEqual([(f["kind"], f.get("persisting")) for f in new], [("helper_error", True)])
 
-    def test_a_blocked_session_that_mentions_a_rate_limit_is_still_blocked(self):
+    def test_a_question_that_mentions_a_rate_limit_is_still_a_question(self):
         with World() as w:
-            w.job("b1", "phase-10", age=20 * 60, needs="awaiting your call on the rate limit")
+            w.session("b1", "phase-10", "Shall I wait out the rate limit or switch tokens?", age=20 * 60)
             self.assertEqual([f["kind"] for f in w.once()], ["blocked"])
 
     def test_a_dry_run_saves_nothing(self):
         with World() as w:
-            w.job("a1", "phase-10", age=20 * 60, needs="?")
+            w.session("a1", "phase-10", age=20 * 60)
             w.helper(steward={"waiting_review": [{"pr": "o/r#6"}]})
             before = (w.store / "check-state.json").read_text()
             p = w.run()
@@ -200,60 +204,65 @@ def act(pr="o/r#1", sig="abc|-|0||-|", reasons=("conflict",), **more):
 class Rules(unittest.TestCase):
     """The rules that keep a wake for what she can act on (stella calm plan, 2026-10-23)."""
 
-    def test_blocked_wakes_once_per_episode_whatever_its_wording(self):
+    def test_a_question_wakes_once_per_reply_whatever_else_happens(self):
         with World() as w:
-            w.timeline("t1", (300, "working"), (100, "blocked"), (60, "blocked"), (30, "blocked"))
-            w.job("t1", "tracker", age=2 * 60, needs="four decisions for you")
+            first, second = time.time() - 30 * 60, time.time() - 5 * 60
+            w.session("t1", "tracker", at=first)
             self.assertEqual([f["kind"] for f in w.once()], ["blocked"])
-            w.job("t1", "tracker", age=1 * 60, needs="three decisions, conflicts fixed")  # wording changed, file touched
+            w.session("t1", "tracker", at=first, status="busy")  # it works a while on something, then waits again
             self.assertEqual(w.once(), [])
-            w.timeline("t1", (300, "working"), (100, "blocked"), (60, "blocked"), (30, "blocked"), (10, "working"), (5, "blocked"))
-            w.job("t1", "tracker", age=1 * 60, needs="a new question")  # it worked, then blocked again: another episode,
+            w.session("t1", "tracker", at=first)  # the same reply: the same episode
+            self.assertEqual(w.once(), [])
+            w.session("t1", "tracker", "And which reviewer?", at=second)  # a new reply: another episode,
             self.assertEqual(w.once(), [])  # but only 5 minutes old
-            w.timeline("t1", (300, "working"), (100, "blocked"), (30, "working"), (20, "blocked"))
+            w.session("t1", "tracker", "And which reviewer?", at=second - 15 * 60)
             self.assertEqual([f["kind"] for f in w.once()], ["blocked"])
 
     def test_a_session_that_marked_its_asks_as_kohens_is_not_a_wake(self):
         with World() as w:
-            for jid, text in (("a", "...\n| Needs you | PRs awaiting a review |\n|---|---|\n| 1. Decide X | |"),
-                              ("b", "Who acts\n| Kohen | queue it |"), ("c", "NEXT FOR YOU\n1. run make dev")):
-                w.timeline(jid, (300, "working"), (200, "blocked"), text=text)
-                w.job(jid, "s" + jid, age=60)
-            w.timeline("d", (300, "working"), (200, "blocked"), text="Which branch should I base this on, main or the stack?")
-            w.job("d", "sd", age=60)
+            w.session("a", "sa", "...\n| Needs you | PRs awaiting a review |\n|---|---|\n| 1. Decide X | |", age=60 * 60)
+            w.session("d", "sd", "Which branch should I base this on, main or the stack?", age=60 * 60)
             self.assertEqual([f["session"] for f in w.once()], ["sd"])  # only the bare question can be answered from canon
 
     def test_a_session_that_was_never_given_work_is_not_a_wake(self):
         with World() as w:
-            w.timeline("f", (200, "blocked"), text="What would you like to work on?")
-            w.job("f", "fresh", age=60)
+            w.session("f", "fresh", "Ready. What would you like to work on?", age=60 * 60, worked=False)
             self.assertEqual(w.once(), [])
 
-    def test_a_blocked_job_whose_detail_is_an_api_error_is_an_api_error_not_a_question(self):
+    def test_an_api_error_reply_is_an_api_error_not_a_question(self):
         with World() as w:
-            w.timeline("g", (300, "working"), (200, "blocked"))
-            w.job("g", "pairing-guards", age=10 * 60, detail="API Error: Request rejected (429) · account rate limit exceeded")
+            w.session("g", "pairing-guards", "API Error: Request rejected (429) · account rate limit exceeded?",
+                      age=10 * 60, api_error=True)
             self.assertEqual([f["kind"] for f in w.once()], ["api_error"])
 
-    def test_a_blocked_episode_is_the_same_after_its_job_file_goes_idle_and_comes_back(self):
+    def test_an_episode_is_the_same_after_the_session_goes_out_of_view_and_comes_back(self):
         with World() as w:
-            w.timeline("t1", (500, "working"), (400, "blocked"))
-            w.job("t1", "backlog", age=2 * 60)
+            at = time.time() - 5 * 3600  # one reply, five hours ago
+            w.session("t1", "backlog", at=at, extra=[{"type": "system", "ago": 60}])  # in view: active a minute ago
             self.assertEqual(len(w.once()), 1)
-            w.job("t1", "backlog", age=5 * 3600)  # nothing touched it for hours: out of view
+            w.session("t1", "backlog", at=at)  # nothing since the reply: out of view
             self.assertEqual(w.once(), [])
-            w.job("t1", "backlog", age=60)  # a repair touched the file: still the same episode
+            w.session("t1", "backlog", at=at, extra=[{"type": "system", "ago": 30}])  # activity again, no new reply
             self.assertEqual(w.once(), [])
 
-    def test_sessions_blocked_when_the_rules_first_load_are_known_not_news(self):
+    def test_what_is_found_when_the_rules_first_load_is_known_not_news(self):
         with World() as w:
-            w.timeline("t1", (300, "blocked"))
-            w.job("t1", "backlog", age=120)
-            (w.store / "check-state.json").write_text(json.dumps({"sessions": ["blocked:t1:oldformat"]}))  # a state from before
-            self.assertEqual(w.once(), [])
-            w.timeline("t2", (200, "working"), (100, "blocked"))
-            w.job("t2", "tracker", age=60)
-            self.assertEqual([f["session"] for f in w.once()], ["tracker"])
+            w.session("t1", "backlog", age=60 * 60)
+            w.session("e1", "tracker", "API Error: 500", age=10 * 60, api_error=True)
+            (w.store / "check-state.json").write_text(json.dumps({"rules": 2, "sessions": ["blocked:a1b2c3d4:1792000000"]}))
+            self.assertEqual(w.once(), [])  # a state from before: seeded
+            w.session("t2", "phase-10", age=20 * 60)
+            self.assertEqual([f["session"] for f in w.once()], ["phase-10"])
+
+    def test_the_first_helper_run_with_new_rules_is_seeded_too(self):
+        with World() as w:
+            (w.store / "check-state.json").write_text(json.dumps({"rules": 3, "sessions": []}))  # no helper run yet
+            w.helper(merged={"merged": [{"id": "first-conv-id", "session": "onboard", "state": "done",
+                                         "signature": "379", "kind": "all"}]})
+            self.assertEqual(w.once(), [])  # what the helper lists under its new keys was already told
+            w.helper(merged={"merged": [{"id": "other-id", "session": "phase-10", "state": "done",
+                                         "signature": "412", "kind": "all"}]})
+            self.assertEqual([f["kind"] for f in w.once()], ["merged"])
 
     def test_a_session_in_a_mode_that_holds_her_messages_is_not_a_wake_but_its_pr_item_says_so(self):
         with World() as w:
@@ -307,17 +316,17 @@ class Rules(unittest.TestCase):
         with World() as w:
             seen = []
             for age_min in (6, 40, 66, 130, 170):
-                w.job("e1", "tracker", state="failed", age=age_min * 60)
+                w.session("e1", "tracker", "API Error: 529 overloaded", age=age_min * 60, api_error=True)
                 seen.append(len(w.once()))
             self.assertEqual(seen, [1, 0, 1, 1, 0])  # h0, h0 again, h1, h2, h2 again
-            w.job("e1", "tracker", state="failed", age=4 * 3600 + 600)  # 4 hours
+            w.session("e1", "tracker", "API Error: 529 overloaded", age=4 * 3600 + 600, api_error=True)  # 4 hours
             self.assertEqual(w.once(), [])
 
 
 class Watch(unittest.TestCase):
     def test_watch_exits_2_with_the_finding(self):
         with World() as w:
-            w.job("a1", "phase-10", age=20 * 60, needs="?")
+            w.session("a1", "phase-10", age=20 * 60)
             p = w.run("--watch")
             self.assertEqual(p.returncode, 2, p.stderr)
             self.assertIn("blocked", p.stdout)
@@ -332,7 +341,7 @@ class Watch(unittest.TestCase):
 
     def test_a_wake_lost_to_a_restart_is_delivered_again_only_by_a_fresh_watcher(self):
         with World() as w:
-            w.job("a1", "phase-10", age=20 * 60, needs="?")
+            w.session("a1", "phase-10", age=20 * 60)
             self.assertEqual(w.run("--watch").returncode, 2)
             state = json.loads((w.store / "check-state.json").read_text())
             (w.store / "check-state.json").write_text(json.dumps(state))
@@ -439,14 +448,12 @@ class Watch(unittest.TestCase):
 
     def test_findings_that_arrive_together_are_one_wake(self):
         with World() as w:
-            w.timeline("t1", (300, "working"), (200, "blocked"))
-            w.job("t1", "first", age=60)
+            w.session("t1", "first", age=60 * 60)
             env = {**w.env(), "STELLA_CHECK_SETTLE": "3"}
             p = subprocess.Popen(["python3", str(BIN), "--watch"], env=env, stdout=subprocess.PIPE, text=True)
             try:
                 time.sleep(1.2)  # the first finding is found, and the watcher is settling
-                w.timeline("t2", (300, "working"), (200, "blocked"))
-                w.job("t2", "second", age=60)
+                w.session("t2", "second", age=60 * 60)
                 out, _ = p.communicate(timeout=30)
             finally:
                 if p.poll() is None:

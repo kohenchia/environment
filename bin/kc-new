@@ -65,6 +65,24 @@ After it starts a session, kc-new runs the machine's hook `~/.config/kc-new/afte
 (environment KC_CALLER_JOB = the job that asked). The work setup uses it so that a session started by another one bills
 the token the asker bills. A hook that fails does not undo the session: the line kc-new prints says so.
 
+Foreground sessions (`cy` windows). A session that is not a background job writes its request to
+`~/.local/state/kc-new/requests/<its CLAUDE_CODE_SESSION_ID>.json`; the answer is `<that id>.result.json` beside it.
+For a session in a `cy` window, and for a new session, the requests work through `cy` (next to this file) once the
+switch has happened (`~/.local/state/cy/enabled`), and before it only for names starting `fg-probe`:
+
+  - a new session gets a window running `cy -n NAME --prompt-file <file>` (the prompt is saved under
+    ~/.local/state/kc-new/prompts/, so no length limit or shell quoting applies; `cy` deletes it once read), on the
+    token the asker is pinned to, if it is pinned;
+  - `restart` (with `prompt`, `fresh`, `token`; `force` is accepted and changes nothing), `rename` and `retire` are
+    queued for the follower, which carries each out when the session is idle: the answer is `queued`, naming the
+    request's file, and the follower's verdict appears beside it as `.result.json` (`cag` shows it pending meanwhile);
+  - `move` moves the window's pane; the follower follows it;
+  - `{"branch": NAME, "to": NEW, "space": S}` opens a window in S running `cy -r NAME --branch NEW`, a copy of the
+    conversation as a new session.
+
+Who may retire a window: the session that started it (its launch file's `started_by`) and Stella. A request naming a
+session that is neither a background job nor a `cy` window (a plain `claude`) is refused with `cag adopt NAME`.
+
 Standard library only.
 """
 
@@ -75,6 +93,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -106,6 +125,35 @@ def sessions():
         sys.modules["kc_sessions"] = _KS  # dataclasses look their module up here
         loader.exec_module(_KS)
     return _KS
+
+
+_CY = None
+
+
+def cy():
+    """The `cy` library next to this file: launch files, requests, the follower."""
+    global _CY
+    if _CY is None:
+        path = Path(__file__).resolve().with_name("cy")
+        loader = importlib.machinery.SourceFileLoader("cy_lib", str(path))
+        _CY = importlib.util.module_from_spec(importlib.util.spec_from_loader("cy_lib", loader))
+        loader.exec_module(_CY)
+    return _CY
+
+
+def windows_for(name: str | None) -> bool:
+    """Does this name go through `cy`: every name after the switch, only the probes' before it."""
+    return (cy().STATE / "enabled").exists() or str(name or "").startswith("fg-probe")
+
+
+def window_of(name) -> dict | None:
+    """The `cy` launch a request names (by name, a former name or a conversation id), when it goes through `cy`."""
+    if not isinstance(name, str) or not windows_for(name):
+        return None
+    for l in sorted(cy().launches(), key=lambda x: x.get("started_at") or 0, reverse=True):
+        if name in (l.get("name"), l["id"]) or name in (l.get("former_names") or []) or name in (l.get("conversations") or []):
+            return l
+    return None
 
 
 def roots() -> tuple[Path, ...]:
@@ -237,8 +285,8 @@ def space_id(label: str) -> str | None:
     return found
 
 
-def place(req: dict, sid: str) -> str:
-    """Open a window running `claude attach <sid>` in the space (made when missing); returns the pane id."""
+def place(req: dict, command: str) -> str:
+    """Open a window running `command` in the space (made when missing); returns the pane id."""
     wid = space_id(req["space"])
     if wid:
         reply = herdr("tab", "create", "--workspace", wid, "--label", req["name"], "--cwd", req["dir"], "--no-focus")
@@ -250,7 +298,7 @@ def place(req: dict, sid: str) -> str:
     pane = find(reply.get("result", {}).get("root_pane"), "pane_id")
     if not pane:
         raise RuntimeError("herdr gave no pane for the new window")
-    run("herdr", "pane", "run", pane, f"claude attach {sid}")
+    run("herdr", "pane", "run", pane, command)
     return pane
 
 
@@ -290,7 +338,7 @@ def restart_session(req: dict) -> tuple[bool, str, dict]:
         raise RuntimeError(str(e))
     info = {"ok": not problems, "restarted": name, "id": new_id, "was": mode, "log": lines}
     if space:
-        place({"space": space, "name": name, "dir": job.cwd}, new_id)
+        place({"space": space, "name": name, "dir": job.cwd}, f"claude attach {new_id}")
         info["space"] = space
     how = "restarted in place" if new_id == job.id else f"continued as {new_id}"
     line = f"kc-new: {how}: {name} ({new_id}) in bypass-permissions mode (was {mode})"
@@ -342,15 +390,21 @@ def move_session(req: dict) -> tuple[bool, str, dict]:
     if here is not None and here.workspace == space:
         return True, f"kc-new: {job.name} is already in space {space}", {"ok": True, "moved": job.name, "id": job.id, "space": space,
                                                                          "pane": panes[0], "unchanged": True}
-    wid = space_id(space)
-    if wid:
-        reply = herdr("pane", "move", panes[0], "--new-tab", "--workspace", wid, "--label", job.name, "--no-focus")
-    else:
-        reply = herdr("pane", "move", panes[0], "--new-workspace", "--label", space, "--tab-label", job.name, "--no-focus")
-    pane = find(find(reply, "move_result"), "pane_id") or panes[0]
+    pane, wid = move_pane(panes[0], job.name, space)
     was = f"{here.workspace}/{here.tab}" if here else "unknown"
     return True, f"kc-new: moved {job.name} ({job.id}) from {was} to space {space}" + ("" if wid else " (new)"), {
         "ok": True, "moved": job.name, "id": job.id, "space": space, "pane": pane, "was": was, "created_space": not wid}
+
+
+def move_pane(pane: str, label: str, space: str) -> tuple[str, str | None]:
+    """Move a pane into the space as a new tab called `label` (the space is made when missing); returns the pane's id
+    after the move and the space's id (None when it was made)."""
+    wid = space_id(space)
+    if wid:
+        reply = herdr("pane", "move", pane, "--new-tab", "--workspace", wid, "--label", label, "--no-focus")
+    else:
+        reply = herdr("pane", "move", pane, "--new-workspace", "--label", space, "--tab-label", label, "--no-focus")
+    return find(find(reply, "move_result"), "pane_id") or pane, wid
 
 
 def rename_session(req: dict) -> tuple[bool, str, dict]:
@@ -392,7 +446,164 @@ def rename_session(req: dict) -> tuple[bool, str, dict]:
 
 
 def caller_job(request: Path) -> str:
-    return request.parent.parent.name
+    """The background job that wrote the request ("" for a foreground session's request)."""
+    return request.parent.parent.name if request.name == REQUEST else ""
+
+
+def window_requests() -> Path:
+    return home() / ".local/state/kc-new/requests"
+
+
+def result_file(request: Path) -> Path:
+    return request.with_name(RESULT) if request.name == REQUEST else request.with_name(request.stem + ".result.json")
+
+
+def asker(request: Path) -> dict:
+    """Who wrote the request: its name, whether it is Stella, and its `cy` launch when it runs in a window."""
+    jid = caller_job(request)
+    if jid:
+        job = next((j for j in sessions().load_jobs() if j.id == jid), None)
+        return {"name": job.name if job else "", "stella": bool(job and job.name == "stella" and job.template == "stella"),
+                "job": jid, "key": job.live_id if job else ""}
+    sid = request.stem
+    l = next((l for l in cy().launches() if sid == l["id"] or sid in (l.get("conversations") or [])), None)
+    if l:
+        return {"name": l.get("name") or "", "stella": l.get("name") == "stella" and l.get("agent") == "stella",
+                "window": l, "key": l["id"]}
+    row = cy().live_row([sid]) or {}
+    return {"name": row.get("name") or "", "stella": False}
+
+
+def follower() -> str:
+    """Start `cy-follow` when it is not running (kc-new runs outside the sandbox, though the asker's variables say
+    otherwise)."""
+    os.environ.pop("CLAUDECODE", None)
+    return cy().start_follower()
+
+
+def cy_command(*args: str, by: str) -> str:
+    """The line a new window runs: `cy` from this checkout, told who started the session."""
+    return f"CY_STARTED_BY={shlex.quote(by)} " + " ".join(shlex.quote(a) for a in (str(Path(__file__).resolve().with_name("cy")), *args))
+
+
+def refuse_window_name(name: str, advice: str = "pick another name") -> None:
+    busy = cy().name_in_use(name)
+    if busy:
+        raise ValueError(f"cy: {name} is already live in {busy}; {advice}")
+    refuse_live_name(name, advice)
+
+
+def start_window(req: dict, who: dict) -> tuple[bool, str, dict]:
+    """A new session in a `cy` window: the prompt in a file, the window in the space, on the asker's pinned token."""
+    refuse_window_name(req["name"])
+    prompts = home() / ".local/state/kc-new/prompts"
+    prompts.mkdir(parents=True, exist_ok=True)
+    pf = prompts / f"{req['name']}.txt"
+    pf.write_text(req["prompt"])
+    args = ["-n", req["name"], "--prompt-file", str(pf)]
+    args += ["--model", req["model"]] if req.get("model") else []
+    args += ["--effort", req["effort"]] if req.get("effort") else []
+    args += ["--token-of", who["key"]] if who.get("key") else []  # the launch hook gives it the asker's pin, if any
+    pane = place(req, cy_command(*args, by=who.get("name") or ""))
+    seen = cy().wait_for(lambda: next((l for l in cy().launches() if l.get("name") == req["name"]
+                                       and l.get("status") == "live"), None), float(os.environ.get("KC_NEW_START_WAIT", "20")))
+    info = {"ok": True, "name": req["name"], "space": req["space"], "pane": pane, "window": True,
+            **({"id": seen["id"]} if seen else {"warning": "the window is open; the session has not started yet"})}
+    line = f"kc-new: started session {req['name']} in a window in space {req['space']}" + (
+        "" if seen else "; WARNING: it has not started yet (look at the window)")
+    return True, line, info
+
+
+def queue(kind: str, l: dict, body: dict, who: dict) -> tuple[bool, str, dict]:
+    path = cy().submit(l["id"], kind, body, by=who.get("name") or "")
+    state = follower()
+    return True, f"kc-new: queued {kind} of {l.get('name')}: {path} (it runs when the session is idle; " \
+                 f"the answer appears beside it as .result.json)", {"ok": True, "queued": str(path), kind: l.get("name"),
+                                                                     "follower": state}
+
+
+def window_restart(req: dict, l: dict, who: dict) -> tuple[bool, str, dict]:
+    if set(req) - {"restart", "prompt", "fresh", "token", "force", "space"}:
+        raise ValueError('a restart request has only "restart", "prompt", "fresh", "token", "force" and "space"')
+    if l.get("name") == "stella":
+        raise ValueError("stella is not restarted by this helper (run `stella restart`)")
+    prompt, token = req.get("prompt"), req.get("token")
+    if prompt is not None and (not isinstance(prompt, str) or len(prompt) > MAX_PROMPT):
+        raise ValueError(f"prompt must be a string of at most {MAX_PROMPT} characters")
+    if token is not None and (not isinstance(token, str) or not re.match(r"^[a-z]{1,20}$", token)):
+        raise ValueError("token, when given, must be a token's name")
+    body = {k: v for k, v in (("prompt", prompt), ("fresh", bool(req.get("fresh"))), ("token", token)) if v}
+    return queue("restart", l, body, who)
+
+
+def window_rename(req: dict, l: dict, who: dict) -> tuple[bool, str, dict]:
+    if set(req) - {"rename", "to"}:
+        raise ValueError('a rename request has only "rename" and "to"')
+    new = req.get("to")
+    if not isinstance(new, str) or not NAME.match(new):
+        raise ValueError("to must be lower-case letters, digits and dashes, 1-49 characters")
+    if l.get("name") == "stella" or new == "stella":
+        raise ValueError("stella is not renamed (her session and her tooling go by that name)")
+    if new == l.get("name"):
+        raise ValueError(f"{new} is already called {new}")
+    refuse_window_name(new)
+    return queue("rename", l, {"to": new}, who)
+
+
+def window_retire(req: dict, l: dict, who: dict) -> tuple[bool, str, dict]:
+    if set(req) - {"retire"}:
+        raise ValueError('a retire request has only "retire"')
+    if l.get("name") == "stella":
+        raise ValueError("stella is not retired by this helper")
+    if who.get("window") and who["window"]["id"] == l["id"]:
+        raise ValueError("a session does not retire itself")
+    if not who.get("stella") and (not who.get("name") or l.get("started_by") != who["name"]):
+        raise ValueError(f"{l.get('name')} was not started by this session; only the session that started it, or Stella, "
+                         f"may retire it")
+    return queue("retire", l, {}, who)
+
+
+def window_move(req: dict, l: dict) -> tuple[bool, str, dict]:
+    if set(req) - {"move", "space"}:
+        raise ValueError('a move request has only "move" and "space"')
+    space = req.get("space")
+    if not isinstance(space, str) or not SPACE.match(space):
+        raise ValueError("space must be 1-61 characters: letters, digits, space, dot, dash, underscore, #")
+    if l.get("status") != "live" or not l.get("pane"):
+        raise ValueError(f"{l.get('name')} has no window (it is {l.get('status')}); open one with `cy -r {l.get('name')}`")
+    if l.get("space") == space:
+        return True, f"kc-new: {l.get('name')} is already in space {space}", {"ok": True, "moved": l.get("name"),
+                                                                                "space": space, "unchanged": True}
+    pane, wid = move_pane(l["pane"], l.get("name") or "", space)
+    follower()
+    return True, f"kc-new: moved {l.get('name')} to space {space}" + ("" if wid else " (new)"), {
+        "ok": True, "moved": l.get("name"), "space": space, "pane": pane, "created_space": not wid}
+
+
+def branch_session(req: dict, who: dict) -> tuple[bool, str, dict]:
+    """A copy of a session's conversation, as a new session in its own window."""
+    if set(req) - {"branch", "to", "space"}:
+        raise ValueError('a branch request has only "branch", "to" and "space"')
+    l = window_of(req.get("branch"))
+    if not l:
+        raise ValueError(f"{req.get('branch')} is not a session in a cy window")
+    new, space = req.get("to"), req.get("space")
+    if not isinstance(new, str) or not NAME.match(new):
+        raise ValueError("to must be lower-case letters, digits and dashes, 1-49 characters")
+    if not isinstance(space, str) or not SPACE.match(space):
+        raise ValueError("space must be 1-61 characters: letters, digits, space, dot, dash, underscore, #")
+    refuse_window_name(new)
+    cwd = l.get("cwd") if l.get("cwd") and Path(l["cwd"]).is_dir() else str(home())
+    pane = place({"space": space, "name": new, "dir": cwd}, cy_command("-r", l["id"], "--branch", new, by=who.get("name") or ""))
+    return True, f"kc-new: branched {l.get('name')} into {new}, in a window in space {space}", {
+        "ok": True, "branched": l.get("name"), "to": new, "space": space, "pane": pane}
+
+
+def plain_session_advice(name) -> str:
+    """For a name that only a plain `claude` holds: how to bring it under cy."""
+    if isinstance(name, str) and any(d.get("name") == name for d in cy().registry()):
+        return f"; {name} is a plain claude session: run `cag adopt {name}` in a window's shell to manage it"
+    return ""
 
 
 def started_file() -> Path:
@@ -485,7 +696,7 @@ def doctor(req: dict, request: Path) -> tuple[bool, str, dict]:
 
 def handle(request: Path) -> tuple[bool, str]:
     """Process one request file; returns (succeeded, the line to print). The file is deleted first."""
-    result = request.with_name(RESULT)
+    result = result_file(request)
     try:
         raw = request.read_text()
     except OSError as e:
@@ -495,14 +706,27 @@ def handle(request: Path) -> tuple[bool, str]:
         loaded = json.loads(raw)
     except ValueError:
         loaded = None
-    kinds = [k for k in ("restart", "move", "rename", "retire", "doctor") if isinstance(loaded, dict) and k in loaded]
+    kinds = [k for k in ("restart", "move", "rename", "retire", "doctor", "branch") if isinstance(loaded, dict) and k in loaded]
     if kinds:
         try:
             if len(kinds) > 1:
-                raise ValueError(f"a request is one of restart, move, rename, retire or doctor, not {' and '.join(kinds)}")
+                raise ValueError(f"a request is one of restart, move, rename, retire, branch or doctor, not {' and '.join(kinds)}")
             kind = kinds[0]
-            ok, line, info = {"doctor": doctor, "retire": retire_session, "restart": lambda r, _: restart_session(r),
-                              "move": lambda r, _: move_session(r), "rename": lambda r, _: rename_session(r)}[kind](loaded, request)
+            l = window_of(loaded[kind]) if kind in ("restart", "move", "rename", "retire") else None
+            if kind == "branch":
+                ok, line, info = branch_session(loaded, asker(request))
+            elif l:
+                ok, line, info = {"restart": lambda: window_restart(loaded, l, asker(request)),
+                                  "rename": lambda: window_rename(loaded, l, asker(request)),
+                                  "retire": lambda: window_retire(loaded, l, asker(request)),
+                                  "move": lambda: window_move(loaded, l)}[kind]()
+            else:
+                try:
+                    ok, line, info = {"doctor": doctor, "retire": retire_session, "restart": lambda r, _: restart_session(r),
+                                      "move": lambda r, _: move_session(r),
+                                      "rename": lambda r, _: rename_session(r)}[kind](loaded, request)
+                except ValueError as e:
+                    raise ValueError(str(e) + (plain_session_advice(loaded.get(kind)) if "no session called" in str(e) else ""))
         except (ValueError, RuntimeError) as e:
             result.write_text(json.dumps({"ok": False, "error": str(e)}))
             return False, f"kc-new: {e}"
@@ -510,8 +734,12 @@ def handle(request: Path) -> tuple[bool, str]:
         return ok, line
     try:
         req = validate(loaded)
+        if windows_for(req["name"]):
+            ok, line, info = start_window(req, asker(request))
+            result.write_text(json.dumps(info))
+            return ok, line
         sid = start_session(req)
-    except (ValueError, RuntimeError) as e:
+    except (ValueError, RuntimeError, OSError) as e:
         result.write_text(json.dumps({"ok": False, "error": str(e)}))
         return False, f"kc-new: {e}"
     try:
@@ -520,7 +748,7 @@ def handle(request: Path) -> tuple[bool, str]:
         pass  # only the later retire is lost
     warning = after_start(request, sid)
     try:
-        place(req, sid)
+        place(req, f"claude attach {sid}")
     except RuntimeError as e:
         result.write_text(json.dumps({"ok": False, "id": sid, "error": str(e)}))
         return False, f"kc-new: session {req['name']} ({sid}) started, but no window: {e}. Attach with: claude attach {sid}"
@@ -532,6 +760,8 @@ def handle(request: Path) -> tuple[bool, str]:
 def pending() -> list[Path]:
     jobs = home() / ".claude/jobs"
     found = [p for p in jobs.glob(f"*/tmp/{REQUEST}") if p.is_file()] if jobs.is_dir() else []
+    fg = window_requests()
+    found += [p for p in fg.glob("*.json") if p.is_file() and not p.name.endswith(".result.json")] if fg.is_dir() else []
     return sorted(found, key=lambda p: p.stat().st_mtime)
 
 
@@ -540,7 +770,8 @@ def main() -> None:
         sys.exit(__doc__)
     todo = pending()
     if not todo:
-        sys.exit("kc-new: no request found: write $CLAUDE_JOB_DIR/tmp/kc-new.json first (see `kc-new --help`)")
+        sys.exit("kc-new: no request found: write $CLAUDE_JOB_DIR/tmp/kc-new.json (a background job) or "
+                 "~/.local/state/kc-new/requests/$CLAUDE_CODE_SESSION_ID.json first (see `kc-new --help`)")
     results = [handle(p) for p in todo]
     print("\n".join(line for _, line in results))
     sys.exit(0 if all(ok for ok, _ in results) else 1)

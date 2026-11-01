@@ -31,7 +31,8 @@ they win).
   a task I give her. Her manual is her agent file, which only her session loads. `kc-env` lists every command, skill and
   background process of this environment.
 - **A session starts another session or space** with `kc-new`, because its own sandbox cannot run `claude` or reach
-  herdr: it writes `$CLAUDE_JOB_DIR/tmp/kc-new.json` (`space`, `dir`, `name`, `prompt`) and runs
+  herdr: it writes `$CLAUDE_JOB_DIR/tmp/kc-new.json` (a background job) or
+  `~/.local/state/kc-new/requests/$CLAUDE_CODE_SESSION_ID.json` (any other session) (`space`, `dir`, `name`, `prompt`) and runs
   `~/.local/bin/kc-new` as the only command on the line (`docs/claude-code.md` has the fields). Never allowlist
   `claude` or `herdr` themselves, and never edit the tool allowlist: that is mine.
 - **Every skill reads its extension first**: `~/.claude/kc-extensions/<skill>.md`, when it exists, adds

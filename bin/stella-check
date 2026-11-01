@@ -16,13 +16,16 @@ writes into her project settings. Only one watcher runs at a time (a lock in her
 
 What wakes her is what her manual's "How you are woken" section acts on, and nothing else. No wake for what she
 cannot or will not act on, kind by kind (the numbers are in "Stella calm - plan", Assets):
-  - blocked: once per episode of a session being blocked (it is blocked for 15 minutes, counted from the job's
-    timeline, not from a file touch). The wording of what it needs changing is not a new episode; leaving the blocked
-    state and coming back is. Not a wake: a session whose last message marks its asks as Kohen's (a "Needs you" table,
-    "Who acts", "NEXT FOR YOU": outside the overnight window the manual forbids answering what the session marked as his
-    call, and inside it her hourly check reads those sessions itself), or that has not been given work yet. A "blocked" job whose detail reads "API Error" is an api_error. Sessions already blocked when this
-    state first loads are known, not news.
-  - api_error: a session stopped on an API error or a rate limit for 5 minutes, again each hour for 3 hours.
+  - blocked: once per episode of a session waiting on a bare question (its last reply ends with one and has no
+    "Needs you" table) or on a dialog (a permission prompt, Claude's registry says `waiting`), for 15 minutes counted
+    from that reply (from the session's last activity, for a dialog). The state is `cag`'s state rule, read from the
+    sessions table (`cag`'s light read: registry, transcript tails, launch files), for jobs and `cy` windows alike. A
+    new reply is a new episode; nothing else is. Not a wake: a session whose last message marks its asks as Kohen's (a
+    "Needs you" table: outside the overnight window the manual forbids answering what the session marked as his call,
+    and inside it her hourly check reads those sessions itself). Sessions already waiting when this state first loads
+    are known, not news.
+  - api_error: a session stopped on an API error (the state rule's "stopped: API error") for 5 minutes, again each hour
+    for 3 hours.
   - act and orphan (the PR helper's items): a conflict counts once it has held for two helper runs on the same sha
     (the flag flaps); an item Stella marked `noted` for that exact signature does not come back (it is listed in
     pr-tasks.json for her status); the owner's `would_be_held` mode rides along. A different signature (a new commit,
@@ -45,6 +48,9 @@ Stop hook, or after a compaction) never does, so a wake that is still queued is 
 Every wake appends one line to events.log. The PR helper's lasting lists (held, stuck, unacknowledged,
 waiting_review) are written to pr-tasks.json, which her status reads.
 
+Sessions are keyed by their first conversation id (a job's `sessionId`, a `cy` window's key), which neither a rename
+nor a restart nor `/clear` changes.
+
 It runs inside the session's command sandbox: it reads files and runs the PR helper (which calls `gh`); it never
 calls `claude` and never messages anyone.
 
@@ -53,10 +59,11 @@ Standard library only.
 
 from __future__ import annotations
 
-import calendar
 import contextlib
 import fcntl
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import os
 import re
@@ -76,12 +83,9 @@ SETTLE = int(os.environ.get("STELLA_CHECK_SETTLE", "20"))  # seconds the first f
 ERROR_PERSISTS = 3600  # a helper error still there after this is news again, as "persisting"
 ERROR_GAP = 1800  # failures further apart than this are separate errors
 ALIVE_WITHIN = 900  # a watcher that has not beat for this long is gone (a helper run takes up to 6 minutes)
-RECENT = 3 * 3600  # job records older than this are not looked at
+RECENT = 3 * 3600  # sessions with no activity for longer than this are not looked at
 MAX_LIFE = 23 * 3600  # exit quietly before the hook's one-day timeout kills it; the next turn's Stop hook restarts it
 SELF = ("stella",)
-# How today's check reads them: a rate limit or overload in what the session needs, "API Error" in its detail.
-NEEDS_RE = re.compile(r"rate.limit|overloaded|\b(429|529)\b|request timed out|server error")
-DETAIL_RE = re.compile(r"api error")
 COMPACT_NOTE = ("Your conversation was just compacted. Do the start-of-session steps in your manual again now, and read "
                 "pr-tasks.json, tasks.md and the end of events.log in your store before answering anything about PRs or "
                 "sessions.")
@@ -108,80 +112,60 @@ def hour() -> int:
     return int(now() // REPEAT)
 
 
-def jobs() -> list[dict]:
-    out = []
-    for p in sorted((home() / ".claude/jobs").glob("*/state.json")):
-        try:
-            d = json.loads(p.read_text())
-            mtime = p.stat().st_mtime
-        except (OSError, ValueError):
-            continue
-        if not isinstance(d, dict) or d.get("name") in SELF or now() - mtime > RECENT:
-            continue
-        d["_id"], d["_mtime"] = p.parent.name, mtime
-        out.append(d)
-    return out
+_CAG = None
 
 
-ASKS = re.compile(r"\|\s*Needs you\s*\||Who acts|NEXT FOR YOU")  # how a session marks what only Kohen can do
+def cag():
+    """The sessions table (`cag`, next to this file): the same rows Kohen sees."""
+    global _CAG
+    if _CAG is None:
+        path = Path(os.environ.get("STELLA_CAG") or Path(__file__).resolve().with_name("cag"))
+        loader = importlib.machinery.SourceFileLoader("cag_lib", str(path))
+        _CAG = importlib.util.module_from_spec(importlib.util.spec_from_loader("cag_lib", loader))
+        loader.exec_module(_CAG)
+    return _CAG
 
 
-def blocked_info(jid: str, fallback: float) -> tuple[float, bool, bool]:
-    """From the daemon's timeline (a job file's mtime moves whenever anything touches it): when the job's current run of
-    `blocked` began; whether its last message marks asks for Kohen (a "Needs you" table, or the older "Who acts" /
-    "NEXT FOR YOU" lists); whether it ever worked (a fresh session waiting for its first message has not).
-    Reads the tail of the file. Without a timeline: the fallback time, no asks, worked."""
-    path = home() / ".claude/jobs" / jid / "timeline.jsonl"
-    try:
-        size = path.stat().st_size
-        with open(path, "rb") as f:
-            f.seek(max(0, size - 600_000))
-            lines = f.read().decode("utf-8", "replace").splitlines()
-        whole = size <= 600_000
-        if not whole:
-            lines = lines[1:]  # the first line is cut
-    except OSError:
-        return fallback, False, True
-    entries = []
-    for line in lines:
-        try:
-            e = json.loads(line)
-            at = calendar.timegm(time.strptime(e["at"][:19], "%Y-%m-%dT%H:%M:%S"))  # the timeline is UTC
-        except (ValueError, KeyError, TypeError, OverflowError):
-            continue
-        entries.append((at, e.get("state"), str(e.get("text") or "")))
-    if not entries:
-        return fallback, False, True
-    since = entries[-1][0]
-    for at, state, _ in reversed(entries):
-        if state != "blocked":
-            break
-        since = at
-    asks = bool(ASKS.search(entries[-1][2]))
-    worked = any(state == "working" for _, state, _ in entries) or not whole
-    return since, asks, worked
+def sessions() -> list[dict]:
+    """Every session with activity in the last RECENT seconds, but Stella herself (cag's light read)."""
+    return [r for r in cag().rows(light=True) if r.get("name") not in SELF and r.get("first_conversation_id")
+            and now() - (r.get("last_activity_at") or r.get("started_at") or 0) <= RECENT]
+
+
+def worked(r: dict) -> bool:
+    """Has the session been given work: more than one prompt, or a tool used. A session that only answered its start
+    message ("What would you like to work on?") has not, and its question is for Kohen."""
+    c = cag().cy
+    recs = c.records(Path(r["transcript"]), tail=cag().TAIL) if r.get("transcript") else []
+    prompts = sum(1 for x in recs if c.is_user_prompt(x) and c.text_of(x).strip())
+    return prompts > 1 or any(used_a_tool(x) for x in recs)
+
+
+def used_a_tool(rec: dict) -> bool:
+    content = (rec.get("message") or {}).get("content") if rec.get("type") == "assistant" else None
+    return isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
 
 
 def session_findings() -> dict[str, dict]:
     found = {}
-    for j in jobs():
-        age = now() - j["_mtime"]
-        name, jid = str(j.get("name") or j["_id"]), j["_id"]
-        needs, detail = str(j.get("needs") or ""), str(j.get("detail") or "")
-        if j.get("state") == "blocked" and not DETAIL_RE.search(detail.lower()):
-            # A question for Kohen, whatever its words say. Not a wake when the session marked its asks as Kohen's
-            # (the manual's rule: nothing she may answer), or has not been given work yet.
-            since, asks, worked = blocked_info(jid, j["_mtime"])
-            if now() - since >= BLOCKED_AFTER and worked and not asks:  # one episode, one wake: no wording in the key
-                found[f"blocked:{jid}:{int(since)}"] = {"kind": "blocked", "session": name, "id": jid,
-                                                        "minutes": int((now() - since) / 60), "needs": needs[:300]}
+    for r in sessions():
+        name, key = str(r.get("name") or r["first_conversation_id"]), r["first_conversation_id"]
+        state, kind = r.get("state") or "", r.get("waiting_kind")
+        if state.startswith("waiting on you") and kind in ("question", "dialog"):
+            # A bare question or a dialog: once per episode, when it has waited BLOCKED_AFTER. A Needs-you table is
+            # Kohen's (kind "reply") and wakes no one.
+            since = (r.get("last_reply_at") if kind == "question" else r.get("last_activity_at")) or now()
+            if now() - since >= BLOCKED_AFTER and (kind == "dialog" or worked(r)):
+                found[f"blocked:{key}:{int(since)}"] = {"kind": "blocked", "session": name, "id": key, "waiting": kind,
+                                                       "minutes": int((now() - since) / 60),
+                                                       "needs": str(r.get("needs") or "")[:300]}
             continue
-        stopped = j.get("state") == "failed" or (j.get("state") != "working" and (
-            NEEDS_RE.search(needs.lower()) or DETAIL_RE.search(detail.lower())))
-        if stopped and age >= API_ERROR_AFTER and age // REPEAT <= REPEATS:
-            again = int(age // REPEAT)  # comes back once an hour of being stopped, while it stays
-            found[f"apierror:{jid}:h{again}"] = {"kind": "api_error", "session": name, "id": jid,
-                                                 "minutes": int(age / 60), "detail": (needs or detail)[:200]}
+        if state == "stopped: API error":
+            age = now() - (r.get("last_reply_at") or r.get("last_activity_at") or now())
+            if age >= API_ERROR_AFTER and age // REPEAT <= REPEATS:
+                again = int(age // REPEAT)  # comes back once an hour of being stopped, while it stays
+                found[f"apierror:{key}:h{again}"] = {"kind": "api_error", "session": name, "id": key,
+                                                     "minutes": int(age / 60), "detail": str(r.get("needs") or "")[:200]}
     return found
 
 
@@ -378,7 +362,8 @@ def update_state(change) -> None:
         save_state(st)
 
 
-RULES = 2  # bump when the keys of the findings change: a state from before is seeded, not woken for
+RULES = 3  # bump when the keys of the findings change: everything found on the first check (and the first helper run)
+           # with new rules is known, not news. 3: sessions keyed by first conversation id, from the sessions table
 
 
 def check(with_helper: bool, save: bool = True) -> list[dict]:
@@ -387,8 +372,9 @@ def check(with_helper: bool, save: bool = True) -> list[dict]:
     before = set(state.get("sessions", [])) | set(state.get("pr", []))
     woken = dict(state.get("woken", {}))  # blocked episodes already woken for: a session that drops out of view
     found = session_findings()            # (its job file idle for hours) and comes back is the same episode
-    if state.get("rules") != RULES:  # first run with these rules: what is blocked now is known, not news
+    if state.get("rules") != RULES:  # first run with these rules: what is found now is known, not news
         woken.update({k: now() for k in found if k.startswith("blocked:")})
+        before |= set(found)
     errors: list[dict] = []
     pr: dict[str, dict] = {}
     if with_helper:
@@ -401,6 +387,8 @@ def check(with_helper: bool, save: bool = True) -> list[dict]:
         for what in ("merged", "reminders"):
             if what in failed:
                 pr = {**{k: {} for k in kept if k.startswith(what + ":")}, **pr}
+        if state.get("pr_rules") != RULES and not failed:  # the helper's first run with these rules: seeded too
+            before |= set(pr)
     new = [{"key": k, **v} for k, v in {**found, **pr}.items()
            if k not in before and v and not (k.startswith("blocked:") and k in woken)] + errors
     woken.update({f["key"]: now() for f in new if f["key"].startswith("blocked:")})
@@ -412,6 +400,8 @@ def check(with_helper: bool, save: bool = True) -> list[dict]:
             if with_helper:
                 st["pr"], st["helper_at"], st["errors"] = sorted(pr), int(now()), state.get("errors", {})
                 st["conflicts"] = state.get("conflicts", st.get("conflicts", []))
+                if not failed:
+                    st["pr_rules"] = RULES
         update_state(apply)
     return new
 
