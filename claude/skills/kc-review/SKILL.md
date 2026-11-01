@@ -309,6 +309,21 @@ that was correct and was written in the subject's own words. So:
   each one; he called it the level all future reviews should explain at.
 - **Ids are proofs, not explanations.** A run, ticket or object id may sit in a table cell as the evidence for a claim
   ("run 4471 built the release"); it never carries the explanation, and rule or recipe numbers go to Evidence.
+- **Plain everywhere, not only in the asks (Kohen, 2026-10-31).** Some reports were plain in the body and hard in their
+  descriptions. The same words apply to the title, the frontmatter `verdict`, the `Reviews.md` row, the verdict, every
+  heading, every table cell, the draft message and the terms. Only Evidence may use paths, ids and internal names, and
+  each entry there still opens with one plain sentence.
+- **Sentences of about 20 words or fewer, one idea each.** A sentence with two "which" or "that" clauses is two
+  sentences. Use active verbs with a person doing them ("you run", "the run stops"), not nouns standing in for actions.
+- **Define each term once, where it is first used.** If the title or the verdict needs a term, the sentence right after
+  defines it, with an example value. Do not make the reader scroll to Terms for a word they already met.
+- **Say what the user sees or runs.** A name from the code (a function, step type, config key or flag) appears only when
+  a user types or sees it, and then next to its example. Otherwise write the command, the message or the result.
+
+| Too hard (from a real report) | Plain |
+|---|---|
+| "the job's saved config runs as the shared service account on any commit a launch names" | "Anyone who can start a run can make it run their own code, with the team's service account." |
+| "a defaulted field added to the input schema later makes every held input refused" | "If the team later adds a field with a default value, every file already saved fails to load." |
 
 When Kohen asks what a word or an ask in a report means, the report was not plain: answer him, then rewrite the report
 itself, and keep the earlier copy in `assets/` (`report-before-<what changed>-<date>.md`).
@@ -439,7 +454,12 @@ Read the report from the top as Kohen would, and revise it until every answer is
     Does every ask carry its `See it happen` line, or say why it has no case? Does `usecases.py check`
     pass on it, has its verifier rerun the sample and listed unused case folders, is every inferred statement rewritten
     or labelled, and are the cases reasoned from code named?
-12. Run `python3 ~/.claude/skills/kc-review/mdcheck.py <report> [<use-case page>]` on every file you wrote in the
+12. Reread, as someone who has not seen the PR, the title, the frontmatter verdict, the index row, the verdict, every
+    ask with its example and walk, every table cell and the draft message. Rewrite any sentence that runs past about 20
+    words or holds two ideas; uses a word not yet defined where it first appears; uses a code name the user never types
+    or sees; says what the code does where the user's command, message or result would do; or explains a term with
+    itself. Reread again until none is left.
+13. Run `python3 ~/.claude/skills/kc-review/mdcheck.py <report> [<use-case page>]` on every file you wrote in the
     vault, including the index row's file when you edited it. It prints nothing and exits 0 when no bare `<tag>` sits
     outside code and no table row has the wrong number of cells. Fix each line it names (`--fix` wraps complete tags in
     backticks and changes nothing else; a `|` in a cell you escape by hand) and run it again until it is silent.
