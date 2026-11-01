@@ -71,6 +71,10 @@ esac
 '''
 
 
+OLD_GET = 'echo \'{"result":{"pane":{"pane_id":"\'"$3"\'","tab_id":"w1:t1","workspace_id":"w1"}}}\' ;;'
+NEW_GET = 'echo \'{"result":{"pane":{"pane_id":"w9:p1","tab_id":"w9:t1","workspace_id":"w9"}}}\' ;;'
+
+
 class World:
     """A throwaway HOME with a fake claude and herdr first on PATH."""
 
@@ -596,6 +600,17 @@ class Follower(unittest.TestCase):
                 finally:
                     other.kill()
                     other.wait()
+            self.run_follower(w, body)
+
+    def test_a_move_whose_event_was_missed_is_followed_from_what_herdr_says(self):
+        with World() as w:
+            hd = w.home / "bin" / "herdr"
+            hd.write_text(hd.read_text().replace(OLD_GET, NEW_GET))
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
+                f.tick()
+                self.assertEqual((f.view(sid)["pane"], f.view(sid)["tab"], f.view(sid)["workspace"]),
+                                 ("w9:p1", "w9:t1", "w9"))
             self.run_follower(w, body)
 
     def test_labels_come_from_the_tab_and_the_space(self):

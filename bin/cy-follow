@@ -79,12 +79,17 @@ class Follower:
             d.update(fields)
             cy.write_json(cy.launch_file(sid), d)
 
-    def labels(self, pane: str) -> tuple[str | None, str | None]:
+    def where(self, pane: str) -> dict:
+        """The window's labels, and its ids as herdr reports them now: herdr still answers to a pane's old id after a
+        move, so this follows a move even when its event was missed."""
         info = cy.herdr("pane", "get", pane)
-        tab, ws = cy.find_key(info, "tab_id"), cy.find_key(info, "workspace_id")
-        window = cy.find_key(cy.herdr("tab", "get", tab), "label") if tab else None
-        space = cy.find_key(cy.herdr("workspace", "get", ws), "label") if ws else None
-        return space, window
+        if not cy.herdr_ok(info):
+            return {}
+        out = {k: cy.find_key(info, k + "_id") for k in ("pane", "tab", "workspace")}
+        out = {k: v for k, v in out.items() if v}
+        out["window"] = cy.find_key(cy.herdr("tab", "get", out["tab"]), "label") if out.get("tab") else None
+        out["space"] = cy.find_key(cy.herdr("workspace", "get", out["workspace"]), "label") if out.get("workspace") else None
+        return out
 
     def refresh(self, sid: str, rows: list[dict]) -> dict | None:
         """Bring one session's launch file up to date; return its registry row when its claude is live."""
@@ -114,7 +119,10 @@ class Follower:
                 fields["settled_pid"] = loop.get("launched_pid")
         pane = fields.get("pane") or view.get("pane")
         if pane and cy.held(sid) and time.time() - self.labels_at.get(sid, 0) > LABELS_EVERY:
-            fields["space"], fields["window"] = self.labels(pane)
+            now = self.where(pane)
+            if now.get("pane") and now["pane"] != pane:
+                self.reported.pop(sid, None)  # report to the window where it is now
+            fields.update(now)
             self.labels_at[sid] = time.time()
         self.write_view(sid, **fields)
         return row
@@ -299,7 +307,7 @@ class Follower:
                     req = {"id": "cy-follow", "method": "events.subscribe",
                            "params": {"subscriptions": [{"type": "pane.moved"}, {"type": "pane.closed"}]}}
                     c.sendall((json.dumps(req) + "\n").encode())
-                    buf = b""
+                    buf, seen = b"", set()
                     while True:
                         chunk = c.recv(65536)
                         if not chunk:
@@ -315,6 +323,10 @@ class Follower:
                                 print(f"cy-follow: herdr refused the subscription: {ev['error']}", file=sys.stderr,
                                       flush=True)
                                 continue
+                            kind = str(ev.get("event") or ev.get("type") or "reply") if isinstance(ev, dict) else "?"
+                            if kind not in seen:  # the first of each kind, so its shape can be checked in the log
+                                seen.add(kind)
+                                print(f"cy-follow: herdr sent {kind}: {json.dumps(ev)[:600]}", file=sys.stderr, flush=True)
                             try:
                                 self.on_event(ev)
                             except Exception as e:  # one bad event never stops the listener
