@@ -549,9 +549,18 @@ def token_env(token: str | None, key: str, parent: str | None = None) -> tuple[d
     return env, label, pinned
 
 
+CRONS_HOOK = os.path.join(os.path.dirname(BIN), "claude", "bin", "cy-crons")  # the Stop hook that saves a window's crons
+
+
 def settings_json(extra: dict | None) -> str:
+    """The one `--settings` value a window's claude gets: what a converted job carried, the agent view off, and the Stop
+    hook that saves the session's crons for a restart (only `cy` windows need it, so it rides here)."""
     merged = dict(extra or {})
     merged.update(VIEW_OFF)
+    if os.path.exists(CRONS_HOOK):
+        hooks = dict(merged.get("hooks") or {})
+        hooks["Stop"] = list(hooks.get("Stop") or []) + [{"hooks": [{"type": "command", "command": shlex.quote(CRONS_HOOK)}]}]
+        merged["hooks"] = hooks
     return json.dumps(merged)
 
 

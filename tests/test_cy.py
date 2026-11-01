@@ -185,7 +185,9 @@ class Loop(unittest.TestCase):
             argv = w.argv()[0]
             self.assertEqual(argv[argv.index("--session-id") + 1], loop["id"])
             self.assertEqual(argv[argv.index("--permission-mode") + 1], "bypassPermissions")
-            self.assertEqual(json.loads(argv[argv.index("--settings") + 1]), {"disableAgentView": True})
+            settings = json.loads(argv[argv.index("--settings") + 1])
+            self.assertTrue(settings["disableAgentView"])
+            self.assertEqual(settings["hooks"]["Stop"][0]["hooks"][0]["command"], str(HOOK))  # cy-crons saves the crons
             self.assertEqual(argv[-1], "hello")
             self.assertEqual((loop["status"], loop["end"]), ("ended", "exit"))
             self.assertIn("ended. ⏎ resumes it here", out)
