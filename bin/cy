@@ -611,15 +611,15 @@ def follower_version() -> str:
 
 def start_follower() -> str:
     """Start cy-follow detached, or replace one running older code. Never from inside a Claude sandbox."""
+    status = read_json(STATE / "follow.status.json", {})
+    if follower_running() and status.get("version") == follower_version():
+        return "running"  # whoever asks, a current follower is enough
     if os.environ.get("CLAUDECODE"):
         return "not started (inside a Claude session)"
     if os.environ.get("CY_NO_FOLLOWER"):
         return "not started (CY_NO_FOLLOWER)"
     follow = os.path.join(BIN, "cy-follow")
-    status = read_json(STATE / "follow.status.json", {})
     if follower_running():
-        if status.get("version") == follower_version():
-            return "running"
         signal_if_same(status.get("pid"), status.get("start"))
         time.sleep(1)
     STATE.mkdir(parents=True, exist_ok=True)
