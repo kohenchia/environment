@@ -278,9 +278,9 @@ class Follower:
             self.write_view(sid, window_closed=True)
 
     def on_event(self, ev: dict):
-        text = json.dumps(ev)
-        kind = ev.get("event") or ev.get("type") or cy.find_key(ev, "event") or ""
-        moved, closed = "pane.moved" in (kind, text) or "pane.moved" in text, "pane.closed" in text
+        # herdr names them pane_moved and pane_closed (the subscription types are pane.moved and pane.closed)
+        kind = str(ev.get("event") or cy.find_key(ev.get("data") or {}, "type") or "").replace(".", "_")
+        moved, closed = kind == "pane_moved", kind == "pane_closed"
         data = ev.get("data") if isinstance(ev.get("data"), dict) else ev
         old = cy.find_key(data, "previous_pane_id")
         new = data.get("pane_id") if isinstance(data, dict) else None

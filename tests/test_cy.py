@@ -499,10 +499,10 @@ class Follower(unittest.TestCase):
             try:
                 f = fm.Follower()
                 f.tick()
-                f.on_event({"event": "pane.moved", "data": {"previous_pane_id": "w1:p1", "pane_id": "w2:p1",
-                                                            "workspace_id": "w2"}})
+                f.on_event({"event": "pane_moved", "data": {"type": "pane_moved", "previous_pane_id": "w1:p1",
+                                                            "pane_id": "w2:p1", "workspace_id": "w2"}})
                 self.assertEqual(f.view(sid)["pane"], "w2:p1")
-                f.on_event({"event": "pane.closed", "data": {"pane_id": "w2:p1"}})
+                f.on_event({"event": "pane_closed", "data": {"pane_id": "w2:p1", "type": "pane_closed", "workspace_id": "w2"}})
                 self.assertEqual(f.view(sid)["end"], "closed")
             finally:
                 os.environ.clear()
@@ -574,7 +574,7 @@ class Follower(unittest.TestCase):
             def body(fm, sid, child, lock):
                 f = fm.Follower()
                 f.tick()
-                f.on_event({"event": "pane.closed", "data": {"pane_id": "w1:p1"}})
+                f.on_event({"event": "pane_closed", "data": {"pane_id": "w1:p1", "type": "pane_closed", "workspace_id": "w1"}})
                 lock.close()
                 child.kill()
                 child.wait()
