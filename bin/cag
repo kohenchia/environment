@@ -21,7 +21,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
-import signal
+import shlex
 import subprocess
 import sys
 import time
@@ -88,6 +88,10 @@ def row(*, name, state, needs, waiting_kind, token, pinned, mode, space, window,
             "kind": kind}
 
 
+def job_prs(job: dict) -> list[str]:
+    return [c["href"] for c in (job.get("children") or []) if c.get("kind") == "pr" and c.get("href")]
+
+
 def first_prompt(recs: list[dict]) -> str:
     for r in recs:
         if cy.is_user_prompt(r):
@@ -131,20 +135,28 @@ def rows(show_all: bool = False) -> list[dict]:
                        last_reply_at=ts_of([rep]) if rep else None, conversation=conv, conversations=convs, first=l["id"],
                        started_at=l.get("started_at"), transcript=cy.transcript(conv), pending=len(cy.pending(l["id"])),
                        flags=flags, kind="cy"))
+    by_job = {j["_id"]: j for j in jobs()}
     for d in reg:  # live sessions cy did not start: background jobs, and plain `claude` runs
         if d.get("sessionId") in seen_convs or str(d.get("name") or "").startswith("fg-probe"):
             continue
+        job = by_job.get(d.get("jobId") or d.get("parkedJobId") or "") or {}
+        convs = list(dict.fromkeys(x for x in (job.get("sessionId"), d.get("sessionId")) if x))
         recs = cy.records(cy.transcript(d.get("sessionId")))
         st = cy.state_of(d, recs)
         kind = "background job" if d.get("kind") == "bg" else "not started by cy"
         flags = [kind] + (["parked into a job"] if d.get("parkedJobId") else [])
+        prs = job_prs(job)
+        for c in convs:
+            prs += [p for p in cy.pr_links(cy.records(cy.transcript(c))) if p not in prs]
+        rep, _ = cy.last_reply(recs)
         out.append(row(name=d.get("name"), state=st["state"], needs=st["needs"], waiting_kind=st["waiting_kind"],
                        token="?", pinned=False, mode=mode_word(cy.last_mode(recs)), space=None, window=None,
-                       cwd=d.get("cwd"), prs=cy.pr_links(recs), intent=first_prompt(recs), last_activity=ts_of(recs),
-                       last_reply_at=None, conversation=d.get("sessionId"), conversations=[d.get("sessionId")],
-                       first=d.get("sessionId"), started_at=(d.get("startedAt") or 0) / 1000, transcript=cy.transcript(d.get("sessionId")),
+                       cwd=d.get("cwd"), prs=prs, intent=first_prompt(cy.records(cy.transcript(convs[0]))) if convs
+                       else "", last_activity=ts_of(recs), last_reply_at=ts_of([rep]) if rep else None,
+                       conversation=d.get("sessionId"), conversations=convs, first=convs[0] if convs else None,
+                       started_at=(d.get("startedAt") or 0) / 1000, transcript=cy.transcript(d.get("sessionId")),
                        pending=0, flags=flags, kind="job" if d.get("kind") == "bg" else "plain"))
-        seen_convs.add(d.get("sessionId"))
+        seen_convs.update(convs)
     live_jobs = {d.get("jobId") for d in reg if d.get("jobId")}
     for j in jobs():  # dormant jobs: no process; blocked or stopped (done ones only with --all)
         sid = j.get("resumeSessionId") or j.get("sessionId")
@@ -154,11 +166,12 @@ def rows(show_all: bool = False) -> list[dict]:
             continue
         recs = cy.records(cy.transcript(sid))
         st = cy.state_of(None, recs)
+        rep, _ = cy.last_reply(recs)
         out.append(row(name=j.get("name"), state=f"dormant job ({j.get('state')})", needs=st["needs"] or "convert or close",
                        waiting_kind=st["waiting_kind"], token="?", pinned=False, mode=mode_word(cy.last_mode(recs)),
-                       space=None, window=None, cwd=j.get("cwd"), prs=[c["href"] for c in (j.get("children") or [])
-                                                                        if c.get("kind") == "pr"],
-                       intent=(j.get("intent") or "")[:160], last_activity=ts_of(recs), last_reply_at=None,
+                       space=None, window=None, cwd=j.get("cwd"), prs=job_prs(j),
+                       intent=(j.get("intent") or "")[:160], last_activity=ts_of(recs),
+                       last_reply_at=ts_of([rep]) if rep else None,
                        conversation=sid, conversations=[x for x in (j.get("sessionId"), sid) if x],
                        first=j.get("sessionId"), started_at=None, transcript=cy.transcript(sid), pending=0,
                        flags=["dormant job"], kind="dormant"))
@@ -220,15 +233,16 @@ def queue(name: str, kind: str, body: dict) -> int:
     if not l:
         print(f"cag: {name} is not a session cy started (cag adopt {name} converts it)", file=sys.stderr)
         return 1
-    path = cy.submit(l["id"], kind, body, by="cag")
+    # a session running under cy carries its own name (the follower checks who may retire whom); else it is Kohen
+    path = cy.submit(l["id"], kind, body, by=os.environ.get("CY_SESSION") or "kohen")
     print(f"cag: queued {kind} of {l.get('name')}: {path}")
     cy.start_follower()
     res = cy.wait_for(lambda: cy.result_of(path), 10)
-    if res:
-        print(f"cag: {res.get('result')}: {res.get('note')}")
-    else:
+    if not res:
         print("cag: it runs when the session is idle; its answer will be beside the request")
-    return 0
+        return 0
+    print(f"cag: {res.get('result')}: {res.get('note')}", file=sys.stderr if res.get("result") != "done" else sys.stdout)
+    return 0 if res.get("result") == "done" else 1
 
 
 def herdr_panes() -> list[dict]:
@@ -273,16 +287,23 @@ def flag_value(flags: list[str], *names: str) -> str | None:
     return None
 
 
+def job_named(name: str, reg: list[dict], *, live: bool) -> dict | None:
+    """Of the jobs holding this name (a name can belong to two), the one with a process, or the one without."""
+    named = sorted((j for j in jobs() if j.get("name") == name), key=lambda j: str(j.get("updatedAt") or ""), reverse=True)
+    running = {d.get("jobId") for d in reg if d.get("jobId")}
+    return next((j for j in named if (j["_id"] in running) == live), None) or (named[0] if named and live else None)
+
+
 def adopt(name: str) -> int:
-    job = next((j for j in jobs() if j.get("name") == name), None)
     reg = cy.registry()
+    job = job_named(name, reg, live=True)
     if job:
         key = job.get("sessionId") or job["_id"]
         live_id = job.get("resumeSessionId") or key
         worker = next((d for d in reg if d.get("jobId") == job["_id"]), None)
         while worker:
             j = cy.read_json(JOBS / job["_id"] / "state.json", {})
-            held = [] if j.get("tempo") == "idle" else [j.get("tempo") or "busy"]
+            held = [] if j.get("tempo") in ("idle", "blocked") else [j.get("tempo") or "busy"]  # blocked: waits on you
             infl = j.get("inFlight") or {}
             if infl.get("tasks") or infl.get("queued"):
                 held.append(f"{infl.get('tasks', 0)} tasks, {infl.get('queued', 0)} queued")
@@ -298,7 +319,7 @@ def adopt(name: str) -> int:
         if worker:
             subprocess.run(["claude", "stop", job["_id"]], capture_output=True, timeout=60)
         pane = open_window(old.get("workspace_id") if old else None, os.path.basename(job.get("cwd") or "adopted"), name,
-                           job.get("cwd") or str(cy.HOME), f"cy -r {key}")
+                           job.get("cwd") or str(cy.HOME), f"{shlex.quote(cy.ME)} -r {key}")
         if old and pane:
             cy.herdr("pane", "close", old["pane_id"])  # never typed into: after the stop it may show the agents view
         print(f"cag: {name} now runs under cy in {'its space' if old else 'space ' + os.path.basename(job.get('cwd') or '')}"
@@ -315,20 +336,23 @@ def adopt(name: str) -> int:
         if not d:
             break
     key = (d or {}).get("sessionId")
+    if not key:
+        print(f"cag: {name} ended before it could be adopted, and left no conversation id", file=sys.stderr)
+        return 1
     stub(key, name=name, cwd=(d or {}).get("cwd") or str(cy.HOME), convs=[key],
          model=cy.last_model(cy.records(cy.transcript(key))))
     old = pane_running(str(d["pid"])) if d else None
     if d:
         cy.signal_if_same(d["pid"], d.get("procStart"))
     pane = open_window(old.get("workspace_id") if old else None, os.path.basename((d or {}).get("cwd") or "adopted"),
-                       name, (d or {}).get("cwd") or str(cy.HOME), f"cy -r {key}")
+                       name, (d or {}).get("cwd") or str(cy.HOME), f"{shlex.quote(cy.ME)} -r {key}")
     print(f"cag: {name} now runs under cy" if pane else f"cag: {name} was ended; open it with: cy -r {key}")
     return 0 if pane else 1
 
 
 def close(name: str) -> int:
-    job = next((j for j in jobs() if j.get("name") == name), None)
-    if not job or any(d.get("jobId") == job["_id"] for d in cy.registry()):
+    job = job_named(name, cy.registry(), live=False)
+    if not job:
         print(f"cag: {name} is not a dormant job (one with no process)", file=sys.stderr)
         return 1
     subprocess.run(["claude", "stop", job["_id"]], capture_output=True, timeout=60)

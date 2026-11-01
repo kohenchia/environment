@@ -62,7 +62,9 @@ echo "$*" >> "$HOME/herdr.log"
 case "$1 $2" in
   "workspace list") echo '{"result":{"workspaces":[{"workspace_id":"w1","label":"projects"}]}}' ;;
   "pane get") if [ "$3" = "w1:p9" ]; then echo '{"error":{"code":"pane_not_found"}}'; exit 1; fi
-              echo '{"result":{"pane":{"pane_id":"'"$3"'","tab_label":"t","workspace_label":"projects"}}}' ;;
+              echo '{"result":{"pane":{"pane_id":"'"$3"'","tab_id":"w1:t1","workspace_id":"w1"}}}' ;;
+  "tab get") echo '{"result":{"tab":{"tab_id":"'"$3"'","label":"probe-window"}}}' ;;
+  "workspace get") echo '{"result":{"workspace":{"workspace_id":"'"$3"'","label":"projects"}}}' ;;
   "tab create") echo '{"result":{"tab":{"tab_id":"w1:t5"},"root_pane":{"pane_id":"w1:p5"}}}' ;;
   *) echo '{"result":{"type":"ok"}}' ;;
 esac
@@ -82,7 +84,7 @@ class World:
             (bindir / name).chmod(0o755)
         self.env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "HERDR_SOCKET_PATH")}
         self.env.update(HOME=str(self.home), PATH=f"{bindir}:{os.environ['PATH']}", HERDR_PANE_ID="w1:p1",
-                        HERDR_TAB_ID="w1:t1", HERDR_WORKSPACE_ID="w1")
+                        HERDR_TAB_ID="w1:t1", HERDR_WORKSPACE_ID="w1", CY_NO_FOLLOWER="1")
         self.state = self.home / ".local" / "state" / "cy"
         return self
 
@@ -251,6 +253,39 @@ class Loop(unittest.TestCase):
             self.assertEqual(w.argv()[0][-1], "a long prompt with `backticks` and $DOLLARS")
             self.assertFalse(pf.exists())
 
+    def test_resume_in_another_window_records_that_window(self):
+        with World() as w:
+            w.cy("-n", "probe-ten", env={"FAKE_CLAUDE_EXIT": "0"})
+            w.cy("-r", "probe-ten", env={"FAKE_CLAUDE_EXIT": "0", "HERDR_PANE_ID": "w4:p2", "HERDR_TAB_ID": "w4:t2"})
+            self.assertEqual((w.loops()[0]["pane"], w.loops()[0]["tab"]), ("w4:p2", "w4:t2"))
+
+    def test_a_failing_launch_hook_never_launches(self):
+        with World() as w:
+            hook = w.home / ".config" / "cy" / "launch-env"
+            hook.parent.mkdir(parents=True)
+            hook.write_text("#!/bin/sh\necho no token >&2\nexit 1\n")
+            hook.chmod(0o755)
+            code, out, err = w.cy("-n", "probe-eleven")
+            self.assertEqual(code, 1)
+            self.assertIn("launch hook", err)
+            self.assertEqual(w.argv(), [])
+            self.assertEqual(w.loops()[0]["status"], "crashed")
+
+    def test_a_resume_re_arms_the_session_crons_it_lost(self):
+        with World() as w:
+            w.cy("-n", "probe-twelve", env={"FAKE_CLAUDE_EXIT": "0"})
+            sid = w.loops()[0]["id"]
+            crons = w.state / "crons"
+            crons.mkdir()
+            (crons / f"{sid}.json").write_text(json.dumps({"session_crons": [
+                {"schedule": "*/5 * * * *", "prompt": "check the PR"}, {"schedule": "0 9 * * *", "prompt": "durable",
+                                                                         "durable": True}]}))
+            w.cy("-r", "probe-twelve", env={"FAKE_CLAUDE_EXIT": "0"})
+            prompt = w.argv()[1][-1]
+            self.assertTrue(prompt.startswith("[cy restart]"), prompt)
+            self.assertIn("check the PR", prompt)
+            self.assertNotIn("durable", prompt)
+
 
 class StateRule(unittest.TestCase):
     def setUp(self):
@@ -282,6 +317,14 @@ class StateRule(unittest.TestCase):
         recs = self.turn("go", table) + self.turn("[cy restart] Restarted at 00:12.", "Re-armed the loop.")
         self.assertEqual(self.cy.state_of({"status": "idle"}, recs)["needs"], "Send the two DRI messages")
 
+    def test_a_request_prompt_is_never_marked_as_a_restart(self):
+        self.assertEqual(self.cy.rearm_text("none", "Check the PR again"), "Check the PR again")
+        recs = self.turn("go", "done.") + self.turn("Check the PR again", "Which reviewer should I ask?")
+        self.assertEqual(self.cy.state_of({"status": "idle"}, recs)["waiting_kind"], "question")
+
+    def test_the_followers_version_covers_cy_too(self):
+        self.assertIn(self.cy.file_version(self.cy.ME), self.cy.follower_version())
+
 
 class Follower(unittest.TestCase):
     def setup_session(self, w, status="idle"):
@@ -296,13 +339,14 @@ class Follower(unittest.TestCase):
         fcntl.flock(lock, fcntl.LOCK_EX)
         reg = w.home / ".claude" / "sessions"
         reg.mkdir(parents=True, exist_ok=True)
+        began = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(cy.started_at(child.pid)))
         (reg / f"{child.pid}.json").write_text(json.dumps({"pid": child.pid, "sessionId": sid, "name": "probe-f",
-                                                            "status": status, "kind": "interactive"}))
+                                                            "status": status, "kind": "interactive", "procStart": began}))
         return cy, sid, child, lock
 
     def follower(self, w):
         old = os.environ.copy()
-        os.environ.update(HOME=str(w.home), PATH=w.env["PATH"])
+        os.environ.update(HOME=str(w.home), PATH=w.env["PATH"], CY_NO_FOLLOWER="1")
         try:
             return w.module(FOLLOW, "cy_follow_t"), old
         except Exception:
@@ -316,9 +360,11 @@ class Follower(unittest.TestCase):
             fm, old = self.follower(w)
             try:
                 f = fm.Follower()
+                (fm.cy.STATE / "enabled").touch()
                 req = fm.cy.submit(sid, "restart", {"token": "project"})
                 f.tick()
-                self.assertTrue(req.exists())  # not idle for 3 s yet
+                self.assertIsNone(fm.cy.result_of(req))  # not idle for 3 s yet
+                self.assertTrue((req.parent / "doing" / req.name).exists())  # claimed
                 f.idle_since[sid] = time.time() - 5
                 f.tick()
                 order = json.loads(fm.cy.next_file(sid).read_text())
@@ -343,7 +389,7 @@ class Follower(unittest.TestCase):
                 req = fm.cy.submit(sid, "restart", {})
                 f.idle_since[sid] = time.time() - 60
                 f.tick()
-                self.assertTrue(req.exists())
+                self.assertIsNone(fm.cy.result_of(req))
                 self.assertIsNone(child.poll())
             finally:
                 os.environ.clear()
@@ -394,7 +440,7 @@ class Follower(unittest.TestCase):
                 f.on_event({"event": "pane.moved", "data": {"previous_pane_id": "w1:p1", "pane_id": "w2:p1",
                                                             "workspace_id": "w2"}})
                 self.assertEqual(f.view(sid)["pane"], "w2:p1")
-                f.on_event({"event": "pane_closed", "data": {"pane_id": "w2:p1"}})
+                f.on_event({"event": "pane.closed", "data": {"pane_id": "w2:p1"}})
                 self.assertEqual(f.view(sid)["end"], "closed")
             finally:
                 os.environ.clear()
@@ -419,6 +465,159 @@ class Follower(unittest.TestCase):
             finally:
                 os.environ.clear()
                 os.environ.update(old)
+
+    def run_follower(self, w, body, status="idle"):
+        """Set up a live session, hand the follower and the pieces to `body`, and clean up after."""
+        cy, sid, child, lock = self.setup_session(w, status=status)
+        fm, old = self.follower(w)
+        try:
+            body(fm, sid, child, lock)
+        finally:
+            os.environ.clear()
+            os.environ.update(old)
+            child.kill()
+            child.wait()
+            lock.close()
+
+    def herdr_log(self, w):
+        log = w.home / "herdr.log"
+        return log.read_text() if log.exists() else ""
+
+    def test_a_dead_loops_stale_pid_is_never_trusted(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                lock.close()  # the loop died (Cmd+W, kill -9); its pid now belongs to someone else's claude
+                loop = fm.cy.read_json(fm.cy.loop_file(sid))
+                fm.cy.write_json(fm.cy.loop_file(sid), dict(loop, launched_start=1000.0))
+                f = fm.Follower()
+                for _ in range(3):
+                    f.tick()
+                time.sleep(0.5)
+                self.assertIsNone(child.poll())
+                self.assertNotIn(f.view(sid).get("status"), ("orphan", "crashed"))
+            self.run_follower(w, body)
+
+    def test_an_orphan_is_ended_once_it_is_idle(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                lock.close()  # the loop died; its claude did not
+                f = fm.Follower()
+                f.tick()
+                self.assertEqual(child.wait(timeout=10), -signal.SIGTERM)
+                self.assertEqual((f.view(sid)["status"], f.view(sid)["end"]), ("crashed", "crashed"))
+            self.run_follower(w, body)
+
+    def test_how_a_session_ended_survives_the_next_pass(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
+                f.tick()
+                f.on_event({"event": "pane.closed", "data": {"pane_id": "w1:p1"}})
+                lock.close()
+                child.kill()
+                child.wait()
+                f.tick()
+                f.tick()
+                got = next(l for l in fm.cy.launches() if l["id"] == sid)
+                self.assertEqual((got["status"], got["end"]), ("ended", "closed"))
+            self.run_follower(w, body)
+
+    def test_a_new_launch_in_another_window_moves_the_report_there(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
+                f.tick()
+                other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+                try:
+                    loop = fm.cy.read_json(fm.cy.loop_file(sid))
+                    fm.cy.write_json(fm.cy.loop_file(sid), dict(loop, launched_pid=other.pid, pane="w3:p1",
+                                                                 launched_start=fm.cy.started_at(other.pid)))
+                    f.tick()
+                    self.assertEqual(f.view(sid)["pane"], "w3:p1")
+                    self.assertIn("--state idle w3:p1", self.herdr_log(w))
+                finally:
+                    other.kill()
+                    other.wait()
+            self.run_follower(w, body)
+
+    def test_labels_come_from_the_tab_and_the_space(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
+                f.tick()
+                self.assertEqual((f.view(sid)["space"], f.view(sid)["window"]), ("projects", "probe-window"))
+            self.run_follower(w, body)
+
+    def test_no_resume_command_is_given_to_herdr_before_the_switch(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                fm.Follower().tick()
+                reports = [l for l in self.herdr_log(w).splitlines() if l.startswith("pane report-agent")]
+                self.assertEqual(reports, ["pane report-agent --source kc-cy --agent claude --state idle w1:p1"])
+            self.run_follower(w, body)
+
+    def test_a_restart_keeps_mode_and_model_and_never_resends_the_first_prompt(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                tr = w.home / ".claude" / "projects" / "-fake" / f"{sid}.jsonl"
+                tr.parent.mkdir(parents=True, exist_ok=True)
+                tr.write_text("\n".join(json.dumps(r) for r in (
+                    {"type": "user", "message": {"content": "the first prompt"}, "permissionMode": "bypassPermissions"},
+                    {"type": "permission-mode", "permissionMode": "plan"},
+                    {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}],
+                                                      "model": "claude-sonnet-5-5"}})) + "\n")
+                f = fm.Follower()
+                fm.cy.submit(sid, "restart", {"prompt": "carry on"})
+                f.idle_since[sid] = time.time() - 5
+                f.tick()
+                order = json.loads(fm.cy.next_file(sid).read_text())
+                self.assertEqual((order["mode"], order["model"], order["prompt"]), ("plan", "claude-sonnet-5-5", "carry on"))
+            self.run_follower(w, body)
+
+    def test_only_the_starter_stella_or_kohen_may_retire(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
+                f.idle_since[sid] = time.time() - 5
+                stranger = fm.cy.submit(sid, "retire", {}, by="some-other-session")
+                f.tick()
+                self.assertEqual(fm.cy.result_of(stranger)["result"], "refused")
+                self.assertIsNone(child.poll())
+                ok = fm.cy.submit(sid, "retire", {}, by="stella")
+                f.idle_since[sid] = time.time() - 5
+                f.tick()
+                self.assertEqual(json.loads(fm.cy.next_file(sid).read_text())["end"], "retired")
+                self.assertEqual(fm.cy.result_of(ok)["result"], "done")
+            self.run_follower(w, body)
+
+    def test_a_dropped_pin_wins_over_how_cy_started_the_session(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                loop = fm.cy.read_json(fm.cy.loop_file(sid))
+                fm.cy.write_json(fm.cy.loop_file(sid), dict(loop, pinned=True, token_asked="project"))
+                f = fm.Follower()
+                pin = fm.cy.submit(sid, "pin", {"token": None})
+                f.tick()
+                self.assertEqual(fm.cy.result_of(pin)["result"], "done")
+                fm.cy.submit(sid, "restart", {})
+                f.idle_since[sid] = time.time() - 5
+                f.tick()
+                self.assertIsNone(json.loads(fm.cy.next_file(sid).read_text())["token"])
+            self.run_follower(w, body)
+
+    def test_a_claimed_request_is_carried_out_once_by_the_next_follower(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                req = fm.cy.submit(sid, "restart", {})
+                fm.Follower().tick()  # claimed, not idle long enough; then this follower dies
+                self.assertEqual(list((req.parent / "doing").glob("*.json")), [req.parent / "doing" / req.name])
+                f = fm.Follower()
+                f.idle_since[sid] = time.time() - 5
+                f.tick()
+                self.assertEqual(child.wait(timeout=10), -signal.SIGTERM)
+                self.assertEqual(fm.cy.result_of(req)["result"], "done")
+                self.assertEqual(list((req.parent / "doing").glob("*.json")), [])
+            self.run_follower(w, body)
 
 
 class Cag(unittest.TestCase):
@@ -458,6 +657,72 @@ class Cag(unittest.TestCase):
             self.assertIn("queued restart of probe-h", p.stdout)
             req = next((w.state / "requests" / sid).glob("*-restart.json"))
             self.assertEqual(json.loads(req.read_text())["body"], {"now": True, "token": "project"})
+
+    def test_a_refused_request_exits_1(self):
+        with World() as w:
+            cy = w.module(CY, "cy_t5")
+            sid = "dddddddd-0000-0000-0000-000000000001"
+            cy.write_json(cy.loop_file(sid), {"id": sid, "name": "probe-i", "status": "live", "conversations": [sid]})
+            p = subprocess.Popen([sys.executable, str(CAG), "retire", "probe-i"], env=dict(w.env, CLAUDECODE="1"),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            req = until(lambda: next((w.state / "requests" / sid).glob("*-retire.json"), None)
+                        if (w.state / "requests" / sid).exists() else None)
+            self.assertEqual(json.loads(req.read_text())["by"], "kohen")
+            req.with_name(req.name[:-5] + ".result.json").write_text(json.dumps({"result": "refused", "note": "no"}))
+            out, err = p.communicate(timeout=30)
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("refused", err)
+
+    def job(self, w, jid, **fields):
+        d = w.home / ".claude" / "jobs" / jid
+        d.mkdir(parents=True)
+        (d / "state.json").write_text(json.dumps(fields))
+
+    def test_close_stops_the_dormant_one_of_two_jobs_with_one_name(self):
+        with World() as w:
+            self.job(w, "live0001", name="dup", state="running", sessionId="s-live", updatedAt="2026-11-01T10:00:00Z")
+            self.job(w, "dorm0001", name="dup", state="blocked", sessionId="s-dorm", updatedAt="2026-10-01T10:00:00Z")
+            reg = w.home / ".claude" / "sessions"
+            reg.mkdir(parents=True)
+            (reg / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "s-live",
+                                                                  "jobId": "live0001", "kind": "bg", "status": "idle"}))
+            p = subprocess.run([sys.executable, str(CAG), "close", "dup"], env=dict(w.env, FAKE_CLAUDE_EXIT="0"),
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn(["stop", "dorm0001"], w.argv())
+
+    def test_a_job_row_has_its_prs_first_id_and_last_reply(self):
+        with World() as w:
+            self.job(w, "job00001", name="tracker", state="running", sessionId="s-first", resumeSessionId="s-now",
+                     children=[{"kind": "pr", "href": "https://git.example.com/o/r/pull/7"}])
+            reg = w.home / ".claude" / "sessions"
+            reg.mkdir(parents=True)
+            (reg / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "s-now", "name": "tracker",
+                                                                  "jobId": "job00001", "kind": "bg", "status": "idle"}))
+            tr = w.home / ".claude" / "projects" / "-x" / "s-now.jsonl"
+            tr.parent.mkdir(parents=True)
+            tr.write_text(json.dumps({"type": "user", "message": {"content": "go"}, "timestamp": "2026-11-01T10:00:00Z"})
+                          + "\n" + json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]},
+                                               "timestamp": "2026-11-01T10:00:05Z"}) + "\n")
+            p = subprocess.run([sys.executable, str(CAG), "--json"], env=w.env, capture_output=True, text=True)
+            r = next(x for x in json.loads(p.stdout) if x["name"] == "tracker")
+            self.assertEqual(r["prs"], ["https://git.example.com/o/r/pull/7"])
+            self.assertEqual(r["first_conversation_id"], "s-first")
+            self.assertIsNotNone(r["last_reply_at"])
+
+    def test_adopt_takes_a_blocked_job_and_types_cys_full_path(self):
+        with World() as w:
+            self.job(w, "blk00001", name="waiting-one", state="blocked", tempo="blocked", sessionId="s-blk",
+                     cwd=str(w.home / "projects"))
+            reg = w.home / ".claude" / "sessions"
+            reg.mkdir(parents=True)
+            (reg / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "s-blk",
+                                                                  "jobId": "blk00001", "kind": "bg", "status": "idle"}))
+            p = subprocess.run([sys.executable, str(CAG), "adopt", "waiting-one"], env=dict(w.env, FAKE_CLAUDE_EXIT="0"),
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn(["stop", "blk00001"], w.argv())
+            self.assertIn(f"pane run w1:p5 {os.path.realpath(CY)} -r s-blk", (w.home / "herdr.log").read_text())
 
 
 class Hook(unittest.TestCase):

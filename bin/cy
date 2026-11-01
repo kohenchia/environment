@@ -37,6 +37,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import signal
 import struct
 import subprocess
@@ -85,7 +86,7 @@ def read_json(path: Path, default=None):
 def write_json(path: Path, data) -> None:
     """Readers never see a half-written file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     tmp.write_text(json.dumps(data, indent=1, sort_keys=True))
     os.replace(tmp, path)
 
@@ -106,18 +107,42 @@ def next_file(sid: str) -> Path:
     return NEXT / f"{sid}.json"
 
 
+def status_of(sid: str, loop: dict, view: dict) -> tuple[str, str | None]:
+    """A session's status and how it ended. The loop holds its lock while it runs; once it has let go, the loop's own
+    end record wins, then what the follower saw (herdr's pane.closed, its start-up check), else it simply ended."""
+    if held(sid):
+        return "live", None
+    if view.get("end") == "closed":
+        return "ended", "closed"
+    end = loop.get("end")
+    if end in ("retired", "interrupted", "crashed"):
+        return end, end
+    if end in ("exit", "closed"):
+        return "ended", end
+    if view.get("status") in ("interrupted", "crashed", "orphan") and view.get("end"):
+        return view["status"], view["end"]
+    return "ended", end or view.get("end")
+
+
 def launches() -> list[dict]:
-    """Every session `cy` has started: the follower's view over the loop's own facts."""
+    """Every session `cy` has started: the loop's facts, the follower's view on top, and the status both settle."""
     out = []
     for f in sorted(STATE.glob("*.loop.json")):
         sid = f.name[: -len(".loop.json")]
-        merged = dict(read_json(f, {}))
-        merged.update(read_json(launch_file(sid), {}))
-        merged.update({k: v for k, v in read_json(f, {}).items() if k in ("launched_pid", "launched_start", "end",
-                                                                          "status", "conversation")})
+        loop, view = read_json(f, {}), read_json(launch_file(sid), {})
+        merged = dict(loop)
+        merged.update({k: v for k, v in view.items() if v is not None and k not in ("status", "end")})
+        merged["status"], merged["end"] = status_of(sid, loop, view)
         merged["id"] = sid
         out.append(merged)
     return out
+
+
+def pin_of(l: dict) -> str | None:
+    """The token a session is pinned to (a launch as `launches()` merges it): a pin request wins over how cy started it."""
+    if not l.get("pinned"):
+        return None
+    return l.get("token_pin") or l.get("token_asked")
 
 
 def held(sid: str) -> bool:
@@ -172,9 +197,11 @@ def parent_of(pid: int) -> int | None:
     return struct.unpack_from("I", buf.raw, 16)[0]  # pbi_ppid
 
 
-def row_of_launch(launched_pid: int | None, rows: list[dict] | None = None) -> dict | None:
-    """The registry row of the claude a loop launched: the launcher itself, or its child (the company launcher)."""
-    if not launched_pid:
+def row_of_launch(launched_pid: int | None, rows: list[dict] | None = None, start=None) -> dict | None:
+    """The registry row of the claude a loop launched: the launcher itself, or its child (the company launcher).
+
+    Given the launcher's start time, a pid since reused by another process (a dead loop's stale file) finds nothing."""
+    if not launched_pid or (start is not None and not same_process(launched_pid, start)):
         return None
     for d in rows if rows is not None else registry():
         if d.get("pid") == launched_pid or parent_of(d["pid"]) == launched_pid:
@@ -216,6 +243,8 @@ def registry() -> list[dict]:
     for f in SESSIONS.glob("*.json"):
         d = read_json(f)
         if isinstance(d, dict) and isinstance(d.get("pid"), int) and alive(d["pid"]):
+            if d.get("procStart") and started_at(d["pid"]) is not None and not same_process(d["pid"], d["procStart"]):
+                continue  # a dead session's file, its pid since reused
             rows.append(d)
     return rows
 
@@ -343,7 +372,7 @@ def state_of(row: dict | None, recs: list[dict]) -> dict:
 
 def last_mode(recs: list[dict]) -> str | None:
     for r in reversed(recs):
-        if r.get("type") == "user" and r.get("permissionMode"):
+        if r.get("type") in ("permission-mode", "user") and r.get("permissionMode"):
             return r["permissionMode"]
     return None
 
@@ -373,15 +402,16 @@ def title_of(recs: list[dict]) -> str | None:
 
 # ── requests ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-KINDS = ("restart", "rename", "retire")
+KINDS = ("restart", "rename", "retire", "pin")
 
 
 def submit(sid: str, kind: str, body: dict | None = None, *, by: str = "", not_after: float = 1800) -> Path:
     """Queue a request for the follower; returns its file (the result appears beside it as .result.json)."""
     if kind not in KINDS:
         raise ValueError(f"unknown request kind {kind!r}")
-    stamp = time.strftime("%Y%m%dT%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
-    path = REQUESTS / sid / f"{stamp}-{kind}.json"
+    if not loop_file(sid).exists():
+        raise ValueError(f"{sid} is not a session cy started")
+    path = REQUESTS / sid / f"{time.time_ns():020d}-{uuid.uuid4().hex[:6]}-{kind}.json"  # one clock: sorts in order
     write_json(path, {"kind": kind, "body": body or {}, "by": by, "at": time.time(), "not_after": time.time() + not_after})
     return path
 
@@ -407,6 +437,11 @@ def herdr(*args: str, timeout: float = 10) -> dict:
         return json.loads(p.stdout)
     except ValueError:
         return {"error": (p.stderr or p.stdout).strip()[-300:], "returncode": p.returncode}
+
+
+def herdr_ok(reply: dict) -> bool:
+    """herdr answered without an error (it puts one in the reply, or exits non-zero)."""
+    return not reply.get("error") and reply.get("returncode", 0) == 0
 
 
 def find_key(d, key):
@@ -435,16 +470,23 @@ def interrupted_answer(answered: bool, said: str) -> bool:
 # ── the token and the claude command ────────────────────────────────────────────────────────────────────────────
 
 
+class LaunchHookFailed(Exception):
+    pass
+
+
 def token_env(token: str | None) -> tuple[dict, str]:
-    """The machine's launch hook decides the environment for a token label ('default' when none is pinned)."""
+    """The machine's launch hook decides the environment for a token label ('default' when none is pinned).
+    A hook that fails stops the launch: a session must never start on a token nobody chose."""
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     if not LAUNCH_HOOK.exists():
         return env, "none"
     try:
         p = subprocess.run([str(LAUNCH_HOOK), token or "default"], capture_output=True, text=True, timeout=20)
-    except (OSError, subprocess.TimeoutExpired):
-        return env, "none"
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise LaunchHookFailed(str(e))
+    if p.returncode != 0:
+        raise LaunchHookFailed((p.stderr or p.stdout).strip()[-300:] or f"exit {p.returncode}")
     label = token or "default"
     for line in p.stdout.splitlines():
         if line.startswith("token="):
@@ -476,7 +518,7 @@ def claude_argv(spec: dict) -> list[str]:
         if spec.get(flag):
             a += [f"--{flag}", spec[flag]]
     if spec.get("prompt"):
-        a.append(spec["prompt"])
+        a += (["--"] if spec["prompt"].startswith("-") else []) + [spec["prompt"]]
     return a
 
 
@@ -503,14 +545,21 @@ def file_version(path: str) -> str:
         return ""
 
 
+def follower_version() -> str:
+    """The follower runs this file's code too, so its version covers both."""
+    return file_version(os.path.join(BIN, "cy-follow")) + file_version(ME)
+
+
 def start_follower() -> str:
     """Start cy-follow detached, or replace one running older code. Never from inside a Claude sandbox."""
     if os.environ.get("CLAUDECODE"):
         return "not started (inside a Claude session)"
+    if os.environ.get("CY_NO_FOLLOWER"):
+        return "not started (CY_NO_FOLLOWER)"
     follow = os.path.join(BIN, "cy-follow")
     status = read_json(STATE / "follow.status.json", {})
     if follower_running():
-        if status.get("version") == file_version(follow):
+        if status.get("version") == follower_version():
             return "running"
         signal_if_same(status.get("pid"), status.get("start"))
         time.sleep(1)
@@ -525,6 +574,21 @@ def start_follower() -> str:
 # ── the window loop ─────────────────────────────────────────────────────────────────────────────────────────────
 
 
+def rearm_text(conv: str | None, request_prompt: str | None = None) -> str | None:
+    """A restarted session's first prompt: the request's own words, then what it had scheduled and lost.
+
+    Only session crons and wakeups are listed (a durable cron survives on its own). When nothing else is said, the
+    prompt starts with `[cy restart]`, which the state rule skips, so a restart never hides an ask."""
+    data = read_json(CRONS / f"{conv}.json", {}) if conv else {}
+    items = [c for c in (data.get("session_crons") or []) if not c.get("durable")]
+    if not items:
+        return request_prompt
+    listed = "; ".join(f"{c.get('schedule') or c.get('at') or ''} \"{(c.get('prompt') or '')[:80]}\"" for c in items)
+    text = (f"Restarted at {time.strftime('%H:%M')}. These were scheduled in this session and were lost with the old "
+            f"process: {listed}. Set them up again, unless you had stopped them.")
+    return f"{request_prompt}\n\n{text}" if request_prompt else f"{RESTART_MARK} {text}"
+
+
 class Loop:
     """One window's loop: lock, launch, watch, decide, relaunch."""
 
@@ -534,17 +598,24 @@ class Loop:
         self.lock = None
         self.child: subprocess.Popen | None = None
         self.hup = None
+        self.term = False
+        self._mu = threading.Lock()
 
     def facts(self) -> dict:
         return read_json(loop_file(self.sid), {})
 
     def record(self, **fields):
-        d = self.facts()
-        d.update(fields)
-        write_json(loop_file(self.sid), d)
+        with self._mu:  # the watcher thread and the loop both write this file
+            d = self.facts()
+            d.update(fields)
+            write_json(loop_file(self.sid), d)
 
     def take_lock(self) -> bool:
         STATE.mkdir(parents=True, exist_ok=True)
+        fd = self.spec.pop("lock_fd", None)
+        if fd is not None:  # a self-update kept the lock across exec
+            self.lock = os.fdopen(fd, "a")
+            return True
         self.lock = open(lock_file(self.sid), "a")
         try:
             fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -552,7 +623,13 @@ class Loop:
         except OSError:
             return False
 
+    def child_alive(self) -> bool:
+        return bool(self.child) and self.child.poll() is None
+
     def on_hup(self, _sig, _frm):
+        if not self.child_alive():  # at the ⏎ prompt: the window is going, the session already ended
+            self.record(status="ended", end=self.facts().get("end") or "closed", ended_at=time.time())
+            os._exit(0)
         pane = os.environ.get("HERDR_PANE_ID", "")
         try:
             p = subprocess.run(["herdr", "pane", "get", pane], capture_output=True, text=True, timeout=0.5)
@@ -561,22 +638,29 @@ class Loop:
             answered, said = False, str(e)
         self.hup = "interrupted" if interrupted_answer(answered, said) else "closed"
         self.record(status=self.hup if self.hup == "interrupted" else "ended", end=self.hup, ended_at=time.time())
+        next_file(self.sid).unlink(missing_ok=True)
+
+    def on_term(self, _sig, _frm):
+        """SIGTERM to the loop itself: end claude too, so it never stays on the window's terminal beside the shell."""
+        self.term = True
+        if self.child_alive():
+            self.child.send_signal(signal.SIGTERM)
 
     def watch(self, stop: threading.Event):
         """While claude runs, follow its conversation id (it changes on /clear and /branch) and its registry pid."""
         while not stop.wait(3):
-            if not self.child:
+            if not self.child_alive():
                 continue
             row = row_of_launch(self.child.pid)
-            if row:
-                convs = self.facts().get("conversations", [])
-                if row.get("sessionId") and row["sessionId"] not in convs:
-                    convs.append(row["sessionId"])
-                    self.record(conversations=convs, conversation=row["sessionId"])
-                if row.get("name") and row["name"] != self.spec["name"] and row.get("nameSource") == "user":
-                    self.spec["name"] = row["name"]  # Kohen's own /rename is kept
-                    self.record(name=row["name"])
-                self.record(claude_pid=row["pid"], claude_start=row.get("procStart"))
+            if not row:
+                continue
+            convs = self.facts().get("conversations", [])
+            if row.get("sessionId") and row["sessionId"] not in convs:
+                self.record(conversations=convs + [row["sessionId"]], conversation=row["sessionId"])
+            if row.get("name") and row["name"] != self.spec["name"] and row.get("nameSource") == "user":
+                self.spec["name"] = row["name"]  # Kohen's own /rename is kept
+                self.record(name=row["name"])
+            self.record(claude_pid=row["pid"], claude_start=row.get("procStart"))
 
     def wait_old_gone(self):
         pid, start = self.facts().get("claude_pid"), self.facts().get("claude_start")
@@ -593,20 +677,28 @@ class Loop:
         if not self.take_lock():
             print(f"cy: {self.spec['name']} is live in another window", file=sys.stderr)
             return 1
+        pf = self.spec.pop("prompt_file", None)
+        if pf:  # read and removed only now: a refused start keeps its prompt file
+            try:
+                self.spec["prompt"] = Path(pf).read_text()
+                Path(pf).unlink()
+            except OSError as e:
+                print(f"cy: cannot read the prompt file: {e}", file=sys.stderr)
+                return 1
         facts = self.facts()
         convs = facts.get("conversations") or []
-        if self.spec.get("resume") and self.spec["resume"] not in convs:
-            convs.append(self.spec["resume"])
-        if not self.spec.get("resume") or self.spec.get("fork"):
-            convs = convs or [self.spec["id"]]
+        for c in (self.spec.get("resume"), self.spec["id"]) if not self.spec.get("resume") or self.spec.get("fork") \
+                else (self.spec.get("resume"),):
+            if c and c not in convs:
+                convs.append(c)
         self.record(id=self.sid, name=self.spec["name"], cwd=os.getcwd(), model=self.spec.get("model"),
                     effort=self.spec.get("effort"), agent=self.spec.get("agent"), token_asked=self.spec.get("token"),
                     pinned=bool(self.spec.get("token")), started_by=self.spec.get("started_by") or facts.get("started_by"),
-                    pane=os.environ.get("HERDR_PANE_ID"), tab=os.environ.get("HERDR_TAB_ID"),
-                    workspace=os.environ.get("HERDR_WORKSPACE_ID"), conversations=convs, status="live", end=None,
+                    conversations=convs, status="live", end=None,
                     started_at=facts.get("started_at") or time.time(), version=file_version(ME))
         start_follower()
         signal.signal(signal.SIGHUP, self.on_hup)
+        signal.signal(signal.SIGTERM, self.on_term)
         stop = threading.Event()
         threading.Thread(target=self.watch, args=(stop,), daemon=True).start()
         try:
@@ -614,38 +706,56 @@ class Loop:
         finally:
             stop.set()
 
+    @staticmethod
+    def child_signals():
+        """In claude, Ctrl+C and the hangup do what they always do (the loop ignores Ctrl+C for itself)."""
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        signal.signal(signal.SIGHUP, signal.SIG_DFL)
+
     def _loop(self) -> int:
         while True:
-            env, label = token_env(self.spec.get("token"))
+            try:
+                env, label = token_env(self.spec.get("token"))
+            except LaunchHookFailed as e:
+                print(f"cy: the launch hook for token {self.spec.get('token') or 'default'} failed: {e}", file=sys.stderr)
+                self.record(status="crashed", end="crashed", ended_at=time.time(), note=f"launch hook: {e}")
+                return 1
+            env["CY_SESSION"] = self.spec["name"]  # who asks, when this session queues a request with cag
             argv = claude_argv(self.spec)
-            old = signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl+C is for claude
-            self.child = subprocess.Popen(argv, env=env)
+            signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl+C is for claude
+            self.child = subprocess.Popen(argv, env=env, preexec_fn=self.child_signals)
+            self.spec["prompt"] = None  # a prompt is sent once; a restart brings its own
             self.record(launched_pid=self.child.pid, launched_start=started_at(self.child.pid), token=label,
-                        conversation=self.spec.get("resume") or self.spec["id"], status="live", end=None)
+                        conversation=self.spec.get("resume") or self.spec["id"], status="live", end=None,
+                        pane=os.environ.get("HERDR_PANE_ID"), tab=os.environ.get("HERDR_TAB_ID"),
+                        workspace=os.environ.get("HERDR_WORKSPACE_ID"))
             code = self.child.wait()
-            signal.signal(signal.SIGINT, old)
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
             if self.hup:
                 return 0
             order = read_json(next_file(self.sid))
-            try:
-                next_file(self.sid).unlink()
-            except FileNotFoundError:
-                pass
+            next_file(self.sid).unlink(missing_ok=True)
+            if self.term and not (order and order.get("for_pid") == self.child.pid):
+                self.record(status="ended", end="exit", ended_at=time.time())
+                return 0
             if order and order.get("for_pid") == self.child.pid:
                 if order.get("end") == "retired":
                     self.record(status="retired", end="retired", ended_at=time.time())
                     return 0
                 self.wait_old_gone()
                 self.spec.update({k: v for k, v in order.items() if k in ("name", "token", "model", "effort", "agent",
-                                                                         "mode", "prompt", "settings")})
+                                                                         "mode", "settings")})
+                self.spec["prompt"] = order.get("prompt")
                 self.spec["resume"] = order.get("conversation") or self.facts().get("conversation") or self.sid
                 self.spec["fork"] = False
                 if order.get("fresh"):  # a new conversation under the same session key
                     self.spec["resume"], self.spec["id"] = None, str(uuid.uuid4())
                     self.record(conversations=self.facts().get("conversations", []) + [self.spec["id"]])
-                self.record(name=self.spec["name"], restarts=self.facts().get("restarts", 0) + 1)
+                self.record(name=self.spec["name"], token_asked=self.spec.get("token"),
+                            pinned=bool(self.spec.get("token")), restarts=self.facts().get("restarts", 0) + 1)
                 if file_version(ME) != self.facts().get("version") and self.checks_ok():
-                    write_json(STATE / f"{self.sid}.continue.json", self.spec)
+                    os.set_inheritable(self.lock.fileno(), True)
+                    write_json(STATE / f"{self.sid}.continue.json", dict(self.spec, lock_fd=self.lock.fileno()))
                     os.execv(sys.executable, [sys.executable, ME, "--continue", self.sid])
                 continue
             if code == 0:
@@ -655,8 +765,10 @@ class Loop:
                     input()
                 except (EOFError, KeyboardInterrupt):
                     return 0
-                self.spec.update(resume=self.facts().get("conversation") or self.sid, fork=False, prompt=None)
-                self.record(status="live", end=None)
+                conv = self.facts().get("conversation") or self.sid
+                me = next((x for x in launches() if x["id"] == self.sid), {})
+                self.spec.update(resume=conv, fork=False, prompt=rearm_text(conv), token=pin_of(me))  # a pin set meanwhile
+                self.record(status="live", end=None, token_asked=self.spec["token"], pinned=bool(self.spec["token"]))
                 continue
             self.record(status="crashed", end="crashed", ended_at=time.time(), exit_code=code)
             print(f"\ncy: {self.spec['name']} stopped (exit {code}). Resume it with: cy -r {self.spec['name']}",
@@ -672,20 +784,36 @@ class Loop:
 
 
 def resolve(target: str) -> dict | None:
-    """A session by name, former name, first or later conversation id; then by a transcript's title."""
+    """A session by name, former name, first or later conversation id; then by a transcript's title or file name."""
     for l in sorted(launches(), key=lambda x: x.get("started_at") or 0, reverse=True):
         if target in (l.get("id"), l.get("name")) or target in (l.get("former_names") or []) \
                 or target in (l.get("conversations") or []):
             return l
-    for f in sorted(PROJECTS.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
-        if f.stem == target or title_of(records(f)) == target:
-            return {"id": f.stem, "name": target if NAME_RE.match(target) else f"{Path(f).parent.name[-12:]}-{f.stem[:6]}",
-                    "conversations": [f.stem], "cwd": None, "from_transcript": True}
+    by_id = sorted(PROJECTS.glob(f"*/{target}.jsonl"))
+    if by_id:
+        return {"id": target, "name": None, "conversations": [target], "cwd": None, "from_transcript": True}
+    if not NAME_RE.match(target):
+        return None
+    newest = sorted(PROJECTS.glob("*/*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)[:400]
+    for f in newest:  # titles only in the last 400 transcripts: a typo must not read every transcript there is
+        if title_of(records(f)) == target:
+            return {"id": f.stem, "name": target, "conversations": [f.stem], "cwd": None, "from_transcript": True}
     return None
 
 
 def where(l: dict) -> str:
     return f"{l.get('space') or l.get('workspace') or '?'} / {l.get('window') or l.get('tab') or '?'}"
+
+
+def listing() -> int:
+    rows = sorted(launches(), key=lambda x: x.get("started_at") or 0, reverse=True)
+    if not rows:
+        print("cy: no session has been started with cy yet")
+        return 0
+    for l in rows[:40]:
+        print(f"  {l.get('name') or '?':40} {l.get('status'):12} {where(l)}")
+    print("resume one with: cy -r NAME")
+    return 0
 
 
 # ── cy restore ──────────────────────────────────────────────────────────────────────────────────────────────────
@@ -695,7 +823,7 @@ def restore() -> int:
     """Reopen, each in its space, every session a herdr restart interrupted that is not live again."""
     n = 0
     for l in launches():
-        if l.get("status") != "interrupted" or held(l["id"]) or live_row(l.get("conversations") or []):
+        if l.get("status") != "interrupted" or live_row(l.get("conversations") or []):
             continue
         ws = herdr("workspace", "list")
         wid = None
@@ -705,8 +833,8 @@ def restore() -> int:
         reply = herdr("tab", "create", "--workspace", wid, "--label", l.get("name", "cy"), "--no-focus") if wid else \
             herdr("workspace", "create", "--label", l.get("space") or "restored", "--no-focus")
         pane = find_key(reply, "pane_id")
-        if pane:
-            herdr("pane", "run", pane, f"cd {json.dumps(l.get('cwd') or str(HOME))} && cy -r {l['id']}")
+        if pane:  # by its path: until the switch, a bare `cy` in a shell is still the old function
+            herdr("pane", "run", pane, f"cd {shlex.quote(l.get('cwd') or str(HOME))} && {shlex.quote(ME)} -r {l['id']}")
             n += 1
     print(f"cy: reopened {n} session{'s' if n != 1 else ''}")
     return 0
@@ -724,9 +852,12 @@ def main(argv: list[str]) -> int:
         return 0
     if argv[:1] == ["--continue"] and len(argv) == 2:
         spec = read_json(STATE / f"{argv[1]}.continue.json")
+        (STATE / f"{argv[1]}.continue.json").unlink(missing_ok=True)
         return Loop(spec).run() if spec else 1
     if argv[:1] == ["restore"]:
         return restore()
+    if argv in (["-r"], ["--resume"]):
+        return listing()
     ap = argparse.ArgumentParser(prog="cy", description=__doc__.split("\n\n")[0])
     ap.add_argument("-n", "--name")
     ap.add_argument("-r", "--resume", metavar="NAME|ID")
@@ -742,13 +873,6 @@ def main(argv: list[str]) -> int:
         print("cy: run me in a window's shell, not from inside a Claude session", file=sys.stderr)
         return 2
     prompt = " ".join(a.prompt) or None
-    if a.prompt_file:
-        try:
-            prompt = Path(a.prompt_file).read_text()
-            Path(a.prompt_file).unlink()
-        except OSError as e:
-            print(f"cy: cannot read the prompt file: {e}", file=sys.stderr)
-            return 1
     if a.resume:
         l = resolve(a.resume)
         if not l:
@@ -757,27 +881,30 @@ def main(argv: list[str]) -> int:
         convs = l.get("conversations") or [l["id"]]
         conv = l.get("conversation") or convs[-1]
         recs = records(transcript(conv))
+        if l.get("cwd") and os.path.isdir(l["cwd"]):
+            os.chdir(l["cwd"])
         if a.branch:
             if not NAME_RE.match(a.branch) or name_in_use(a.branch):
                 print(f"cy: {a.branch} is not a free session name", file=sys.stderr)
                 return 1
             new = str(uuid.uuid4())
             spec = {"key": new, "id": new, "name": a.branch, "resume": conv, "fork": True,
-                    "token": a.token or (l.get("token") if l.get("pinned") else None), "model": a.model or last_model(recs),
-                    "effort": a.effort or l.get("effort"), "agent": a.agent or l.get("agent"),
-                    "mode": last_mode(recs), "prompt": prompt}
+                    "token": a.token or pin_of(l),
+                    "model": a.model or last_model(recs), "effort": a.effort or l.get("effort"),
+                    "agent": a.agent or l.get("agent"), "mode": last_mode(recs), "prompt": prompt,
+                    "prompt_file": a.prompt_file, "started_by": l["id"]}
             return Loop(spec).run()
         if held(l["id"]) or live_row(convs):
-            print(f"cy: {l.get('name')} is live in {where(l)}", file=sys.stderr)
+            print(f"cy: {l.get('name') or a.resume} is live in {where(l)}", file=sys.stderr)
             return 1
         if l.get("status") == "retired":
             print(f"cy: {l.get('name')} was retired; resuming it")
-        spec = {"key": l["id"], "id": l["id"], "name": l.get("name"), "resume": conv,
-                "token": a.token or (l.get("token") if l.get("pinned") else None),
+        name = l.get("name") or (a.resume if NAME_RE.match(a.resume) else default_name())
+        spec = {"key": l["id"], "id": l["id"], "name": name, "resume": conv,
+                "token": a.token or pin_of(l),
                 "model": a.model or last_model(recs) or l.get("model"), "effort": a.effort or l.get("effort"),
-                "agent": a.agent or l.get("agent"), "mode": last_mode(recs), "prompt": prompt}
-        if l.get("cwd") and os.path.isdir(l["cwd"]):
-            os.chdir(l["cwd"])
+                "agent": a.agent or l.get("agent"), "mode": last_mode(recs),
+                "prompt": rearm_text(conv, prompt), "prompt_file": a.prompt_file}
         return Loop(spec).run()
     name = a.name or default_name()
     if not NAME_RE.match(name):
@@ -789,7 +916,7 @@ def main(argv: list[str]) -> int:
         return 1
     sid = str(uuid.uuid4())
     spec = {"key": sid, "id": sid, "name": name, "token": a.token, "model": a.model, "effort": a.effort,
-            "agent": a.agent, "prompt": prompt, "mode": "bypassPermissions",
+            "agent": a.agent, "prompt": prompt, "prompt_file": a.prompt_file, "mode": "bypassPermissions",
             "started_by": os.environ.get("CY_STARTED_BY")}
     return Loop(spec).run()
 
