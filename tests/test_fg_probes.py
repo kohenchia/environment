@@ -151,6 +151,8 @@ class Fixes(unittest.TestCase):
         self.assertEqual(fp.hup_verdict(True, 1, said), "interrupted")
         self.assertEqual(fp.hup_verdict(True, 1, "pane not found"), "closed")
         self.assertEqual(fp.hup_verdict(False, None, "timeout"), "interrupted")
+        said = '{"error":{"code":"server_unavailable","message":"server is shutting down"}}'
+        self.assertEqual(fp.hup_verdict(True, 1, said), "interrupted")  # what herdr 0.9.5 answers on a session stop
 
     def test_only_probe_made_jobs_are_cleaned_up(self):
         with tempfile.TemporaryDirectory() as t:

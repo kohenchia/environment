@@ -223,7 +223,8 @@ def probe_jobs(job_ids, sid: str | None) -> list[str]:
 def hup_verdict(answered: bool, returncode: int | None, said: str) -> str:
     """How the window loop will tell a closed window from a stopped server when it gets SIGHUP."""
     low = said.lower()
-    if not answered or "server_not_running" in low or "not running" in low or "connection refused" in low:
+    if (not answered or "server_not_running" in low or "server_unavailable" in low or "shutting down" in low
+            or "not running" in low or "connection refused" in low):
         return "interrupted"
     if returncode != 0 or "not found" in low or "no such" in low or "pane_not_found" in low:
         return "closed"
@@ -626,8 +627,8 @@ def p6_claude(res: Results, out: Path, cleanup: list):
     res.add("P6", "the Stop hook on a turn stopped with Esc (recorded)", None,
             f"hook inputs {n_before} → {n_after}" if busy else "no tick started in time")
     s.wait_ready(60)
-    s.ask("Run the shell command `sleep 45` with run_in_background set to true, then end your turn immediately.", 60)
-    shell = wait_for(lambda: (s.row() or {}).get("status") == "shell", 30, 1)
+    s.send("Run the shell command `sleep 45` with run_in_background set to true, then end your turn immediately.")
+    shell = wait_for(lambda: (s.row() or {}).get("status") == "shell", 60, 1)  # not `ask`: it waits for idle
     res.add("P6", "a background command reads shell", bool(shell), "")
     s.ask("Use the Monitor tool to watch the output of the shell command `sleep 40; echo done`, then end your turn.", 60)
     monitor = bool(tool_uses(records(transcript(s.sid)), "Monitor"))
