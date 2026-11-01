@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""cy-crons: a Stop hook that saves the session's crons and wakeups, so a restart can set them up again.
+
+Claude Code runs it at the end of every turn with the hook's input on stdin. On `Stop` it writes
+~/.local/state/cy/crons/<session id>.json with the input's `session_crons` (and `background_tasks`), atomically.
+On anything else (a `StopFailure`, whose input carries no crons) it leaves the file alone, so an API error never wipes
+what the next restart needs. It always exits 0: a hook that fails must never stop or continue a turn.
+
+It runs inside the session's sandbox, which allows writing under ~/.local/state (probe P6). Standard library only.
+"""
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+
+def main() -> int:
+    try:
+        data = json.loads(sys.stdin.read() or "{}")
+    except ValueError:
+        return 0
+    if data.get("hook_event_name", "Stop") != "Stop" or not data.get("session_id"):
+        return 0
+    if "session_crons" not in data:
+        return 0
+    out = Path.home() / ".local" / "state" / "cy" / "crons"
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+        path = out / f"{data['session_id']}.json"
+        tmp = out / f".{path.name}.{os.getpid()}.tmp"
+        tmp.write_text(json.dumps({"session_crons": data.get("session_crons") or [],
+                                   "background_tasks": data.get("background_tasks") or [], "at": time.time()}))
+        os.replace(tmp, path)
+    except OSError:
+        pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""cy-follow: the one process that manages every `cy` window: herdr reports, moves, ends and requests.
+
+    cy-follow            run (started detached by `tw`, by every `cy` launch, and by `kc-new`, `tok` and `cag`)
+    cy-follow --once     one pass, then exit (for tests and for `cag --refresh`)
+
+Every 2 seconds, for each session `cy` started (`~/.local/state/cy/*.loop.json`):
+
+  * it writes the session's launch file (`<id>.json`): name and former names, every conversation id, the window, space
+    and tab, the token, whether it is pinned, and its status;
+  * it reports the session's state and resume command to herdr, so herdr's dots follow `cag`'s state and a herdr
+    restart reruns `cy -r NAME` in the window: `herdr pane report-agent --source kc-cy --agent claude --state S PANE --
+    cy -r NAME` (herdr takes a resume command only with a state report);
+  * it carries out requests (`requests/<id>/*.json`, oldest first): a restart, a rename or a retire waits until Claude's
+    registry has said `idle` for 3 seconds, then writes `next/<id>.json` for the window loop and sends the launched
+    process SIGTERM; each request is answered by a `.result.json` beside it;
+  * it ends an orphan (a live `claude` whose loop died) once it is idle, and records `crashed`.
+
+It also listens to herdr's events: `pane.moved` gives a moved window's new pane id, and `pane_closed` (closing a pane
+sends no SIGHUP) records `ended: closed`. One follower runs at a time (an `fcntl` lock); a newer `cy-follow` replaces an
+older one. It exits when herdr does not answer, because nothing it does then would reach herdr. Standard library only.
+"""
+
+from __future__ import annotations
+
+import fcntl
+import importlib.machinery
+import importlib.util
+import json
+import os
+import signal
+import socket
+import sys
+import threading
+import time
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+_loader = importlib.machinery.SourceFileLoader("cy_lib", str(HERE / "cy"))
+cy = importlib.util.module_from_spec(importlib.util.spec_from_loader("cy_lib", _loader))
+_loader.exec_module(cy)
+
+TICK = 2.0
+IDLE_FOR = 3.0
+LABELS_EVERY = 30.0
+HERDR_STATE = {"working": "working", "working (background command)": "working", "waiting on you": "blocked"}
+
+
+def herdr_state(state: str) -> str:
+    return HERDR_STATE.get(state, "idle")
+
+
+class Follower:
+    def __init__(self):
+        self.idle_since: dict[str, float] = {}
+        self.reported: dict[str, tuple] = {}
+        self.labels_at: dict[str, float] = {}
+        self.events: list[dict] = []
+        self.lock = threading.Lock()
+
+    # ── launch files ────────────────────────────────────────────────────────────────────────────────────────────
+
+    def view(self, sid: str) -> dict:
+        return cy.read_json(cy.launch_file(sid), {})
+
+    def write_view(self, sid: str, **fields):
+        d = self.view(sid)
+        d.update(fields)
+        cy.write_json(cy.launch_file(sid), d)
+
+    def refresh(self, l: dict, rows: list[dict]) -> dict | None:
+        """Bring one session's launch file up to date; return its registry row when its claude is live."""
+        sid = l["id"]
+        facts = cy.read_json(cy.loop_file(sid), {})
+        view = self.view(sid)
+        row = cy.row_of_launch(facts.get("launched_pid"), rows)
+        convs = list(dict.fromkeys((view.get("conversations") or []) + (facts.get("conversations") or [])))
+        if row and row.get("sessionId") and row["sessionId"] not in convs:
+            convs.append(row["sessionId"])
+        name = facts.get("name") or view.get("name")
+        former = view.get("former_names") or []
+        if view.get("name") and name != view.get("name") and view["name"] not in former:
+            former.append(view["name"])
+        status = facts.get("status") or "live"
+        if status == "live" and not cy.held(sid):
+            status = "crashed" if not row else "orphan"
+        fields = {"name": name, "former_names": former, "conversations": convs,
+                  "conversation": (row or {}).get("sessionId") or facts.get("conversation") or (convs[-1] if convs else sid),
+                  "cwd": facts.get("cwd"), "token": facts.get("token"), "pinned": facts.get("pinned"),
+                  "model": facts.get("model"), "effort": facts.get("effort"), "agent": facts.get("agent"),
+                  "started_by": facts.get("started_by"), "started_at": facts.get("started_at"), "status": status,
+                  "pane": view.get("pane") or facts.get("pane"), "tab": view.get("tab") or facts.get("tab"),
+                  "workspace": view.get("workspace") or facts.get("workspace"), "end": facts.get("end")}
+        if view.get("end") == "closed" and status != "live":
+            fields.update(status="ended", end="closed")
+        if fields["pane"] and time.time() - self.labels_at.get(sid, 0) > LABELS_EVERY and status == "live":
+            info = cy.herdr("pane", "get", fields["pane"])
+            fields["space"] = cy.find_key(info, "workspace_label") or view.get("space")
+            fields["window"] = cy.find_key(info, "tab_label") or cy.find_key(info, "label") or view.get("window")
+            self.labels_at[sid] = time.time()
+        self.write_view(sid, **fields)
+        return row
+
+    # ── herdr reports ───────────────────────────────────────────────────────────────────────────────────────────
+
+    def report(self, sid: str, row: dict | None):
+        view = self.view(sid)
+        pane = view.get("pane")
+        if not pane or view.get("status") != "live":
+            return
+        recs = cy.records(cy.transcript(view.get("conversation")))
+        state = herdr_state(cy.state_of(row, recs)["state"])
+        key = (state, view.get("name"), pane)
+        if self.reported.get(sid) == key:
+            return
+        reply = cy.herdr("pane", "report-agent", "--source", "kc-cy", "--agent", "claude", "--state", state, pane, "--",
+                         "cy", "-r", view.get("name") or sid)
+        if "error" not in json.dumps(reply).lower() or reply.get("returncode") == 0:
+            self.reported[sid] = key
+
+    def release(self, sid: str):
+        pane = self.view(sid).get("pane")
+        if pane:
+            cy.herdr("pane", "release-agent", "--source", "kc-cy", "--agent", "claude", pane)
+        self.reported.pop(sid, None)
+
+    # ── requests ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    def answer(self, request: Path, verdict: str, note: str = ""):
+        cy.write_json(request.with_name(request.name[:-5] + ".result.json"), {"result": verdict, "note": note,
+                                                                            "at": time.time()})
+
+    def is_idle(self, sid: str, row: dict | None) -> bool:
+        if not row or row.get("status") != "idle":
+            self.idle_since.pop(sid, None)
+            return False
+        first = self.idle_since.setdefault(sid, time.time())
+        return time.time() - first >= IDLE_FOR
+
+    def rearm_prompt(self, view: dict) -> str | None:
+        """When the session had a loop or a wakeup pending, the restart tells it to set it up again."""
+        conv = view.get("conversation")
+        crons = cy.read_json(cy.CRONS / f"{conv}.json", {}) if conv else {}
+        items = crons.get("session_crons") or []
+        if not items:
+            return None
+        listed = "; ".join(f"{c.get('schedule') or c.get('at') or ''} \"{(c.get('prompt') or '')[:80]}\"" for c in items)
+        return (f"{cy.RESTART_MARK} Restarted at {time.strftime('%H:%M')}. These were scheduled in this session and were "
+                f"lost with the old process: {listed}. Set them up again, unless you had stopped them.")
+
+    def handle(self, sid: str, row: dict | None):
+        reqs = cy.pending(sid)
+        if not reqs:
+            return
+        req = reqs[0]
+        data = cy.read_json(req, {})
+        kind, body = data.get("kind"), data.get("body") or {}
+        if kind not in cy.KINDS:
+            self.answer(req, "refused", f"unknown kind {kind!r}")
+            req.unlink()
+            return
+        if time.time() > data.get("not_after", float("inf")):
+            self.answer(req, "dropped", "past its not_after")
+            req.unlink()
+            return
+        view = self.view(sid)
+        facts = cy.read_json(cy.loop_file(sid), {})
+        if view.get("status") != "live" or not cy.held(sid):
+            self.answer(req, "refused", f"{view.get('name')} is not running under cy (cy -r {view.get('name')})")
+            req.unlink()
+            return
+        new_name = None
+        if kind == "rename":
+            new_name = body.get("to") or ""
+            if not cy.NAME_RE.match(new_name) or cy.name_in_use(new_name):
+                self.answer(req, "refused", f"{new_name!r} is not a free session name")
+                req.unlink()
+                return
+        if not body.get("now") and not self.is_idle(sid, row):
+            return  # waits; checked again next tick
+        launched, start = facts.get("launched_pid"), facts.get("launched_start")
+        if cy.read_json(cy.next_file(sid), {}).get("for_pid") != launched:
+            order = {"for_pid": launched, "conversation": view.get("conversation"), "name": new_name or view.get("name"),
+                     "token": body.get("token") or (facts.get("token_asked") if facts.get("pinned") else None),
+                     "fresh": bool(body.get("fresh"))}
+            if kind == "retire":
+                order = {"for_pid": launched, "end": "retired"}
+            else:
+                prompts = [p for p in (self.rearm_prompt(view), body.get("prompt")) if p]
+                if prompts:
+                    order["prompt"] = "\n\n".join(prompts)
+            cy.write_json(cy.next_file(sid), order)
+        if not cy.signal_if_same(launched, start):
+            self.answer(req, "refused", "the launched process is gone")
+            req.unlink()
+            return
+        if new_name:
+            former = view.get("former_names") or []
+            self.write_view(sid, name=new_name, former_names=former + [view.get("name")])
+            if view.get("tab"):
+                cy.herdr("tab", "rename", view["tab"], new_name)
+        if kind == "retire":
+            self.release(sid)
+        self.answer(req, "done", kind)
+        req.unlink()
+        self.idle_since.pop(sid, None)
+
+    # ── ends, orphans, events ───────────────────────────────────────────────────────────────────────────────────
+
+    def settle(self, sid: str, row: dict | None):
+        view = self.view(sid)
+        if view.get("status") == "orphan" and row and self.is_idle(sid, row):
+            cy.signal_if_same(row["pid"], row.get("procStart"))
+            self.write_view(sid, status="crashed", end="crashed")
+        if view.get("status") in ("ended", "retired", "crashed") and sid in self.reported:
+            self.release(sid)
+
+    def on_event(self, ev: dict):
+        name = json.dumps(ev)
+        old = cy.find_key(ev, "previous_pane_id")
+        new = cy.find_key(ev, "pane_id")
+        for l in cy.launches():
+            view = self.view(l["id"])
+            if "moved" in name and old and view.get("pane") == old and new:
+                self.write_view(l["id"], pane=new, workspace=cy.find_key(ev, "workspace_id") or view.get("workspace"))
+                self.reported.pop(l["id"], None)
+            elif "pane_closed" in name and view.get("pane") and view.get("pane") == new:
+                self.write_view(l["id"], end="closed")
+
+    def listen(self):
+        """Subscribe to pane.moved and pane_closed on herdr's socket; reconnect when it drops."""
+        while True:
+            sock = os.environ.get("HERDR_SOCKET_PATH") or default_socket()
+            if not sock:
+                time.sleep(10)
+                continue
+            try:
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+                    c.connect(sock)
+                    req = {"id": "cy-follow", "method": "events.subscribe",
+                           "params": {"subscriptions": [{"type": "pane.moved"}, {"type": "pane_closed"}]}}
+                    c.sendall((json.dumps(req) + "\n").encode())
+                    buf = b""
+                    while True:
+                        chunk = c.recv(65536)
+                        if not chunk:
+                            break
+                        buf += chunk
+                        while b"\n" in buf:
+                            line, buf = buf.split(b"\n", 1)
+                            try:
+                                self.on_event(json.loads(line))
+                            except ValueError:
+                                pass
+            except OSError:
+                pass
+            time.sleep(5)
+
+    # ── the pass ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    def first_pass(self):
+        """Sessions that ended while no follower ran and left no end record: interrupted if herdr kept the pane."""
+        for l in cy.launches():
+            facts = cy.read_json(cy.loop_file(l["id"]), {})
+            if facts.get("status") == "live" and not cy.held(l["id"]) and not cy.row_of_launch(facts.get("launched_pid")):
+                pane = facts.get("pane")
+                kept = bool(pane) and "error" not in json.dumps(cy.herdr("pane", "get", pane)).lower()
+                self.write_view(l["id"], status="interrupted" if kept else "ended", end="interrupted" if kept else "closed")
+
+    def tick(self):
+        rows = cy.registry()
+        for l in cy.launches():
+            try:
+                row = self.refresh(l, rows)
+                self.report(l["id"], row)
+                self.handle(l["id"], row)
+                self.settle(l["id"], row)
+            except Exception as e:  # one session's trouble never stops the others
+                print(f"cy-follow: {l.get('name')}: {type(e).__name__}: {e}", file=sys.stderr, flush=True)
+
+
+def default_socket() -> str | None:
+    import subprocess
+    try:
+        p = subprocess.run(["herdr", "session", "list", "--json"], capture_output=True, text=True, timeout=10)
+        return next(s["socket_path"] for s in json.loads(p.stdout)["sessions"] if s.get("default"))
+    except (OSError, ValueError, KeyError, StopIteration, subprocess.TimeoutExpired):
+        return None
+
+
+def main(argv: list[str]) -> int:
+    if os.environ.get("CLAUDECODE"):
+        print("cy-follow: cannot run inside a Claude session (its sandbox cannot reach herdr)", file=sys.stderr)
+        return 2
+    cy.STATE.mkdir(parents=True, exist_ok=True)
+    lock = open(cy.STATE / "follow.lock", "a")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        print("cy-follow: another follower is running", file=sys.stderr)
+        return 0
+    probe = cy.herdr("workspace", "list")
+    reachable = "error" not in json.dumps(probe).lower()
+    cy.write_json(cy.STATE / "follow.status.json", {"pid": os.getpid(), "start": cy.started_at(os.getpid()),
+                                                    "version": cy.file_version(__file__), "herdr": reachable,
+                                                    "at": time.time()})
+    if not reachable:
+        print("cy-follow: cannot reach herdr's socket", file=sys.stderr)
+        return 1
+    f = Follower()
+    f.first_pass()
+    if argv[:1] == ["--once"]:
+        f.tick()
+        return 0
+    threading.Thread(target=f.listen, daemon=True).start()
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    while True:
+        f.tick()
+        time.sleep(TICK)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

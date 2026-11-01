@@ -410,6 +410,11 @@ LINKS=(
     "bin/kc-new|$HOME/.local/bin/kc-new"
     # `kc-sessions`: restart sessions in place, put their herdr windows back, report drift (docs/claude-code.md).
     "bin/kc-sessions|$HOME/.local/bin/kc-sessions"
+    # `cy` runs one Claude session in a window and brings it back after a restart; `cy-follow` reports every `cy`
+    # window to herdr and carries out restarts; `cag` is the table of every session (docs/claude-code.md).
+    "bin/cy|$HOME/.local/bin/cy"
+    "bin/cy-follow|$HOME/.local/bin/cy-follow"
+    "bin/cag|$HOME/.local/bin/cag"
     # herdr, the terminal multiplexer for the work window (`tw`).
     "local/herdr.toml|$HOME/.config/herdr/config.toml"
 )
