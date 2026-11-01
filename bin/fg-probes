@@ -1,0 +1,868 @@
+#!/usr/bin/env python3
+"""fg-probes: check, once, the platform facts the foreground-sessions plan rests on.
+
+    fg-probes [--only P1,P3] [--out DIR] [--keep]
+
+A sandboxed Claude session cannot start `claude` or reach herdr, so Kohen runs this once, in any terminal. It never
+touches his own windows or sessions:
+
+  * the probes that need only a foreground `claude` (P1 messaging, P2 end and resume, P5 agent view off, P6 idle
+    status and the Stop hook) start small throwaway sessions (`fg-probe-*`, on Haiku) under a pseudo-terminal this
+    script owns, in ~/github;
+  * the probes that need herdr (P3 restore and how a window ended, P4 following a move, P6 detached processes and
+    agent detection) run in a throwaway herdr session named `probe`, with its own config, which is stopped and deleted
+    at the end. Every herdr call goes to that session's socket; this script never stops any other server.
+
+Results go to ~/.local/state/fg-probes/<time>/ (summary.md, results.json, one log per probe). It prints a table:
+PASS, FAIL (with what was seen) or SKIP. It takes about 15 minutes. `--keep` leaves the probe sessions running to
+look at; otherwise everything it started is ended and removed.
+
+Internal modes, used inside the probe herdr session: `fg-probes stand-in NAME`, `fg-probes restored NAME`,
+`fg-probes detach-test NAME`, `fg-probes wrap -- CMD...`.
+
+Standard library only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import glob
+import json
+import os
+import pty
+import re
+import select
+import shutil
+import signal
+import socket
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from pathlib import Path
+
+HOME = Path.home()
+SESSIONS = HOME / ".claude" / "sessions"
+PROJECTS = HOME / ".claude" / "projects"
+JOBS = HOME / ".claude" / "jobs"
+STATE = HOME / ".local" / "state" / "fg-probes"
+WORKDIR = HOME / "github"  # an already trusted folder, so no trust dialog appears
+PROBE_SESSION = "probe"
+MODEL = "haiku"
+PREFIX = "fg-probe"
+
+
+# ── small helpers ───────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def now() -> float:
+    return time.time()
+
+
+def wait_for(pred, timeout: float, every: float = 1.0):
+    """Call pred until it returns something truthy or the time is up; return the last value."""
+    end = now() + timeout
+    while True:
+        value = pred()
+        if value or now() >= end:
+            return value
+        time.sleep(every)
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def registry() -> list[dict]:
+    """Claude's registry of live processes (a killed process leaves its file behind, so check the pid)."""
+    rows = []
+    for f in SESSIONS.glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(d.get("pid"), int) and alive(d["pid"]):
+            rows.append(d)
+    return rows
+
+
+def find_session(name: str | None = None, sid: str | None = None, rows: list[dict] | None = None) -> dict | None:
+    for d in rows if rows is not None else registry():
+        if (name is None or d.get("name") == name) and (sid is None or d.get("sessionId") == sid):
+            return d
+    return None
+
+
+def transcript(sid: str) -> Path | None:
+    hits = sorted(PROJECTS.glob(f"*/{sid}.jsonl"))
+    return hits[0] if hits else None
+
+
+def records(path: Path | None) -> list[dict]:
+    if not path or not path.exists():
+        return []
+    out = []
+    for line in path.read_text(errors="replace").splitlines():
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            pass
+    return out
+
+
+def peer_messages(recs: list[dict]) -> list[dict]:
+    """Messages another session sent this one (not a subagent's hand-back)."""
+    out = []
+    for r in recs:
+        o = r.get("origin") or {}
+        if o.get("kind") == "peer" and not o.get("senderTaskId"):
+            out.append({"from": o.get("name"), "mode": o.get("fromMode"), "body": (o.get("body") or "")[:200]})
+    return out
+
+
+def tool_uses(recs: list[dict], name: str) -> list[dict]:
+    out = []
+    for r in recs:
+        for c in (r.get("message") or {}).get("content") or []:
+            if isinstance(c, dict) and c.get("type") == "tool_use" and c.get("name") == name:
+                out.append(c)
+    return out
+
+
+def assistant_text(recs: list[dict]) -> str:
+    parts = []
+    for r in recs:
+        if r.get("type") != "assistant":
+            continue
+        for c in (r.get("message") or {}).get("content") or []:
+            if isinstance(c, dict) and c.get("type") == "text":
+                parts.append(c.get("text", ""))
+    return "\n".join(parts)
+
+
+# ── a foreground claude under a pseudo-terminal ───────────────────────────────────────────────────────────────
+
+
+class Probe:
+    """One throwaway foreground `claude`, started by this script under a pty, as a herdr window would run it."""
+
+    def __init__(self, name: str, args: list[str], out: Path, env: dict | None = None, cwd: Path = WORKDIR):
+        self.name = name
+        self.log = out / f"{name}.screen.log"
+        self.sid = None
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            os.chdir(cwd)
+            os.environ.update(env or {})
+            os.execvp("claude", ["claude", *args])
+        self.started = now()
+        self.screen = ""
+        self._stop = False
+        threading.Thread(target=self._drain, daemon=True).start()
+
+    def _drain(self):
+        with open(self.log, "ab") as f:
+            while not self._stop:
+                try:
+                    r, _, _ = select.select([self.fd], [], [], 0.5)
+                    if not r:
+                        continue
+                    data = os.read(self.fd, 65536)
+                except OSError:
+                    return
+                if not data:
+                    return
+                f.write(data)
+                self.screen = (self.screen + data.decode(errors="replace"))[-20000:]
+                if re.search(r"trust (the files in )?this folder", self.screen, re.I):
+                    self.screen = ""
+                    os.write(self.fd, b"\r")  # accept the default "Yes, proceed"
+
+    def send(self, text: str, enter: bool = True):
+        os.write(self.fd, text.encode() + (b"\r" if enter else b""))
+
+    def key(self, seq: bytes):
+        os.write(self.fd, seq)
+
+    def row(self) -> dict | None:
+        """This probe's registry row: the child of the pid we started, named as asked."""
+        for d in registry():
+            if d.get("name") == self.name or (self.sid and d.get("sessionId") == self.sid):
+                return d
+        return None
+
+    def wait_idle(self, timeout: float = 120) -> dict | None:
+        def ok():
+            d = self.row()
+            return d if d and d.get("status") == "idle" else None
+        time.sleep(3)
+        return wait_for(ok, timeout)
+
+    def wait_turns(self, n_replies: int, timeout: float = 180) -> bool:
+        """Wait until the transcript holds n assistant replies and the session is idle again."""
+        def ok():
+            d = self.row()
+            if not d:
+                return False
+            self.sid = d.get("sessionId")
+            recs = records(transcript(self.sid))
+            replies = sum(1 for r in recs if r.get("type") == "assistant")
+            return replies >= n_replies and d.get("status") == "idle"
+        return bool(wait_for(ok, timeout, 2))
+
+    def end(self, sig=signal.SIGTERM, timeout: float = 20) -> float | None:
+        """End the process the window would run (the launcher), and return seconds until it exited."""
+        t0 = now()
+        try:
+            os.kill(self.pid, sig)
+        except ProcessLookupError:
+            return 0.0
+        end = now() + timeout
+        while now() < end:
+            done, _ = os.waitpid(self.pid, os.WNOHANG)
+            if done:
+                self._stop = True
+                return now() - t0
+            time.sleep(0.1)
+        return None
+
+    def kill(self):
+        try:
+            os.kill(self.pid, signal.SIGKILL)
+            os.waitpid(self.pid, 0)
+        except (ProcessLookupError, ChildProcessError):
+            pass
+        self._stop = True
+
+
+def claude_args(name: str, prompt: str | None = None, *, mode: str = "bypassPermissions", settings: dict | None = None,
+                extra: list[str] | None = None) -> list[str]:
+    a = ["-n", name, "--model", MODEL, "--permission-mode", mode]
+    if settings:
+        a += ["--settings", json.dumps(settings)]
+    a += extra or []
+    if prompt:
+        a.append(prompt)
+    return a
+
+
+# ── results ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+class Results:
+    def __init__(self, out: Path):
+        self.out = out
+        self.rows: list[dict] = []
+
+    def add(self, probe: str, check: str, ok: bool | None, seen: str = ""):
+        status = "SKIP" if ok is None else ("PASS" if ok else "FAIL")
+        self.rows.append({"probe": probe, "check": check, "status": status, "seen": seen})
+        print(f"  {status:4}  {probe} · {check}" + (f"  ({seen})" if seen else ""), flush=True)
+
+    def table(self) -> str:
+        lines = ["| Probe | Check | Result | Seen |", "|---|---|---|---|"]
+        for r in self.rows:
+            seen = r["seen"].replace("|", "\\|").replace("\n", " ")
+            lines.append(f"| {r['probe']} | {r['check']} | {r['status']} | {seen} |")
+        return "\n".join(lines)
+
+    def save(self):
+        (self.out / "results.json").write_text(json.dumps(self.rows, indent=2))
+        counts = {s: sum(1 for r in self.rows if r["status"] == s) for s in ("PASS", "FAIL", "SKIP")}
+        head = f"# fg-probes, {time.strftime('%Y-%m-%d %H:%M')}\n\n{counts['PASS']} pass · {counts['FAIL']} fail · {counts['SKIP']} skip\n\n"
+        (self.out / "summary.md").write_text(head + self.table() + "\n")
+        return counts
+
+
+# ── P1 messaging ────────────────────────────────────────────────────────────────────────────────────────────────
+
+REPLY = ("You are a throwaway test probe. Do nothing now and end your turn. Whenever a message from another session "
+         "arrives, reply to that session with the SendMessage tool, text 'pong from {name}', and do nothing else.")
+
+
+def p1(res: Results, out: Path, cleanup: list):
+    a = Probe(f"{PREFIX}-a", claude_args(f"{PREFIX}-a", REPLY.format(name=f"{PREFIX}-a")), out)
+    cleanup.append(a)
+    a.wait_turns(1)
+    # a background session in bypass mode sends to the foreground one
+    bg_name = f"{PREFIX}-bg"
+    p = subprocess.run(["claude", "--bg", "-n", bg_name, "--model", MODEL, "--dangerously-skip-permissions", "--",
+                        f"You are a throwaway test probe. Use the SendMessage tool to send 'ping from {bg_name}' to "
+                        f"the session named {PREFIX}-a. Then end your turn."],
+                       cwd=WORKDIR, capture_output=True, text=True, timeout=120)
+    cleanup.append(("job", bg_name))
+    got = wait_for(lambda: [m for m in peer_messages(records(transcript(a.sid))) if m["from"] == bg_name], 180, 3)
+    res.add("P1", "background (bypass) → foreground (bypass) arrives as a turn", bool(got),
+            json.dumps(got[:1]) if got else (p.stdout + p.stderr)[-200:])
+    bg = find_session(name=bg_name)
+    bg_got = wait_for(lambda: [m for m in peer_messages(records(transcript(bg["sessionId"]))) if m["from"] == a.name]
+                      if bg else [], 120, 3)
+    res.add("P1", "foreground replies to the background session", bool(bg_got), json.dumps(bg_got[:1]) if bg_got else "")
+    # foreground → foreground
+    b = Probe(f"{PREFIX}-b", claude_args(f"{PREFIX}-b", f"You are a throwaway test probe. Use the SendMessage tool to "
+              f"send 'ping from {PREFIX}-b' to the session named {PREFIX}-a, then end your turn. If a message "
+              f"arrives later, do nothing."), out)
+    cleanup.append(b)
+    got = wait_for(lambda: [m for m in peer_messages(records(transcript(a.sid))) if m["from"] == b.name], 180, 3)
+    res.add("P1", "foreground → foreground arrives", bool(got), json.dumps(got[:1]) if got else "")
+    b.wait_turns(1)
+    back = wait_for(lambda: [m for m in peer_messages(records(transcript(b.sid))) if m["from"] == a.name], 120, 3)
+    res.add("P1", "foreground → foreground reply arrives", bool(back), json.dumps(back[:1]) if back else "")
+    # with crossSessionInbound: accept, a sender in default mode is delivered, and so is bypass → default
+    accept = {"crossSessionInbound": "accept"}
+    c = Probe(f"{PREFIX}-c", claude_args(f"{PREFIX}-c", REPLY.format(name=f"{PREFIX}-c"), mode="default",
+              settings=accept, extra=["--allowedTools", "SendMessage"]), out)
+    cleanup.append(c)
+    c.wait_turns(1)
+    d = Probe(f"{PREFIX}-d", claude_args(f"{PREFIX}-d", f"You are a throwaway test probe. Use the SendMessage tool to "
+              f"send 'ping from {PREFIX}-d' to the session named {PREFIX}-c, then end your turn.", settings=accept), out)
+    cleanup.append(d)
+    got = wait_for(lambda: [m for m in peer_messages(records(transcript(c.sid))) if m["from"] == d.name], 180, 3)
+    res.add("P1", "bypass → default-mode receiver, with accept", bool(got), json.dumps(got[:1]) if got else "")
+    d.wait_turns(1)
+    back = wait_for(lambda: [m for m in peer_messages(records(transcript(d.sid))) if m["from"] == c.name], 120, 3)
+    res.add("P1", "default-mode sender → bypass receiver, with accept", bool(back), json.dumps(back[:1]) if back else "")
+
+
+# ── P2 end and resume ───────────────────────────────────────────────────────────────────────────────────────────
+
+
+def p2(res: Results, out: Path, cleanup: list):
+    sid = str(uuid.uuid4())
+    name = f"{PREFIX}-r"
+    r = Probe(name, claude_args(name, "You are a throwaway test probe. Reply with the single word ready.",
+              extra=["--session-id", sid]), out)
+    cleanup.append(r)
+    r.sid = sid
+    ok = r.wait_turns(1)
+    row = r.row()
+    res.add("P2", "--session-id starts a session with that id", bool(row and row.get("sessionId") == sid),
+            f"registry sessionId {row and row.get('sessionId')}")
+    launched = {"first": r.pid}
+    reg_pid = row.get("pid") if row else None
+    before = len(records(transcript(sid)))
+    took = r.end(signal.SIGTERM)
+    t_exit = now()
+    res.add("P2", "SIGTERM to the launched process ends it cleanly", took is not None, f"exited after {took}")
+    lingered = None
+    if reg_pid:
+        wait_for(lambda: not alive(reg_pid), 15, 0.1)
+        lingered = round(now() - t_exit, 2)
+    res.add("P2", "old registry pid gone after the launcher exits (seconds measured)", lingered is not None and lingered < 15,
+            f"registry pid {reg_pid} outlived the launcher by {lingered} s")
+    after = len(records(transcript(sid)))
+    res.add("P2", "transcript intact after SIGTERM", after >= before and ok, f"{before} → {after} records")
+    r2 = Probe(name, claude_args(name, "Reply with the single word again.", extra=["--resume", sid]), out)
+    cleanup.append(r2)
+    r2.sid = sid
+    r2.wait_turns(2)
+    row2 = r2.row()
+    res.add("P2", "--resume keeps the conversation id", bool(row2 and row2.get("sessionId") == sid),
+            f"sessionId {row2 and row2.get('sessionId')}")
+    res.add("P2", "--resume with -n keeps the name", bool(row2 and row2.get("name") == name), f"name {row2 and row2.get('name')}")
+    launched["resumed"] = r2.pid
+    sid2 = str(uuid.uuid4())
+    fork = Probe(f"{name}2", claude_args(f"{name}2", "Reply with the single word copy.",
+                 extra=["--resume", sid, "--fork-session", "--session-id", sid2]), out)
+    cleanup.append(fork)
+    fork.sid = sid2
+    fork.wait_turns(1)
+    rowf = fork.row()
+    res.add("P2", "--resume --fork-session --session-id gives the copy that id", bool(rowf and rowf.get("sessionId") == sid2),
+            f"sessionId {rowf and rowf.get('sessionId')}")
+    (out / "P2-launched-pids.json").write_text(json.dumps(launched))
+    res.add("P2", "token line of each launched pid", None, f"pids {launched}: read their launcher logs after the run")
+
+
+# ── P5 agent view off ───────────────────────────────────────────────────────────────────────────────────────────
+
+
+def jobs_now() -> set[str]:
+    return {p.name for p in JOBS.iterdir()} if JOBS.exists() else set()
+
+
+def p5(res: Results, out: Path, cleanup: list):
+    off = {"disableAgentView": True}
+    w = Probe(f"{PREFIX}-w", claude_args(f"{PREFIX}-w", REPLY.format(name=f"{PREFIX}-w")), out)
+    cleanup.append(w)
+    w.wait_turns(1)
+    v = Probe(f"{PREFIX}-v", claude_args(f"{PREFIX}-v", "You are a throwaway test probe. Reply with the single word ready.",
+              settings=off), out)
+    cleanup.append(v)
+    v.wait_turns(1)
+    jobs0 = jobs_now()
+    v.key(b"\x1b[D")  # ← on an empty prompt
+    time.sleep(10)
+    row = v.row()
+    res.add("P5", "← does not park the session into a job", bool(row and not row.get("parkedJobId") and alive(v.pid)),
+            f"parkedJobId {row and row.get('parkedJobId')}, new jobs {sorted(jobs_now() - jobs0)}")
+    v.send(f"Call the ListAgents tool, then use the SendMessage tool to send 'ping from {PREFIX}-v' to the session named "
+           f"{PREFIX}-w, then reply with the number of peer sessions ListAgents listed.")
+    v.wait_turns(2)
+    recs = records(transcript(v.sid))
+    res.add("P5", "ListAgents works with the view off", bool(tool_uses(recs, "ListAgents")), "")
+    got = wait_for(lambda: [m for m in peer_messages(records(transcript(w.sid))) if m["from"] == v.name], 120, 3)
+    res.add("P5", "SendMessage out works with the view off", bool(got), "")
+    back = wait_for(lambda: [m for m in peer_messages(records(transcript(v.sid))) if m["from"] == w.name], 120, 3)
+    res.add("P5", "SendMessage in works with the view off", bool(back), "")
+    v.wait_idle()
+    v.send("Use the Agent tool with run_in_background true and model haiku, asking it to reply with the words sub done. "
+           "Wait for it to finish, then reply with the word finished.")
+    v.wait_turns(3, 240)
+    recs = records(transcript(v.sid))
+    notes = [r for r in recs if (r.get("origin") or {}).get("kind") == "task-notification"]
+    res.add("P5", "background agents run with the view off", bool(tool_uses(recs, "Agent")) and bool(notes),
+            f"{len(tool_uses(recs, 'Agent'))} Agent calls, {len(notes)} notifications")
+    v.wait_idle()
+    jobs1 = jobs_now()
+    v.send("/fork")
+    time.sleep(20)
+    new_jobs = sorted(jobs_now() - jobs1)
+    res.add("P5", "/fork with the view off (recorded: a job or an in-session agent)", True,
+            f"new job directories: {new_jobs or 'none'}; see {v.log.name}")
+    for j in new_jobs:
+        cleanup.append(("jobid", j))
+    sid = v.sid
+    v.end()
+    v2 = Probe(f"{PREFIX}-v", claude_args(f"{PREFIX}-v", "Reply with the single word back.", settings=off,
+               extra=["--resume", sid]), out)
+    cleanup.append(v2)
+    v2.sid = sid
+    ok = v2.wait_turns(1)
+    row = v2.row()
+    res.add("P5", "--resume works with the view off", bool(ok and row and row.get("sessionId") == sid), "")
+
+
+# ── P6 idle status, crons and the Stop hook ─────────────────────────────────────────────────────────────────────
+
+
+def p6_claude(res: Results, out: Path, cleanup: list):
+    hookdir = STATE / "stop-hook"
+    hookdir.mkdir(parents=True, exist_ok=True)
+    for f in hookdir.glob("*.json"):
+        f.unlink()
+    hook = {"hooks": {"Stop": [{"hooks": [{"type": "command",
+                                           "command": f"cat > \"{hookdir}/stop-$(date +%s%N).json\"; exit 0"}]}]}}
+    s = Probe(f"{PREFIX}-s", claude_args(f"{PREFIX}-s", "You are a throwaway test probe. Reply with the single word ready.",
+              settings=hook), out)
+    cleanup.append(s)
+    s.wait_turns(1)
+    files = wait_for(lambda: sorted(hookdir.glob("*.json")), 30)
+    res.add("P6", "a sandboxed Stop hook can write under ~/.local/state", bool(files), f"{len(files)} files")
+    s.send("/loop 2m reply with the single word tick")
+    s.wait_turns(2, 180)
+    seen = set()
+    end = now() + 50
+    while now() < end:
+        row = s.row()
+        if row:
+            seen.add(row.get("status"))
+        time.sleep(2)
+    res.add("P6", "registry reads idle between /loop ticks", "idle" in seen and "busy" not in seen, f"statuses {sorted(seen)}")
+    crons = []
+    for f in sorted(hookdir.glob("*.json")):
+        try:
+            d = json.loads(f.read_text())
+        except ValueError:
+            continue
+        crons.append(d.get("session_crons"))
+    res.add("P6", "the Stop hook input carries session_crons", any(c is not None for c in crons),
+            json.dumps(crons[-1:])[:200] if crons else "no hook input saved")
+    # Esc during a tick: does the Stop hook run?
+    n_before = len(list(hookdir.glob("*.json")))
+    busy = wait_for(lambda: (s.row() or {}).get("status") == "busy", 150, 1)
+    if busy:
+        s.key(b"\x1b")
+        time.sleep(8)
+    n_after = len(list(hookdir.glob("*.json")))
+    res.add("P6", "the Stop hook on an Esc-aborted turn (recorded)", True if busy else None,
+            f"hook files {n_before} → {n_after}" if busy else "no tick started in time")
+    s.wait_idle(60)
+    s.send("Run the shell command `sleep 45` with run_in_background set to true, then end your turn immediately.")
+    shell = wait_for(lambda: (s.row() or {}).get("status") == "shell", 90, 1)
+    res.add("P6", "a background command reads shell", bool(shell), "")
+
+
+# ── herdr: a throwaway session named `probe` ────────────────────────────────────────────────────────────────────
+
+
+class Herdr:
+    """Every call goes to the `probe` session's socket. There is deliberately no way to stop any other server."""
+
+    def __init__(self, out: Path):
+        self.out = out
+        self.config = out / "herdr-probe.toml"
+        self.config.write_text("[session]\nresume_agents_on_restore = true\nstartup_per_agent_delay_ms = 100\n")
+        self.sock = None
+        self.server = None
+
+    @staticmethod
+    def sessions() -> list[dict]:
+        p = subprocess.run(["herdr", "session", "list", "--json"], capture_output=True, text=True, timeout=30)
+        try:
+            return json.loads(p.stdout).get("sessions", [])
+        except ValueError:
+            return []
+
+    def start(self) -> bool:
+        env = dict(os.environ, HERDR_CONFIG_PATH=str(self.config))
+        env.pop("HERDR_SOCKET_PATH", None)
+        log = open(self.out / "herdr-probe-server.log", "ab")
+        s = None
+        for argv in (["herdr", "--session", PROBE_SESSION, "server"], ["herdr", "server", "--session", PROBE_SESSION]):
+            self.server = subprocess.Popen(argv, env=env, stdout=log, stderr=log, stdin=subprocess.DEVNULL,
+                                           start_new_session=True)
+            s = wait_for(lambda: next((x for x in self.sessions() if x.get("name") == PROBE_SESSION
+                                       and x.get("socket_path") and os.path.exists(x["socket_path"])), None), 20)
+            if s:
+                (self.out / "herdr-probe-start.txt").write_text(" ".join(argv) + "\n")
+                break
+            if self.server.poll() is None:
+                self.server.terminate()
+        self.sock = s["socket_path"] if s else None
+        return bool(self.sock) and self.call("workspace", "list").returncode == 0
+
+    def call(self, *args: str, timeout: float = 30) -> subprocess.CompletedProcess:
+        if "server" in args or "session" in args[:1]:
+            raise RuntimeError("fg-probes never manages a herdr server or session through the socket")
+        env = dict(os.environ, HERDR_SOCKET_PATH=self.sock or "/nonexistent")
+        p = subprocess.run(["herdr", *args], env=env, capture_output=True, text=True, timeout=timeout)
+        with open(self.out / "herdr-calls.log", "a") as f:
+            f.write(f"$ herdr {' '.join(args)}\n{p.returncode} {p.stdout[-2000:]}{p.stderr[-1000:]}\n")
+        return p
+
+    def js(self, *args: str) -> dict:
+        p = self.call(*args)
+        try:
+            return json.loads(p.stdout)
+        except ValueError:
+            return {"error": (p.stderr or p.stdout).strip()[-300:], "returncode": p.returncode}
+
+    def stop_session(self):
+        subprocess.run(["herdr", "session", "stop", PROBE_SESSION], capture_output=True, text=True, timeout=60)
+        if self.server:
+            try:
+                self.server.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                pass
+
+    def delete_session(self):
+        subprocess.run(["herdr", "session", "delete", PROBE_SESSION], capture_output=True, text=True, timeout=60)
+
+
+def find_key(d, key):
+    if isinstance(d, dict):
+        if key in d:
+            return d[key]
+        for v in d.values():
+            found = find_key(v, key)
+            if found is not None:
+                return found
+    elif isinstance(d, list):
+        for v in d:
+            found = find_key(v, key)
+            if found is not None:
+                return found
+    return None
+
+
+def new_pane(h: Herdr, label: str) -> str | None:
+    """A new tab in the probe session; returns its root pane id."""
+    ws = h.js("workspace", "list")
+    wid = find_key(ws, "workspace_id")
+    reply = h.js("tab", "create", "--workspace", wid, "--label", label, "--cwd", str(WORKDIR), "--no-focus") if wid \
+        else h.js("workspace", "create", "--label", label, "--cwd", str(WORKDIR), "--no-focus")
+    return find_key(reply, "pane_id")
+
+
+class EventListener(threading.Thread):
+    """Subscribes to the probe session's events over its socket and keeps every event it gets."""
+
+    def __init__(self, sock: str, method: str):
+        super().__init__(daemon=True)
+        self.sock, self.method, self.events, self.error = sock, method, [], None
+
+    def run(self):
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as c:
+                c.connect(self.sock)
+                c.sendall((json.dumps({"id": "fg-probes", "method": self.method, "params": {}}) + "\n").encode())
+                buf = b""
+                c.settimeout(120)
+                while True:
+                    chunk = c.recv(65536)
+                    if not chunk:
+                        return
+                    buf += chunk
+                    while b"\n" in buf:
+                        line, buf = buf.split(b"\n", 1)
+                        try:
+                            self.events.append(json.loads(line))
+                        except ValueError:
+                            pass
+        except OSError as e:
+            self.error = str(e)
+
+
+def subscribe_method(h: Herdr) -> str | None:
+    schema = h.js("api", "schema", "--json")
+    text = json.dumps(schema)
+    for name in ("events.subscribe", "events.stream", "event.subscribe"):
+        if name in text:
+            return name
+    return None
+
+
+def p3_p4_p6_herdr(res: Results, out: Path, cleanup: list, only: set[str]):
+    if any(s.get("name") == PROBE_SESSION for s in Herdr.sessions()):
+        res.add("P3", "a herdr session named probe already exists; not touching it", False, "delete it, then rerun")
+        return
+    h = Herdr(out)
+    if not h.start():
+        res.add("P3", "start a throwaway herdr session `probe`", False, f"see {out}/herdr-probe-server.log")
+        return
+    cleanup.append(("herdr", h))
+    me = shutil.which("fg-probes") or os.path.realpath(sys.argv[0])
+    panes = {}
+    for label in ("A", "B", "D", "E", "F", "G"):
+        panes[label] = new_pane(h, f"fg-probe-{label}")
+    res.add("P3", "panes created in the probe session", all(panes.values()), json.dumps(panes))
+    marks = out / "marks"
+    marks.mkdir(exist_ok=True)
+    for label in ("A", "B"):
+        if panes[label]:
+            h.call("pane", "run", panes[label], f"FG_PROBES_OUT={marks} {me} stand-in {label}")
+    time.sleep(3)
+    if "P3" in only:
+        a = panes["A"]
+        r1 = h.js("pane", "report-agent-session", "--source", "kc-cy", "--agent", "claude", a, "--", "fg-probes",
+                  "restored", "A", str(marks))
+        accepted = "error" not in json.dumps(r1).lower()
+        res.add("P3", "an outside process reports a resume command (report-agent-session)", accepted, json.dumps(r1)[:200])
+        if not accepted:
+            r2 = h.js("pane", "report-agent", "--source", "kc-cy", "--agent", "claude", "--state", "idle", a, "--",
+                      "fg-probes", "restored", "A", str(marks))
+            res.add("P3", "fallback: report-agent with a state and the resume command", "error" not in json.dumps(r2).lower(),
+                    json.dumps(r2)[:200])
+        # Cmd+W on pane B
+        h.call("pane", "close", panes["B"])
+        hup_b = wait_for(lambda: (marks / "hup-B.json").exists() and json.loads((marks / "hup-B.json").read_text()), 20)
+        res.add("P3", "closing a window: the loop sees its pane gone, herdr answering", bool(hup_b) and hup_b.get("verdict") == "closed",
+                json.dumps(hup_b)[:200] if hup_b else "no SIGHUP record")
+    if "P4" in only:
+        method = subscribe_method(h)
+        listener = EventListener(h.sock, method) if method else None
+        if listener:
+            listener.start()
+            time.sleep(2)
+        moved = h.js("pane", "move", panes["E"], "--new-workspace", "--label", "fg-probe-moved", "--no-focus") \
+            if panes["E"] else {}
+        time.sleep(5)
+        events = [e for e in (listener.events if listener else []) if "moved" in json.dumps(e)]
+        res.add("P4", "an outside subscriber sees pane.moved with old and new ids",
+                bool(events) and "previous_pane_id" in json.dumps(events),
+                (json.dumps(events[:1])[:200] if events else f"method {method}, error {listener and listener.error}, move {json.dumps(moved)[:120]}"))
+    if "P6" in only:
+        d = panes["D"]
+        if d:
+            h.call("pane", "run", d, f"FG_PROBES_OUT={marks} {me} detach-test D")
+        for label, env in (("F", ""), ("G", "HERDR_AGENT=claude ")):
+            pane = panes[label]
+            if not pane:
+                continue
+            h.call("pane", "run", pane, f"{env}{me} wrap -- claude -n {PREFIX}-h{label.lower()} --model {MODEL} "
+                                        f"--permission-mode bypassPermissions 'Reply with the single word ready.'")
+            time.sleep(25)
+            agents = h.js("agent", "list")
+            seen = any(find_key(x, "pane_id") == pane and "claude" in json.dumps(x).lower()
+                       for x in (agents.get("agents") or [] if isinstance(agents, dict) else []))
+            res.add("P6", f"herdr sees Claude behind a parent process ({'with' if env else 'without'} HERDR_AGENT)", seen,
+                    json.dumps(agents)[:200])
+            cleanup.append(("name", f"{PREFIX}-h{label.lower()}"))
+    # stop the probe session with the stand-in A and the detached process alive, then start it again
+    h.stop_session()
+    hup_a = wait_for(lambda: (marks / "hup-A.json").exists() and json.loads((marks / "hup-A.json").read_text()), 20)
+    if "P3" in only:
+        res.add("P3", "a server stop: the loop sees herdr not answering", bool(hup_a) and hup_a.get("verdict") == "interrupted",
+                json.dumps(hup_a)[:200] if hup_a else "no SIGHUP record")
+    if "P6" in only:
+        det = marks / "detached-D.pid"
+        pid = int(det.read_text()) if det.exists() else None
+        res.add("P6", "a detached process survives a herdr session stop", bool(pid and alive(pid)), f"pid {pid}")
+        if pid:
+            cleanup.append(("pid", pid))
+    if "P3" in only:
+        if not h.start():
+            res.add("P3", "restart the probe session", False, "")
+        else:
+            got = wait_for(lambda: (marks / "restored-A.json").exists(), 45)
+            res.add("P3", "after a restart herdr reruns the reported resume command", bool(got),
+                    (marks / "restored-A.json").read_text()[:200] if got else "pane A came back without it")
+
+
+# ── modes run inside the probe herdr session ────────────────────────────────────────────────────────────────────
+
+
+def stand_in(name: str):
+    """Stands in for the window loop: waits; on SIGHUP asks herdr about its pane, as the real loop will."""
+    out = Path(os.environ.get("FG_PROBES_OUT", STATE))
+    pane = os.environ.get("HERDR_PANE_ID", "")
+
+    def hup(_sig, _frm):
+        t0 = now()
+        try:
+            p = subprocess.run(["herdr", "pane", "get", pane], capture_output=True, text=True, timeout=0.5)
+            answered, text = True, (p.stdout + p.stderr)
+            gone = p.returncode != 0 or "not found" in text.lower() or "no such" in text.lower()
+        except subprocess.TimeoutExpired:
+            answered, text, gone = False, "timeout", None
+        except OSError as e:
+            answered, text, gone = False, str(e), None
+        verdict = "closed" if answered and gone else ("interrupted" if not answered else "pane still there")
+        (out / f"hup-{name}.json").write_text(json.dumps({"pane": pane, "answered": answered, "pane_gone": gone,
+                                                          "verdict": verdict, "seconds": round(now() - t0, 3),
+                                                          "said": text[-300:]}))
+        os._exit(0)
+
+    signal.signal(signal.SIGHUP, hup)
+    while True:
+        time.sleep(3600)
+
+
+def restored(name: str, where: str | None = None):
+    out = Path(where) if where else STATE / "marks"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / f"restored-{name}.json").write_text(json.dumps({"at": time.strftime("%H:%M:%S"),
+                                                           "pane": os.environ.get("HERDR_PANE_ID")}))
+    print(f"fg-probes: restored {name}")
+
+
+def detach_test(name: str):
+    out = Path(os.environ.get("FG_PROBES_OUT", STATE))
+    p = subprocess.Popen(["sleep", "900"], start_new_session=True, stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    (out / f"detached-{name}.pid").write_text(str(p.pid))
+    time.sleep(3600)
+
+
+def wrap(cmd: list[str]):
+    """A parent process in front of `claude`, as the window loop will be."""
+    sys.exit(subprocess.call(cmd))
+
+
+# ── cleanup and main ────────────────────────────────────────────────────────────────────────────────────────────
+
+
+def stop_job(name: str):
+    p = subprocess.run(["claude", "agents", "--json", "--all"], capture_output=True, text=True, timeout=60)
+    try:
+        rows = json.loads(p.stdout)
+    except ValueError:
+        rows = []
+    for r in rows:
+        if r.get("name") == name and r.get("id"):
+            subprocess.run(["claude", "stop", r["id"]], capture_output=True, timeout=60)
+            subprocess.run(["claude", "rm", r["id"]], capture_output=True, timeout=60)
+
+
+def do_cleanup(items: list, keep: bool):
+    if keep:
+        print("fg-probes: --keep: leaving the probe sessions running")
+        return
+    for item in reversed(items):
+        try:
+            if isinstance(item, Probe):
+                if alive(item.pid):
+                    item.end(timeout=10) is None and item.kill()
+            elif item[0] == "job":
+                stop_job(item[1])
+            elif item[0] == "jobid":
+                subprocess.run(["claude", "stop", item[1]], capture_output=True, timeout=60)
+                subprocess.run(["claude", "rm", item[1]], capture_output=True, timeout=60)
+            elif item[0] == "name":
+                row = find_session(name=item[1])
+                if row:
+                    os.kill(row["pid"], signal.SIGTERM)
+            elif item[0] == "pid":
+                if alive(item[1]):
+                    os.kill(item[1], signal.SIGTERM)
+            elif item[0] == "herdr":
+                item[1].stop_session()
+                item[1].delete_session()
+        except Exception as e:  # cleanup goes on whatever fails
+            print(f"fg-probes: cleanup of {item!r} failed: {e}", file=sys.stderr)
+
+
+def ensure_on_path() -> Path | None:
+    """herdr runs a resume command by its plain name, so fg-probes must be on PATH for P3."""
+    if shutil.which("fg-probes"):
+        return None
+    link = HOME / ".local" / "bin" / "fg-probes"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(os.path.realpath(sys.argv[0]))
+    return link
+
+
+PROBES = ("P1", "P2", "P3", "P4", "P5", "P6")
+
+
+def main(argv: list[str]) -> int:
+    if argv[:1] == ["stand-in"]:
+        stand_in(argv[1])
+    if argv[:1] == ["restored"]:
+        restored(argv[1], argv[2] if len(argv) > 2 else None)
+        return 0
+    if argv[:1] == ["detach-test"]:
+        detach_test(argv[1])
+    if argv[:1] == ["wrap"]:
+        wrap(argv[2:] if argv[1:2] == ["--"] else argv[1:])
+    ap = argparse.ArgumentParser(prog="fg-probes", description=__doc__.split("\n\n")[0])
+    ap.add_argument("--only", default=",".join(PROBES), help="comma-separated probes to run (default: all)")
+    ap.add_argument("--out", help="results folder (default: ~/.local/state/fg-probes/<time>)")
+    ap.add_argument("--keep", action="store_true", help="leave the probe sessions running")
+    args = ap.parse_args(argv)
+    if os.environ.get("CLAUDECODE"):
+        print("fg-probes: run me in a plain terminal, not from a Claude session (its sandbox cannot start claude)",
+              file=sys.stderr)
+        return 2
+    only = {p.strip().upper() for p in args.only.split(",") if p.strip()}
+    out = Path(args.out) if args.out else STATE / time.strftime("%Y%m%d-%H%M%S")
+    out.mkdir(parents=True, exist_ok=True)
+    res = Results(out)
+    link = ensure_on_path()
+    cleanup: list = []
+    print(f"fg-probes: results in {out}")
+    steps = [("P1", p1), ("P2", p2), ("P5", p5), ("P6", p6_claude)]
+    try:
+        for name, fn in steps:
+            if name in only:
+                print(f"{name}…", flush=True)
+                try:
+                    fn(res, out, cleanup)
+                except Exception as e:
+                    res.add(name, "ran to the end", False, f"{type(e).__name__}: {e}")
+        if only & {"P3", "P4", "P6"}:
+            print("P3/P4/P6 (herdr)…", flush=True)
+            try:
+                p3_p4_p6_herdr(res, out, cleanup, only)
+            except Exception as e:
+                res.add("P3", "herdr probes ran to the end", False, f"{type(e).__name__}: {e}")
+    finally:
+        do_cleanup(cleanup, args.keep)
+        if link and link.is_symlink():
+            link.unlink()
+        counts = res.save()
+    print(f"\n{res.table()}\n\nfg-probes: {counts['PASS']} pass, {counts['FAIL']} fail, {counts['SKIP']} skip; "
+          f"saved in {out}")
+    return 0 if counts["FAIL"] == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
