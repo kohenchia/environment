@@ -137,6 +137,39 @@ def until(pred, timeout=20):
 
 
 class Loop(unittest.TestCase):
+    def hook(self, w, body):
+        hook = w.home / ".config" / "cy" / "launch-env"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/sh\n" + body)
+        hook.chmod(0o755)
+
+    def test_the_hook_gets_the_key_once_a_named_token_and_its_pin_is_recorded(self):
+        with World() as w:
+            self.hook(w, 'echo "$@" >> "$HOME/hook.log"\necho pin=project\n')
+            p = w.cy("-n", "probe-pin", "--token", "project", wait=False)
+            loop = until(lambda: (w.loops() or [{}])[0].get("launched_pid") and w.loops()[0])
+            until(lambda: list((w.home / ".claude" / "sessions").glob("*.json")))
+            (w.state / "next").mkdir(exist_ok=True)
+            (w.state / "next" / f"{loop['id']}.json").write_text(json.dumps({"for_pid": loop["launched_pid"],
+                                                                              "conversation": loop["id"]}))
+            os.kill(loop["launched_pid"], signal.SIGTERM)
+            until(lambda: len(w.argv()) >= 2)
+            os.kill(until(lambda: w.loops()[0]["launched_pid"] != loop["launched_pid"] and w.loops()[0]["launched_pid"]),
+                    signal.SIGTERM)
+            p.communicate(timeout=30)
+            calls = (w.home / "hook.log").read_text().splitlines()
+            self.assertEqual(calls, [f"project {loop['id']}", f"default {loop['id']}"])
+            self.assertEqual((w.loops()[0]["token"], w.loops()[0]["pinned"]), ("project", True))
+
+    def test_a_branch_gives_the_hook_its_parent_once(self):
+        with World() as w:
+            self.hook(w, 'echo "$@" >> "$HOME/hook.log"\necho token=personal\n')
+            w.cy("-n", "probe-par", env={"FAKE_CLAUDE_EXIT": "0"})
+            parent = w.loops()[0]["id"]
+            w.cy("-r", "probe-par", "--branch", "probe-kid", env={"FAKE_CLAUDE_EXIT": "0"})
+            kid = next(l["id"] for l in w.loops() if l["name"] == "probe-kid")
+            self.assertIn(f"default {kid} {parent}", (w.home / "hook.log").read_text().splitlines())
+
     def test_a_new_session_gets_its_own_id_bypass_and_the_agent_view_off(self):
         with World() as w:
             code, out, err = w.cy("-n", "probe-one", "hello", env={"FAKE_CLAUDE_EXIT": "0"})
@@ -590,20 +623,48 @@ class Follower(unittest.TestCase):
                 self.assertEqual(fm.cy.result_of(ok)["result"], "done")
             self.run_follower(w, body)
 
-    def test_a_dropped_pin_wins_over_how_cy_started_the_session(self):
+    def test_a_restart_carries_only_the_token_it_was_asked_for(self):
         with World() as w:
             def body(fm, sid, child, lock):
-                loop = fm.cy.read_json(fm.cy.loop_file(sid))
-                fm.cy.write_json(fm.cy.loop_file(sid), dict(loop, pinned=True, token_asked="project"))
                 f = fm.Follower()
-                pin = fm.cy.submit(sid, "pin", {"token": None})
+                fm.cy.submit(sid, "restart", {"token": "project"})
+                f.idle_since[sid] = time.time() - 5
                 f.tick()
-                self.assertEqual(fm.cy.result_of(pin)["result"], "done")
+                self.assertEqual(json.loads(fm.cy.next_file(sid).read_text())["token"], "project")
+            self.run_follower(w, body)
+        with World() as w:
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
                 fm.cy.submit(sid, "restart", {})
                 f.idle_since[sid] = time.time() - 5
                 f.tick()
-                self.assertIsNone(json.loads(fm.cy.next_file(sid).read_text())["token"])
+                self.assertIsNone(json.loads(fm.cy.next_file(sid).read_text())["token"])  # the hook reads the pin
             self.run_follower(w, body)
+
+    def test_a_restart_asked_before_the_current_launch_is_already_done(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                req = fm.cy.submit(sid, "restart", {})
+                d = json.loads(req.read_text())
+                req.write_text(json.dumps(dict(d, at=fm.cy.started_at(child.pid) - 60)))
+                fm.Follower().tick()
+                res = fm.cy.result_of(req)
+                self.assertEqual((res["result"], res["note"]), ("done", "restarted since it was asked"))
+                self.assertIsNone(child.poll())
+            self.run_follower(w, body)
+
+    def test_a_later_now_restart_overtakes_a_waiting_one(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
+                first = fm.cy.submit(sid, "restart", {})
+                f.tick()  # claimed; waits for idle
+                self.assertIsNone(fm.cy.result_of(first))
+                fm.cy.submit(sid, "restart", {"now": True})
+                f.tick()
+                self.assertEqual(child.wait(timeout=10), -signal.SIGTERM)
+                self.assertEqual(fm.cy.result_of(first)["result"], "done")
+            self.run_follower(w, body, status="busy")
 
     def test_a_claimed_request_is_carried_out_once_by_the_next_follower(self):
         with World() as w:

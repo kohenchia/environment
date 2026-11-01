@@ -20,9 +20,11 @@ Files, all under ~/.local/state/cy/:
     requests/<id>/       requests from `tok`, `cag` and `kc-new`, applied by the follower in order
     crons/<session>.json written by the Stop hook: the session's crons and pending wakeups
 
-The token is the machine's business: `~/.config/cy/launch-env TOKEN` prints the environment for it (KEY=VALUE lines, or
--KEY to unset; the first line `token=LABEL` names what it chose). Without that hook the session runs with the shell's
-environment and its token is recorded as `none`.
+The token is the machine's business: `~/.config/cy/launch-env TOKEN KEY [PARENT]` prints the environment for it
+(KEY=VALUE lines, or -KEY to unset; `token=LABEL` names what it chose, and `pin=LABEL` says the session is pinned to it).
+TOKEN is `default` unless the session was started or restarted on a named token (`--token`, a restart's `token`); KEY is
+the session's key, so the hook keeps and reads the session's pin itself, at every launch; PARENT is the key a `--branch`
+copy came from. Without that hook the session runs with the shell's environment and its token is recorded as `none`.
 
 This file is also the shared library that `cy-follow` and `cag` load. Standard library only.
 """
@@ -136,13 +138,6 @@ def launches() -> list[dict]:
         merged["id"] = sid
         out.append(merged)
     return out
-
-
-def pin_of(l: dict) -> str | None:
-    """The token a session is pinned to (a launch as `launches()` merges it): a pin request wins over how cy started it."""
-    if not l.get("pinned"):
-        return None
-    return l.get("token_pin") or l.get("token_asked")
 
 
 def held(sid: str) -> bool:
@@ -402,7 +397,7 @@ def title_of(recs: list[dict]) -> str | None:
 
 # ── requests ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-KINDS = ("restart", "rename", "retire", "pin")
+KINDS = ("restart", "rename", "retire")
 
 
 def submit(sid: str, kind: str, body: dict | None = None, *, by: str = "", not_after: float = 1800) -> Path:
@@ -474,29 +469,33 @@ class LaunchHookFailed(Exception):
     pass
 
 
-def token_env(token: str | None) -> tuple[dict, str]:
-    """The machine's launch hook decides the environment for a token label ('default' when none is pinned).
+def token_env(token: str | None, key: str, parent: str | None = None) -> tuple[dict, str, bool]:
+    """The machine's launch hook decides the environment: for a named token, or ('default') for the session's own pin,
+    else the default. Returns the environment, the label it chose and whether that is a pin.
     A hook that fails stops the launch: a session must never start on a token nobody chose."""
     env = dict(os.environ)
     env.pop("CLAUDECODE", None)
     if not LAUNCH_HOOK.exists():
-        return env, "none"
+        return env, "none", False
     try:
-        p = subprocess.run([str(LAUNCH_HOOK), token or "default"], capture_output=True, text=True, timeout=20)
+        p = subprocess.run([str(LAUNCH_HOOK), token or "default", key, *([parent] if parent else [])],
+                           capture_output=True, text=True, timeout=20)
     except (OSError, subprocess.TimeoutExpired) as e:
         raise LaunchHookFailed(str(e))
-    if p.returncode != 0:
-        raise LaunchHookFailed((p.stderr or p.stdout).strip()[-300:] or f"exit {p.returncode}")
-    label = token or "default"
+    if p.returncode != 0:  # stderr only: the hook's stdout carries the environment, secrets included
+        raise LaunchHookFailed(p.stderr.strip()[-300:] or f"exit {p.returncode}")
+    label, pinned = token or "default", False
     for line in p.stdout.splitlines():
         if line.startswith("token="):
             label = line[6:].strip()
+        elif line.startswith("pin="):
+            label, pinned = line[4:].strip(), True
         elif line.startswith("-"):
             env.pop(line[1:].strip(), None)
         elif "=" in line:
             k, v = line.split("=", 1)
             env[k.strip()] = v
-    return env, label
+    return env, label, pinned
 
 
 def settings_json(extra: dict | None) -> str:
@@ -693,7 +692,7 @@ class Loop:
                 convs.append(c)
         self.record(id=self.sid, name=self.spec["name"], cwd=os.getcwd(), model=self.spec.get("model"),
                     effort=self.spec.get("effort"), agent=self.spec.get("agent"), token_asked=self.spec.get("token"),
-                    pinned=bool(self.spec.get("token")), started_by=self.spec.get("started_by") or facts.get("started_by"),
+                    started_by=self.spec.get("started_by") or facts.get("started_by"),
                     conversations=convs, status="live", end=None,
                     started_at=facts.get("started_at") or time.time(), version=file_version(ME))
         start_follower()
@@ -715,7 +714,7 @@ class Loop:
     def _loop(self) -> int:
         while True:
             try:
-                env, label = token_env(self.spec.get("token"))
+                env, label, pinned = token_env(self.spec.get("token"), self.sid, self.spec.get("parent"))
             except LaunchHookFailed as e:
                 print(f"cy: the launch hook for token {self.spec.get('token') or 'default'} failed: {e}", file=sys.stderr)
                 self.record(status="crashed", end="crashed", ended_at=time.time(), note=f"launch hook: {e}")
@@ -725,7 +724,8 @@ class Loop:
             signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl+C is for claude
             self.child = subprocess.Popen(argv, env=env, preexec_fn=self.child_signals)
             self.spec["prompt"] = None  # a prompt is sent once; a restart brings its own
-            self.record(launched_pid=self.child.pid, launched_start=started_at(self.child.pid), token=label,
+            self.spec["token"] = self.spec["parent"] = None  # asked once: from then on the hook keeps the session's pin
+            self.record(launched_pid=self.child.pid, launched_start=started_at(self.child.pid), token=label, pinned=pinned,
                         conversation=self.spec.get("resume") or self.spec["id"], status="live", end=None,
                         pane=os.environ.get("HERDR_PANE_ID"), tab=os.environ.get("HERDR_TAB_ID"),
                         workspace=os.environ.get("HERDR_WORKSPACE_ID"))
@@ -752,7 +752,7 @@ class Loop:
                     self.spec["resume"], self.spec["id"] = None, str(uuid.uuid4())
                     self.record(conversations=self.facts().get("conversations", []) + [self.spec["id"]])
                 self.record(name=self.spec["name"], token_asked=self.spec.get("token"),
-                            pinned=bool(self.spec.get("token")), restarts=self.facts().get("restarts", 0) + 1)
+                            restarts=self.facts().get("restarts", 0) + 1)
                 if file_version(ME) != self.facts().get("version") and self.checks_ok():
                     os.set_inheritable(self.lock.fileno(), True)
                     write_json(STATE / f"{self.sid}.continue.json", dict(self.spec, lock_fd=self.lock.fileno()))
@@ -766,9 +766,8 @@ class Loop:
                 except (EOFError, KeyboardInterrupt):
                     return 0
                 conv = self.facts().get("conversation") or self.sid
-                me = next((x for x in launches() if x["id"] == self.sid), {})
-                self.spec.update(resume=conv, fork=False, prompt=rearm_text(conv), token=pin_of(me))  # a pin set meanwhile
-                self.record(status="live", end=None, token_asked=self.spec["token"], pinned=bool(self.spec["token"]))
+                self.spec.update(resume=conv, fork=False, prompt=rearm_text(conv))
+                self.record(status="live", end=None)
                 continue
             self.record(status="crashed", end="crashed", ended_at=time.time(), exit_code=code)
             print(f"\ncy: {self.spec['name']} stopped (exit {code}). Resume it with: cy -r {self.spec['name']}",
@@ -889,7 +888,7 @@ def main(argv: list[str]) -> int:
                 return 1
             new = str(uuid.uuid4())
             spec = {"key": new, "id": new, "name": a.branch, "resume": conv, "fork": True,
-                    "token": a.token or pin_of(l),
+                    "token": a.token, "parent": l["id"],
                     "model": a.model or last_model(recs), "effort": a.effort or l.get("effort"),
                     "agent": a.agent or l.get("agent"), "mode": last_mode(recs), "prompt": prompt,
                     "prompt_file": a.prompt_file, "started_by": l["id"]}
@@ -901,7 +900,7 @@ def main(argv: list[str]) -> int:
             print(f"cy: {l.get('name')} was retired; resuming it")
         name = l.get("name") or (a.resume if NAME_RE.match(a.resume) else default_name())
         spec = {"key": l["id"], "id": l["id"], "name": name, "resume": conv,
-                "token": a.token or pin_of(l),
+                "token": a.token,
                 "model": a.model or last_model(recs) or l.get("model"), "effort": a.effort or l.get("effort"),
                 "agent": a.agent or l.get("agent"), "mode": last_mode(recs),
                 "prompt": rearm_text(conv, prompt), "prompt_file": a.prompt_file}

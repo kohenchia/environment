@@ -14,8 +14,9 @@ Every 2 seconds, for each session `cy` started (`~/.local/state/cy/*.loop.json`)
     claude --state S PANE -- cy -r NAME` (herdr takes a resume command only with a state report);
   * it carries out requests (`requests/<id>/*.json`, oldest first, each claimed by moving it into `doing/`): a
     restart, a rename or a retire waits until Claude's registry has said `idle` for 3 seconds, read again just before
-    acting, then writes `next/<id>.json` for the window loop and sends the launched process SIGTERM; a pin sets the
-    token a later restart uses. Each request is answered by a `.result.json` beside it;
+    acting, then writes `next/<id>.json` for the window loop and sends the launched process SIGTERM. A restart asked
+    before the session's current launch is already done; a later `now` restart makes a waiting one `now`. Each request
+    is answered by a `.result.json` beside it;
   * it ends an orphan (a live `claude` whose loop died) once it is idle, and records `crashed`.
 
 One follower runs at a time (an `fcntl` lock). A newer `cy-follow`, or a newer `cy` (whose code it runs), replaces an
@@ -103,8 +104,6 @@ class Follower:
         if loop.get("launched_pid") != view.get("launched_pid") or not view.get("pane"):
             # a new launch (maybe `cy -r` in another window): the loop's window is the one; until then, events move it
             fields.update(pane=loop.get("pane"), tab=loop.get("tab"), workspace=loop.get("workspace"))
-            if view.get("launched_pid"):  # the loop now runs on the token it was given: a pin it carried is its own
-                fields.update(token_pin=None, pinned=None)
             if view.get("end") == "closed" and cy.held(sid):
                 fields["end"] = None  # resumed after its window was closed
         status, _ = cy.status_of(sid, loop, dict(view, **fields))
@@ -207,10 +206,6 @@ class Follower:
             return self.finish(req, "refused", f"unknown kind {kind!r}")
         if time.time() > data.get("not_after", float("inf")):
             return self.finish(req, "dropped", "past its not_after")
-        if kind == "pin":
-            token = body.get("token") or None
-            self.write_view(sid, token_pin=token, pinned=bool(token))
-            return self.finish(req, "done", f"pinned to {token}" if token else "pin dropped")
         if not cy.held(sid):
             return self.finish(req, "refused", f"{view.get('name')} is not running under cy (cy -r {view.get('name')})")
         if kind == "retire" and data.get("by") not in ALLOWED_TO_RETIRE + tuple(filter(None, [view.get("started_by"),
@@ -222,7 +217,12 @@ class Follower:
             if not cy.NAME_RE.match(new_name) or cy.name_in_use(new_name):
                 return self.finish(req, "refused", f"{new_name!r} is not a free session name")
         launched, start = loop.get("launched_pid"), loop.get("launched_start")
-        if not body.get("now") and not self.is_idle(sid, launched, start):
+        if kind == "restart" and start and data.get("at", float("inf")) < start - 1:
+            return self.finish(req, "done", "restarted since it was asked")
+        now = body.get("now") or (kind == "restart" and any(
+            (cy.read_json(p, {}) or {}).get("kind") == "restart" and ((cy.read_json(p, {}) or {}).get("body") or {}).get("now")
+            for p in cy.pending(sid)))  # a later `--now` restart overtakes this one
+        if not now and not self.is_idle(sid, launched, start):
             return  # waits in doing/; checked again next tick
         if cy.read_json(cy.next_file(sid), {}).get("for_pid") != launched:
             if kind == "retire":
@@ -230,13 +230,11 @@ class Follower:
             else:
                 conv = view.get("conversation")
                 recs = cy.records(cy.transcript(conv))
-                pin = body.get("token") or cy.pin_of(dict(loop, **{k: v for k, v in view.items() if v is not None}))
                 order = {"for_pid": launched, "conversation": conv, "name": new_name or view.get("name"),
-                         "token": pin, "fresh": bool(body.get("fresh")), "mode": cy.last_mode(recs) or "bypassPermissions",
+                         "token": body.get("token"), "fresh": bool(body.get("fresh")),
+                         "mode": cy.last_mode(recs) or "bypassPermissions",
                          "model": cy.last_model(recs) or loop.get("model"),
                          "prompt": cy.rearm_text(conv, body.get("prompt"))}
-                if body.get("token"):
-                    self.write_view(sid, token_pin=body["token"], pinned=True)
             cy.write_json(cy.next_file(sid), order)
         if not cy.signal_if_same(launched, start):
             cy.next_file(sid).unlink(missing_ok=True)
