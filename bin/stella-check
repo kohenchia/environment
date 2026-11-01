@@ -128,17 +128,22 @@ def cag():
 
 def sessions() -> list[dict]:
     """Every session with activity in the last RECENT seconds, but Stella herself (cag's light read)."""
-    return [r for r in cag().rows(light=True) if r.get("name") not in SELF and r.get("first_conversation_id")
-            and now() - (r.get("last_activity_at") or r.get("started_at") or 0) <= RECENT]
+    return [r for r in cag().rows(light=True, since=now() - RECENT) if r.get("name") not in SELF
+            and r.get("first_conversation_id") and now() - (r.get("last_activity_at") or r.get("started_at") or 0) <= RECENT]
+
+
+GIVEN_WORK = 80  # a first prompt longer than this is a task, not a start message
 
 
 def worked(r: dict) -> bool:
-    """Has the session been given work: more than one prompt, or a tool used. A session that only answered its start
-    message ("What would you like to work on?") has not, and its question is for Kohen."""
+    """Has the session been given work: more than one prompt, a tool used, or a first prompt that is a task. A session
+    that only answered its start message ("Session start: wait for my first message.") has not, and its question
+    ("What would you like to work on?") is for Kohen."""
     c = cag().cy
     recs = c.records(Path(r["transcript"]), tail=cag().TAIL) if r.get("transcript") else []
-    prompts = sum(1 for x in recs if c.is_user_prompt(x) and c.text_of(x).strip())
-    return prompts > 1 or any(used_a_tool(x) for x in recs)
+    prompts = [t for t in (c.text_of(x).strip() for x in recs if c.is_user_prompt(x))
+               if t and not t.startswith(("<local-command-", "<command-name>", "<command-message>"))]  # not slash commands
+    return len(prompts) > 1 or any(used_a_tool(x) for x in recs) or any(len(p) > GIVEN_WORK for p in prompts)
 
 
 def used_a_tool(rec: dict) -> bool:
@@ -150,22 +155,27 @@ def session_findings() -> dict[str, dict]:
     found = {}
     for r in sessions():
         name, key = str(r.get("name") or r["first_conversation_id"]), r["first_conversation_id"]
-        state, kind = r.get("state") or "", r.get("waiting_kind")
+        state, kind = r.get("rule_state") or r.get("state") or "", r.get("waiting_kind")  # a dormant job's too
         if state.startswith("waiting on you") and kind in ("question", "dialog"):
             # A bare question or a dialog: once per episode, when it has waited BLOCKED_AFTER. A Needs-you table is
             # Kohen's (kind "reply") and wakes no one.
+            # A question waits from its reply; a dialog from the session's last activity (the tool call it asks about).
+            # Either episode is keyed by the reply, so records written while a dialog is open start no new one.
             since = (r.get("last_reply_at") if kind == "question" else r.get("last_activity_at")) or now()
+            episode = f"{int(r.get('last_reply_at') or since)}" + ("" if kind == "question" else ":dialog")
             if now() - since >= BLOCKED_AFTER and (kind == "dialog" or worked(r)):
-                found[f"blocked:{key}:{int(since)}"] = {"kind": "blocked", "session": name, "id": key, "waiting": kind,
-                                                       "minutes": int((now() - since) / 60),
-                                                       "needs": str(r.get("needs") or "")[:300]}
+                found[f"blocked:{key}:{episode}"] = {"kind": "blocked", "session": name, "id": key, "waiting": kind,
+                                                    "minutes": int((now() - since) / 60),
+                                                    "needs": str(r.get("needs") or "")[:300],
+                                                    "transcript": r.get("transcript"), "mode": r.get("permission_mode")}
             continue
         if state == "stopped: API error":
             age = now() - (r.get("last_reply_at") or r.get("last_activity_at") or now())
             if age >= API_ERROR_AFTER and age // REPEAT <= REPEATS:
                 again = int(age // REPEAT)  # comes back once an hour of being stopped, while it stays
                 found[f"apierror:{key}:h{again}"] = {"kind": "api_error", "session": name, "id": key,
-                                                     "minutes": int(age / 60), "detail": str(r.get("needs") or "")[:200]}
+                                                     "minutes": int(age / 60), "transcript": r.get("transcript"),
+                                                     "detail": str(r.get("last_reply") or r.get("needs") or "")[:300]}
     return found
 
 
@@ -362,8 +372,14 @@ def update_state(change) -> None:
         save_state(st)
 
 
-RULES = 3  # bump when the keys of the findings change: everything found on the first check (and the first helper run)
-           # with new rules is known, not news. 3: sessions keyed by first conversation id, from the sessions table
+RULES = 3  # bump when the keys of the findings change. 3: sessions keyed by their first conversation id (the table's)
+
+
+def moved(key: str, before: set) -> bool:
+    """A finding already known under its key from before RULES 3, when sessions were keyed by their job id: the first 8
+    characters of the job's first conversation id (`apierror:<id>:h1`, `merged:<id>:<signature>`)."""
+    kind, ident, rest = (key.split(":", 2) + ["", ""])[:3]
+    return kind in ("apierror", "merged") and f"{kind}:{ident[:8]}:{rest}" in before
 
 
 def check(with_helper: bool, save: bool = True) -> list[dict]:
@@ -371,11 +387,19 @@ def check(with_helper: bool, save: bool = True) -> list[dict]:
     state = load_state()
     before = set(state.get("sessions", [])) | set(state.get("pr", []))
     woken = dict(state.get("woken", {}))  # blocked episodes already woken for: a session that drops out of view
-    found = session_findings()            # (its job file idle for hours) and comes back is the same episode
-    if state.get("rules") != RULES:  # first run with these rules: what is found now is known, not news
-        woken.update({k: now() for k in found if k.startswith("blocked:")})
-        before |= set(found)
     errors: list[dict] = []
+    try:
+        found = session_findings()        # (it is out of view for hours) and comes back is the same episode
+        state.pop("sessions_crash", None)
+    except Exception as e:  # noqa: BLE001 - the sessions table failing must not silence the PR wakes too
+        found = {k: {} for k in state.get("sessions", [])}  # what was found before still stands
+        kind = type(e).__name__
+        if state.get("sessions_crash") != kind:
+            state["sessions_crash"] = kind
+            errors.append({"key": f"crash:sessions:{kind}", "kind": "crash", "error": f"sessions table: {kind}: {str(e)[:200]}"})
+    if state.get("rules") != RULES:  # first run with these rules: a session already waiting is known, not news
+        woken.update({k: now() for k in found if k.startswith("blocked:")})
+    before |= {k for k in found if moved(k, before)}
     pr: dict[str, dict] = {}
     if with_helper:
         kept = state.get("pr", [])
@@ -387,8 +411,7 @@ def check(with_helper: bool, save: bool = True) -> list[dict]:
         for what in ("merged", "reminders"):
             if what in failed:
                 pr = {**{k: {} for k in kept if k.startswith(what + ":")}, **pr}
-        if state.get("pr_rules") != RULES and not failed:  # the helper's first run with these rules: seeded too
-            before |= set(pr)
+        before |= {k for k in pr if moved(k, before)}
     new = [{"key": k, **v} for k, v in {**found, **pr}.items()
            if k not in before and v and not (k.startswith("blocked:") and k in woken)] + errors
     woken.update({f["key"]: now() for f in new if f["key"].startswith("blocked:")})
@@ -396,12 +419,14 @@ def check(with_helper: bool, save: bool = True) -> list[dict]:
         def apply(st: dict) -> None:
             st["sessions"] = sorted(found)
             st["rules"] = RULES
+            if "sessions_crash" in state:
+                st["sessions_crash"] = state["sessions_crash"]
+            else:
+                st.pop("sessions_crash", None)
             st["woken"] = {k: t for k, t in woken.items() if now() - t < 7 * 86400}
             if with_helper:
                 st["pr"], st["helper_at"], st["errors"] = sorted(pr), int(now()), state.get("errors", {})
                 st["conflicts"] = state.get("conflicts", st.get("conflicts", []))
-                if not failed:
-                    st["pr_rules"] = RULES
         update_state(apply)
     return new
 

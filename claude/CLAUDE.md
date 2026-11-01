@@ -32,7 +32,7 @@ they win).
   background process of this environment.
 - **A session starts another session or space** with `kc-new`, because its own sandbox cannot run `claude` or reach
   herdr: it writes `$CLAUDE_JOB_DIR/tmp/kc-new.json` (a background job) or
-  `~/.local/state/kc-new/requests/$CLAUDE_CODE_SESSION_ID.json` (any other session) (`space`, `dir`, `name`, `prompt`) and runs
+  `~/.local/state/kc-new/requests/$CLAUDE_CODE_SESSION_ID.json` (any other session; make the folder first) (`space`, `dir`, `name`, `prompt`) and runs
   `~/.local/bin/kc-new` as the only command on the line (`docs/claude-code.md` has the fields). Never allowlist
   `claude` or `herdr` themselves, and never edit the tool allowlist: that is mine.
 - **Every skill reads its extension first**: `~/.claude/kc-extensions/<skill>.md`, when it exists, adds

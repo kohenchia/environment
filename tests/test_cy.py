@@ -714,6 +714,24 @@ class Cag(unittest.TestCase):
                           "first_conversation_id", "transcript", "pending_requests"):
                 self.assertIn(field, rows["probe-g"])
 
+    def test_a_plain_session_that_was_a_job_keeps_the_jobs_prs(self):
+        with World() as w:
+            jobdir = w.home / ".claude" / "jobs" / "aaaa0001"
+            jobdir.mkdir(parents=True)
+            (jobdir / "state.json").write_text(json.dumps({"name": "tracker", "state": "done", "sessionId": "first-1",
+                                                           "resumeSessionId": "now-1"}))
+            proj = w.home / ".claude" / "projects" / "-x"
+            proj.mkdir(parents=True)
+            (proj / "first-1.jsonl").write_text(json.dumps({"type": "pr-link", "prUrl": "https://git.example.com/o/r/pull/9"}) + "\n")
+            (proj / "now-1.jsonl").write_text(json.dumps({"type": "user", "message": {"content": "go"}}) + "\n")
+            reg = w.home / ".claude" / "sessions"
+            reg.mkdir(parents=True)
+            (reg / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "now-1", "name": "tracker",
+                                                    "status": "idle", "kind": "interactive"}))
+            p = subprocess.run([sys.executable, str(CAG), "--json"], env=w.env, capture_output=True, text=True)
+            r = next(x for x in json.loads(p.stdout) if x["name"] == "tracker")
+            self.assertEqual((r["prs"], r["first_conversation_id"]), (["https://git.example.com/o/r/pull/9"], "now-1"))
+
     def test_restart_queues_a_request_for_the_follower(self):
         with World() as w:
             cy = w.module(CY, "cy_t4")

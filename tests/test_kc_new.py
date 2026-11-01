@@ -585,8 +585,8 @@ class Windows(unittest.TestCase):
             self.assertNotIn("--bg", " ".join(w.claude_calls()))
             run = self.runs(w)[-1]
             self.assertIn(f"{BIN.with_name('cy')} -n fg-probe-new --prompt-file", run)
-            self.assertIn("--model haiku --token-of", run)
-            self.assertIn("CY_STARTED_BY=caller", run)
+            self.assertIn(f"--model haiku --token-of {caller}-0000-4000-8000-000000000000", run)
+            self.assertIn(f"CY_STARTED_BY={caller}-0000-4000-8000-000000000000", run)  # the asker's key, not its name
             pf = w.home / ".local/state/kc-new/prompts/fg-probe-new.txt"
             self.assertEqual(pf.read_text(), "a long prompt with $DOLLARS and `ticks`")
             self.assertTrue(self.result(d)["window"])
@@ -609,7 +609,7 @@ class Windows(unittest.TestCase):
             res = self.fg_request(w, asker, space="probes", dir=str(w.home / "github"), name="fg-probe-kid", prompt="go")
             p = self.run_kc_new(w)
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-            self.assertIn(f"CY_STARTED_BY=fg-probe-asker", self.runs(w)[-1])
+            self.assertIn(f"CY_STARTED_BY={asker}", self.runs(w)[-1])
             self.assertIn(f"--token-of {asker}", self.runs(w)[-1])
             self.assertTrue(json.loads(res.read_text())["ok"])
 
@@ -636,16 +636,56 @@ class Windows(unittest.TestCase):
 
     def test_only_the_starter_or_stella_retires_a_window(self):
         with World() as w:
-            sid = self.window(w, "fg-probe-t", started_by="fg-probe-asker")
+            starter = self.window(w, "fg-probe-asker", pane="w1:p3")
+            sid = self.window(w, "fg-probe-t", started_by=starter)
             stranger = self.window(w, "fg-probe-x", pane="w1:p2")
             res = self.fg_request(w, stranger, retire="fg-probe-t")
             self.run_kc_new(w)
-            self.assertIn("was not started by this session", json.loads(res.read_text())["error"])
-            starter = self.window(w, "fg-probe-asker", pane="w1:p3")
+            self.assertEqual(json.loads(res.read_text())["error"],
+                             "only the session that started fg-probe-t, or Stella, may retire it")
             self.fg_request(w, starter, retire="fg-probe-t")
             self.run_kc_new(w)
-            self.assertEqual(self.queued(w, sid)[-1]["kind"], "retire")
-            self.assertEqual(self.queued(w, sid)[-1]["by"], "fg-probe-asker")
+            self.assertEqual((self.queued(w, sid)[-1]["kind"], self.queued(w, sid)[-1]["by"]), ("retire", starter))
+            stella = w.job("stella", state="blocked", running=True)
+            w.ctl("set", stella, "template", json.dumps("stella"))
+            other = self.window(w, "fg-probe-u", pane="w1:p4", started_by=starter)
+            self.request(w, stella, retire="fg-probe-u")
+            self.run_kc_new(w)
+            self.assertEqual(self.queued(w, other)[-1]["by"], "stella")
+
+    def test_a_live_window_wins_a_reused_name_and_an_ended_one_gives_way_to_a_live_job(self):
+        import json as _json
+        with World() as w:
+            c = self.cy_lib(w)
+            old = self.window(w, "fg-probe-n", pane="w1:p5")
+            c.write_json(c.loop_file(old), dict(c.read_json(c.loop_file(old)), former_names=[], started_at=1))
+            renamed = self.window(w, "fg-probe-n2", pane="w1:p6")
+            c.write_json(c.loop_file(renamed), dict(c.read_json(c.loop_file(renamed)), former_names=["fg-probe-n"]))
+            caller = w.job("caller", state="blocked", running=True)
+            self.request(w, caller, restart="fg-probe-n")
+            self.run_kc_new(w)
+            self.assertEqual(len(self.queued(w, old)), 1)  # the session called fg-probe-n now, not the one called so before
+            self.assertEqual(self.queued(w, renamed), [])
+            gone = self.window(w, "fg-probe-j", pane="w1:p7")
+            self.locks.pop().close()  # its loop ended
+            c.write_json(c.loop_file(gone), dict(c.read_json(c.loop_file(gone)), status="ended", end="exit"))
+            w.job("fg-probe-j", state="blocked", running=True)
+            d = self.request(w, caller, rename="fg-probe-j", to="fg-probe-k")
+            self.run_kc_new(w)
+            self.assertEqual(self.queued(w, gone), [])  # the live job took it, the old way
+            self.assertTrue(self.result(d)["ok"], self.result(d))
+
+    def test_a_foreground_asker_starting_a_job_runs_no_job_hook_and_is_its_own_starter(self):
+        with World() as w:
+            hook = w.home / ".config/kc-new/after-start"
+            hook.parent.mkdir(parents=True)
+            hook.write_text("#!/bin/sh\necho no caller >&2\nexit 1\n")
+            hook.chmod(0o755)
+            res = self.fg_request(w, "plain-sid", space="work", dir=str(w.home / "github"), name="reports", prompt="go")
+            p = self.run_kc_new(w)
+            self.assertNotIn("WARNING", p.stdout)
+            started = json.loads((w.home / "kcs/started.json").read_text())
+            self.assertEqual(list(started.values()), ["fg:plain-sid"])
 
     def test_move_moves_the_windows_pane(self):
         with World() as w:
@@ -675,4 +715,19 @@ class Windows(unittest.TestCase):
             caller = w.job("caller", state="blocked", running=True)
             d = self.request(w, caller, restart="github-a6")
             self.run_kc_new(w)
-            self.assertIn("cag adopt github-a6", self.result(d)["error"])
+            self.assertEqual(self.result(d)["error"],
+                             f"github-a6 is not started by cy: convert it with {BIN.with_name('cag').resolve()} adopt github-a6")
+
+    def test_a_broken_cy_never_stops_a_jobs_request(self):
+        import shutil
+        with World() as w:
+            bindir = w.home / "copy-bin"
+            bindir.mkdir()
+            for f in ("kc-new", "kc-sessions"):
+                shutil.copy(BIN.with_name(f), bindir / f)
+            (bindir / "cy").write_text("def (:\n")
+            caller = w.job("caller", state="blocked", running=True)
+            d = self.request(w, caller, space="work", dir=str(w.home / "github"), name="reports", prompt="go")
+            p = w.run(str(bindir / "kc-new"), env={"CY_NO_FOLLOWER": "1"})
+            self.assertTrue(self.result(d)["ok"], p.stdout + p.stderr)
+            self.assertTrue(any("--bg" in c for c in w.claude_calls()))

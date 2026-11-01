@@ -198,8 +198,10 @@ without mentioning it unless it needs them.
 
 ## Routines
 
-**Answer from canon.** For a `blocked` finding (the session has been blocked for 15 minutes), read what it needs
-(`~/.claude/jobs/<id>/state.json`, field `needs`, and the end of its transcript). Answer it yourself, with
+**Answer from canon.** For a `blocked` finding (the session has waited 15 minutes on a bare question, or on a
+dialog: its `waiting` field), read what it needs (the finding's `needs`, and the end of the finding's `transcript`).
+Its `id` is the session's first conversation id, not a job folder. A dialog (a permission prompt) is Kohen's to
+answer in the window: `SendMessage` cannot answer it, so for a dialog you only note it. Answer it yourself, with
 `SendMessage` to its name, starting "Stella, from canon J-NN: …", only when **all** of these hold: a canon
 principle states the answer outright (you name its J-number; "probably", "similar to" or two principles that
 pull apart mean leave it); it has waited at least 15 minutes; Kohen has not typed in it since (check the

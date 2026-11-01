@@ -58,10 +58,11 @@ weekly. Those results go into files in her store (`priorities.md`, `canon.md`, `
 they want. Her manual, memory files and routines are in her agent file; no other session loads it. Her daily and
 weekly routines are durable session crons she recreates at the start of her session.
 
-Nothing runs a model on a timer to watch the other sessions. `stella-check` (`bin/`) does that without one: it reads
-the job records every minute and runs her PR helper every 10 minutes, and wakes her only for what she can act on:
-a blocked session whose last message asks a bare question (a "Needs you" table means the session marked the ask as
-Kohen's, so no wake; once per blocked episode, not per rewording), an API-error stop (hourly, up to 3 hours), a PR item
+Nothing runs a model on a timer to watch the other sessions. `stella-check` (`bin/`) does that without one: every
+minute it reads the sessions table (`cag`'s light read: Claude's registry, each recent transcript's tail, the `cy`
+launch files; background jobs and `cy` windows alike), runs her PR helper every 10 minutes, and wakes her only for what
+she can act on: a session waiting 15 minutes on a bare question or on a dialog (a "Needs you" table means the session
+marked the ask as Kohen's, so no wake; once per reply), an API-error stop (hourly, up to 3 hours), a PR item
 that is new or whose signature changed (a conflict counts once it has held for two runs; an item she marked `noted`
 for that signature is silent and listed under `noted` in `pr-tasks.json`), a merged set whose session is not working,
 a due reminder, and the check's own errors. A session in a mode that holds her messages is no wake: it matters only
@@ -166,8 +167,8 @@ machine's hooks `~/.config/kc-sessions/doctor` and `~/.config/kc-sessions/repair
 ### Sessions in `cy` windows
 
 A session that is not a background job (a `cy` window, or a plain `claude`) writes its request to
-`~/.local/state/kc-new/requests/<its CLAUDE_CODE_SESSION_ID>.json` instead; the answer is `<that id>.result.json` beside
-it. Requests about a `cy` window, and new sessions, go through `cy` once the switch has happened
+`~/.local/state/kc-new/requests/<its CLAUDE_CODE_SESSION_ID>.json` instead (`mkdir -p` the folder first); the answer is
+`<that id>.result.json` beside it. Requests about a `cy` window, and new sessions, go through `cy` once the switch has happened
 (`~/.local/state/cy/enabled`); before it, only for names starting `fg-probe`. Then:
 
 | Request | Does |

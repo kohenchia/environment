@@ -27,15 +27,15 @@ class World:
         self.home = Path(self.t.name)
         self.store = self.home / ".local/share/stella"
         self.store.mkdir(parents=True)
-        (self.store / "check-state.json").write_text(json.dumps({"rules": 3, "pr_rules": 3, "sessions": []}))  # today's rules
+        (self.store / "check-state.json").write_text(json.dumps({"rules": 3, "sessions": []}))  # today's rules
 
     def session(self, sid, name, reply="Which branch should I base this on?", age=0, *, status="idle", api_error=False,
-                worked=True, extra=(), at=None):
+                worked=True, extra=(), at=None, first="go"):
         """A live session as `cag` reads it: a registry row and a transcript whose last reply was `age` seconds ago.
         `worked`: it was given work (a tool call before the reply); `extra`: records appended after the reply."""
         stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t))
         t = at or time.time() - age
-        recs = [{"type": "user", "message": {"content": "go"}, "timestamp": stamp(t - 60)}]
+        recs = [{"type": "user", "message": {"content": first}, "timestamp": stamp(t - 60)}]
         if worked:
             recs.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Bash"}]},
                          "timestamp": stamp(t - 30)})
@@ -245,24 +245,68 @@ class Rules(unittest.TestCase):
             w.session("t1", "backlog", at=at, extra=[{"type": "system", "ago": 30}])  # activity again, no new reply
             self.assertEqual(w.once(), [])
 
-    def test_what_is_found_when_the_rules_first_load_is_known_not_news(self):
+    def test_when_the_rules_first_load_a_waiting_session_and_a_known_error_are_not_news(self):
         with World() as w:
-            w.session("t1", "backlog", age=60 * 60)
-            w.session("e1", "tracker", "API Error: 500", age=10 * 60, api_error=True)
-            (w.store / "check-state.json").write_text(json.dumps({"rules": 2, "sessions": ["blocked:a1b2c3d4:1792000000"]}))
-            self.assertEqual(w.once(), [])  # a state from before: seeded
-            w.session("t2", "phase-10", age=20 * 60)
+            w.session("t1-0000-4000", "backlog", age=60 * 60)
+            w.session("e1-0000-4000", "tracker", "API Error: 500", age=10 * 60, api_error=True)
+            w.session("e2-0000-4000", "phase-10", "API Error: 529", age=10 * 60, api_error=True)
+            (w.store / "check-state.json").write_text(json.dumps({"rules": 2, "sessions": ["apierror:e1-0000-:h0"]}))
+            self.assertEqual([f["session"] for f in w.once()], ["phase-10"])  # its error was never seen: news
+            w.session("t2-0000-4000", "pairing", age=20 * 60)
+            self.assertEqual([f["session"] for f in w.once()], ["pairing"])
+
+    def test_a_merged_set_known_under_its_old_job_key_is_not_news_and_a_new_one_is(self):
+        with World() as w:
+            (w.store / "check-state.json").write_text(json.dumps({"rules": 2, "sessions": [],
+                                                                   "pr": ["merged:f21faa5d:2752"]}))
+            w.helper(merged={"merged": [{"id": "f21faa5d-0f7b-4a2f", "session": "onboard", "state": "done",
+                                         "signature": "2752", "kind": "all"},
+                                        {"id": "aa11bb22-0000-4000", "session": "phase-10", "state": "done",
+                                         "signature": "412", "kind": "all"}]})
             self.assertEqual([f["session"] for f in w.once()], ["phase-10"])
 
-    def test_the_first_helper_run_with_new_rules_is_seeded_too(self):
+    def test_a_dialog_is_one_episode_whatever_it_writes_meanwhile(self):
         with World() as w:
-            (w.store / "check-state.json").write_text(json.dumps({"rules": 3, "sessions": []}))  # no helper run yet
-            w.helper(merged={"merged": [{"id": "first-conv-id", "session": "onboard", "state": "done",
-                                         "signature": "379", "kind": "all"}]})
-            self.assertEqual(w.once(), [])  # what the helper lists under its new keys was already told
-            w.helper(merged={"merged": [{"id": "other-id", "session": "phase-10", "state": "done",
-                                         "signature": "412", "kind": "all"}]})
-            self.assertEqual([f["kind"] for f in w.once()], ["merged"])
+            at = time.time() - 30 * 60
+            w.session("d1", "tracker", "Running the gate.", at=at, status="waiting", extra=[{"type": "system", "ago": 20 * 60}])
+            self.assertEqual(len(w.once()), 1)
+            w.session("d1", "tracker", "Running the gate.", at=at, status="waiting", extra=[{"type": "system", "ago": 60}])
+            self.assertEqual(w.once(), [])
+
+    def test_slash_commands_are_not_prompts(self):
+        with World() as w:
+            w.session("q2", "greeted", "What would you like to work on?", age=60 * 60, worked=False,
+                      extra=[{"type": "user", "message": {"content": "<command-name>/rename</command-name>"}, "ago": 30 * 60},
+                             {"type": "user", "message": {"content": "<local-command-stdout>ok</local-command-stdout>"},
+                              "ago": 30 * 60}])
+            self.assertEqual(w.once(), [])
+
+    def test_a_dormant_job_that_stopped_on_an_api_error_still_wakes_her(self):
+        with World() as w:
+            w.session("e9-0000-4000", "batch", "API Error: 429 rate limited", age=10 * 60, api_error=True)
+            (w.home / ".claude/sessions/e9-0000-4000.json").unlink()  # no process: a dormant job
+            d = w.home / ".claude/jobs/e9000000"
+            d.mkdir(parents=True)
+            (d / "state.json").write_text(json.dumps({"name": "batch", "state": "blocked", "sessionId": "e9-0000-4000"}))
+            self.assertEqual([f["kind"] for f in w.once()], ["api_error"])
+
+    def test_a_broken_sessions_table_wakes_her_once_and_the_pr_wakes_go_on(self):
+        with World() as w:
+            bad = w.home / "broken-cag"
+            bad.write_text("def (:\n")
+            w.helper(steward={"orphans": [{"pr": "o/r#2", "signature": "s2", "reasons": ["red checks: x"]}]})
+            env = dict(w.env(), STELLA_CAG=str(bad))
+            p = subprocess.run(["python3", str(BIN), "--once"], env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(sorted(f["kind"] for f in json.loads(p.stdout)), ["crash", "orphan"])
+            w.helper(steward={"orphans": [{"pr": "o/r#3", "signature": "s3", "reasons": ["red checks: y"]}]})
+            p = subprocess.run(["python3", str(BIN), "--once"], env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual([f["kind"] for f in json.loads(p.stdout)], ["orphan"])  # the crash once
+
+    def test_a_first_prompt_that_is_a_task_counts_as_work(self):
+        with World() as w:
+            w.session("q1", "fresh-task", "Which repo do you mean?", age=60 * 60, worked=False,
+                      first="Review the retry change in the projects repo and tell me whether the backoff is right.")
+            self.assertEqual([f["session"] for f in w.once()], ["fresh-task"])
 
     def test_a_session_in_a_mode_that_holds_her_messages_is_not_a_wake_but_its_pr_item_says_so(self):
         with World() as w:

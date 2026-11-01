@@ -187,6 +187,15 @@ class Follower:
         self.answer(req, verdict, note)
         req.unlink(missing_ok=True)
 
+    @staticmethod
+    def may_retire(by, view: dict, loop: dict) -> bool:
+        """Kohen, Stella (by name, or by the key of her window), and the session that started this one (its key)."""
+        if not by:
+            return False
+        if by in ALLOWED_TO_RETIRE or by in (view.get("started_by"), loop.get("started_by")):
+            return True
+        return any(l["id"] == by and l.get("name") == "stella" and l.get("agent") == "stella" for l in cy.launches())
+
     def is_idle(self, sid: str, launched_pid, start) -> bool:
         row = cy.row_of_launch(launched_pid, start=start or 0)  # read now, not at the start of the tick
         if not row or row.get("status") != "idle":
@@ -208,8 +217,7 @@ class Follower:
             return self.finish(req, "dropped", "past its not_after")
         if not cy.held(sid):
             return self.finish(req, "refused", f"{view.get('name')} is not running under cy (cy -r {view.get('name')})")
-        if kind == "retire" and data.get("by") not in ALLOWED_TO_RETIRE + tuple(filter(None, [view.get("started_by"),
-                                                                                             loop.get("started_by")])):
+        if kind == "retire" and not self.may_retire(data.get("by"), view, loop):
             return self.finish(req, "refused", f"only the session that started {view.get('name')}, or Stella, may retire it")
         new_name = None
         if kind == "rename":

@@ -272,8 +272,12 @@ def transcript(sid: str | None) -> Path | None:
     return hits[0] if hits else None
 
 
+CUT = {"type": "cut"}  # the first record of a tail that does not start at the beginning: a turn is open before it
+
+
 def records(path: Path | None, tail: int | None = None) -> list[dict]:
-    """A transcript's records; with `tail`, only those in its last `tail` bytes (transcripts reach hundreds of MB)."""
+    """A transcript's records; with `tail`, only those in its last `tail` bytes (transcripts reach hundreds of MB),
+    after a `CUT` record when the file is longer."""
     if not path or not path.exists():
         return []
     try:
@@ -284,9 +288,10 @@ def records(path: Path | None, tail: int | None = None) -> list[dict]:
     except OSError:
         return []
     lines = data.splitlines()
+    out = []
     if tail and size > tail:
         lines = lines[1:]  # the first line is cut
-    out = []
+        out.append(dict(CUT))
     for line in lines:
         try:
             out.append(json.loads(line))
@@ -298,6 +303,38 @@ def records(path: Path | None, tail: int | None = None) -> list[dict]:
 NEEDS = re.compile(r"^\|\s*Needs you\s*\|", re.M)
 DONE = re.compile(r"Nothing left for you")
 NOTHING = re.compile(r"(?i)\W*(nothing|none|no ask|n/a)\b")
+
+
+def scan(path: Path | None, needle: bytes):
+    """The records of the lines that contain `needle`, without parsing the others."""
+    if not path:
+        return
+    try:
+        with open(path, "rb") as f:
+            for line in f:
+                if needle in line:
+                    try:
+                        yield json.loads(line)
+                    except ValueError:
+                        pass
+    except OSError:
+        return
+
+
+def pr_links_in(path: Path | None) -> list[str]:
+    return pr_links(list(scan(path, b'"pr-link"')))
+
+
+def last_mode_in(path: Path | None) -> str | None:
+    return last_mode(list(scan(path, b"ermissionMode")))
+
+
+def first_prompt_in(path: Path | None) -> str:
+    """The first prompt's text, parsing lines only until it is found."""
+    for rec in scan(path, b'"user"'):
+        if is_user_prompt(rec):
+            return text_of(rec)
+    return ""
 
 
 def text_of(rec: dict) -> str:
@@ -322,6 +359,9 @@ def last_reply(recs: list[dict]) -> tuple[dict | None, str]:
     """The last reply that counts: skip each pair of a `[cy restart]` prompt and its reply, when nothing came between."""
     turns: list[tuple[dict, list[dict]]] = []  # (prompt, assistant records after it)
     current: tuple[dict, list[dict]] | None = None
+    if recs and recs[0].get("type") == CUT["type"]:  # a tail: its first records belong to a turn begun before it
+        current = ({}, [])
+        turns.append(current)
     for r in recs:
         if r.get("isSidechain"):
             continue
@@ -730,7 +770,7 @@ class Loop:
                 print(f"cy: the launch hook for token {self.spec.get('token') or 'default'} failed: {e}", file=sys.stderr)
                 self.record(status="crashed", end="crashed", ended_at=time.time(), note=f"launch hook: {e}")
                 return 1
-            env["CY_SESSION"] = self.spec["name"]  # who asks, when this session queues a request with cag
+            env["CY_SESSION"] = self.sid  # who asks (its key), when this session queues a request with cag or tok
             argv = claude_argv(self.spec)
             signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ctrl+C is for claude
             self.child = subprocess.Popen(argv, env=env, preexec_fn=self.child_signals)
@@ -903,7 +943,7 @@ def main(argv: list[str]) -> int:
                     "token": a.token, "parent": l["id"],
                     "model": a.model or last_model(recs), "effort": a.effort or l.get("effort"),
                     "agent": a.agent or l.get("agent"), "mode": last_mode(recs), "prompt": prompt,
-                    "prompt_file": a.prompt_file, "started_by": l["id"]}
+                    "prompt_file": a.prompt_file, "started_by": os.environ.get("CY_STARTED_BY") or l["id"]}
             return Loop(spec).run()
         if held(l["id"]) or live_row(convs):
             print(f"cy: {l.get('name') or a.resume} is live in {where(l)}", file=sys.stderr)
