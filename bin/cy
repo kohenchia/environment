@@ -633,6 +633,22 @@ def start_follower() -> str:
 # ── the window loop ─────────────────────────────────────────────────────────────────────────────────────────────
 
 
+INTERRUPTED = b"[Request interrupted by user"
+
+
+def interrupted_since(conv: str | None, at: float) -> bool:
+    """Was a turn stopped with Esc after the crons were saved? The Stop hook does not run then (probe P6), so the
+    saved list may still hold a loop Kohen just cancelled: it is stale."""
+    for rec in scan(transcript(conv), INTERRUPTED):
+        try:
+            when = calendar.timegm(time.strptime(str(rec.get("timestamp"))[:19], "%Y-%m-%dT%H:%M:%S"))
+        except ValueError:
+            continue
+        if rec.get("type") == "user" and INTERRUPTED.decode() in text_of(rec) and when >= at:
+            return True
+    return False
+
+
 def rearm_text(conv: str | None, request_prompt: str | None = None) -> str | None:
     """A restarted session's first prompt: the request's own words, then what it had scheduled and lost.
 
@@ -640,7 +656,7 @@ def rearm_text(conv: str | None, request_prompt: str | None = None) -> str | Non
     prompt starts with `[cy restart]`, which the state rule skips, so a restart never hides an ask."""
     data = read_json(CRONS / f"{conv}.json", {}) if conv else {}
     items = [c for c in (data.get("session_crons") or []) if not c.get("durable")]
-    if not items:
+    if not items or interrupted_since(conv, data.get("at") or 0):
         return request_prompt
     listed = "; ".join(f"{c.get('schedule') or c.get('at') or ''} \"{(c.get('prompt') or '')[:80]}\"" for c in items)
     text = (f"Restarted at {time.strftime('%H:%M')}. These were scheduled in this session and were lost with the old "

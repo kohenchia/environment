@@ -313,6 +313,22 @@ class Loop(unittest.TestCase):
             self.assertEqual(w.argv(), [])
             self.assertEqual(w.loops()[0]["status"], "crashed")
 
+    def test_a_loop_stopped_with_esc_after_the_crons_were_saved_is_not_re_armed(self):
+        with World() as w:
+            w.cy("-n", "probe-esc", env={"FAKE_CLAUDE_EXIT": "0"})
+            sid = w.loops()[0]["id"]
+            crons = w.state / "crons"
+            crons.mkdir()
+            (crons / f"{sid}.json").write_text(json.dumps({"session_crons": [{"schedule": "*/2 * * * *",
+                                                                              "prompt": "tick"}], "at": time.time() - 60}))
+            tr = next((w.home / ".claude" / "projects").glob(f"*/{sid}.jsonl"))
+            with open(tr, "a") as f:
+                f.write(json.dumps({"type": "user", "message": {"content": [{"type": "text",
+                                    "text": "[Request interrupted by user]"}]},
+                                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}) + "\n")
+            w.cy("-r", "probe-esc", env={"FAKE_CLAUDE_EXIT": "0"})
+            self.assertNotIn("tick", " ".join(w.argv()[1]))
+
     def test_a_resume_re_arms_the_session_crons_it_lost(self):
         with World() as w:
             w.cy("-n", "probe-twelve", env={"FAKE_CLAUDE_EXIT": "0"})
