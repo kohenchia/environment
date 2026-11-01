@@ -569,6 +569,19 @@ class Follower(unittest.TestCase):
                 self.assertEqual((f.view(sid)["status"], f.view(sid)["end"]), ("crashed", "crashed"))
             self.run_follower(w, body)
 
+    def test_a_retired_window_stays_retired_when_its_pane_closes(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                f = fm.Follower()
+                f.tick()
+                lock.close()
+                loop = fm.cy.read_json(fm.cy.loop_file(sid))
+                fm.cy.write_json(fm.cy.loop_file(sid), dict(loop, status="retired", end="retired"))
+                f.on_event({"event": "pane_closed", "data": {"pane_id": "w1:p1", "type": "pane_closed"}})
+                got = next(l for l in fm.cy.launches() if l["id"] == sid)
+                self.assertEqual((got["status"], got["end"]), ("retired", "retired"))
+            self.run_follower(w, body)
+
     def test_how_a_session_ended_survives_the_next_pass(self):
         with World() as w:
             def body(fm, sid, child, lock):

@@ -114,6 +114,8 @@ def status_of(sid: str, loop: dict, view: dict) -> tuple[str, str | None]:
     end record wins, then what the follower saw (herdr's pane.closed, its start-up check), else it simply ended."""
     if held(sid):
         return "live", None
+    if loop.get("end") == "retired":
+        return "retired", "retired"  # the window the follower closes after a retire is part of the retire
     if view.get("end") == "closed":
         return "ended", "closed"
     end = loop.get("end")
