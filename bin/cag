@@ -176,16 +176,17 @@ def rows(show_all: bool = False, light: bool = False, since: float | None = None
         kind = "background job" if d.get("kind") == "bg" else "not started by cy"
         flags = [kind] + (["parked into a job"] if d.get("parkedJobId") else [])
         at, text = rd.reply(recs)
-        before = by_resume.get(d.get("sessionId")) if not job else None  # a plain session that was a job once
-        earlier = [before["sessionId"]] if before and before.get("sessionId") else []
+        # A plain session that was a job once (it was resumed by hand): the PRs that job recorded, as the daemon kept
+        # them, and the job's id, under which Stella's ledger knows what it was told
+        before = by_resume.get(d.get("sessionId")) if not job else None
         out.append(row(name=d.get("name"), state=st["state"], needs=st["needs"], waiting_kind=st["waiting_kind"],
                        token="?", pinned=False, mode=rd.mode(d.get("sessionId"), recs), space=None, window=None,
-                       cwd=d.get("cwd"), prs=rd.prs(earlier + convs, job_prs(job or before or {})), intent=rd.intent(convs[0] if convs else None),
+                       cwd=d.get("cwd"), prs=rd.prs(convs, job_prs(job or before or {})), intent=rd.intent(convs[0] if convs else None),
                        last_activity=ts_of(recs), last_reply_at=at, last_reply=text,
                        conversation=d.get("sessionId"), conversations=convs, first=convs[0] if convs else None,
                        started_at=(d.get("startedAt") or 0) / 1000, transcript=cy.transcript(d.get("sessionId")),
                        pending=0, flags=flags, kind="job" if d.get("kind") == "bg" else "plain",
-                       job_id=jid if job else None))
+                       job_id=jid if job else (before or {}).get("_id")))
         seen_convs.update(convs)
     live_jobs = {d.get("jobId") for d in reg if d.get("jobId")}
     for j in jobs():  # dormant jobs: no process; blocked or stopped (done ones only with --all)

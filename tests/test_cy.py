@@ -737,10 +737,11 @@ class Cag(unittest.TestCase):
             jobdir = w.home / ".claude" / "jobs" / "aaaa0001"
             jobdir.mkdir(parents=True)
             (jobdir / "state.json").write_text(json.dumps({"name": "tracker", "state": "done", "sessionId": "first-1",
-                                                           "resumeSessionId": "now-1"}))
+                                                           "resumeSessionId": "now-1", "children": [
+                                                               {"kind": "pr", "href": "https://git.example.com/o/r/pull/9"}]}))
             proj = w.home / ".claude" / "projects" / "-x"
             proj.mkdir(parents=True)
-            (proj / "first-1.jsonl").write_text(json.dumps({"type": "pr-link", "prUrl": "https://git.example.com/o/r/pull/9"}) + "\n")
+            (proj / "first-1.jsonl").write_text(json.dumps({"type": "pr-link", "prUrl": "https://git.example.com/o/r/pull/3"}) + "\n")
             (proj / "now-1.jsonl").write_text(json.dumps({"type": "user", "message": {"content": "go"}}) + "\n")
             reg = w.home / ".claude" / "sessions"
             reg.mkdir(parents=True)
@@ -748,7 +749,8 @@ class Cag(unittest.TestCase):
                                                     "status": "idle", "kind": "interactive"}))
             p = subprocess.run([sys.executable, str(CAG), "--json"], env=w.env, capture_output=True, text=True)
             r = next(x for x in json.loads(p.stdout) if x["name"] == "tracker")
-            self.assertEqual((r["prs"], r["first_conversation_id"]), (["https://git.example.com/o/r/pull/9"], "now-1"))
+            self.assertEqual((r["prs"], r["first_conversation_id"], r["job_id"]),
+                             (["https://git.example.com/o/r/pull/9"], "now-1", "aaaa0001"))  # the job's record, not its old links
 
     def test_restart_queues_a_request_for_the_follower(self):
         with World() as w:
