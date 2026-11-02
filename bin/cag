@@ -348,6 +348,10 @@ def moved_prompt(name: str, conv: str | None) -> str:
 
 
 def adopt(name: str) -> int:
+    held = next((l for l in cy.launches() if l.get("name") == name and cy.held(l["id"])), None)
+    if held:
+        print(f"cag: {name} already runs under cy in {cy.where(held)}", file=sys.stderr)
+        return 1
     reg = cy.registry()
     job = job_named(name, reg, live=True)
     if job:

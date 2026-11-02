@@ -35,8 +35,8 @@ cannot or will not act on, kind by kind (the numbers are in "Stella calm - plan"
   - reminders: due ones. helper errors: once, and once more as "persisting" after an hour; failures within half an hour
     of each other are one error.
   - the check itself crashing (once per kind of crash).
-  - Not a wake at all: a session in a mode that holds her messages (wrong_mode). It matters only when she has something
-    to send it, and then the act/orphan item says `would_be_held`.
+  - Not a wake at all: a session in a mode other than bypass (wrong_mode). No mode holds her messages
+    (`crossSessionInbound: accept`); the act/orphan item's `would_be_held` is kept for her status only.
 A finding wakes her once, when it appears; one that stays is not news. One that goes and comes back is news again,
 except the kinds above. A failed run of the helper keeps what it listed before, so its recovery is not news. Findings
 that arrive within SETTLE seconds of each other are one wake.
@@ -274,7 +274,7 @@ def pr_items(s: dict, state: dict, errors: list) -> tuple[dict[str, dict], list[
             if kind == "act":
                 f["owner"] = (it.get("owner") or {}).get("name")
             if it.get("would_be_held"):
-                f["would_be_held"] = True  # the owner's mode holds her messages: restart it first (manual)
+                f["would_be_held"] = True  # for her status only: no mode holds her messages (crossSessionInbound)
             found[f"{kind}:{pr}:{sig}:{'|'.join(sorted(reasons))}"] = f
     return found, noted, conflicts
 

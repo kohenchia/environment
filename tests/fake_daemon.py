@@ -308,6 +308,8 @@ def herdr(argv: list[str]) -> int:
         save(w)
         return reply({"type": f"{a[0]}_create", "workspace": {"workspace_id": ws}, "tab": {"tab_id": tab},
                       "root_pane": {"pane_id": pane}})
+    if a == ["tab", "focus"]:
+        return reply({"type": "tab_info"}) if argv[2] in w["tabs"] else (print("Error: tab_not_found", file=sys.stderr) or 1)
     if a == ["tab", "rename"]:
         w["tabs"][argv[2]]["label"] = argv[3]
         save(w)

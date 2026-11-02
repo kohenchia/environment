@@ -319,6 +319,20 @@ class Loop(unittest.TestCase):
             self.assertEqual(w.argv(), [])
             self.assertEqual(w.loops()[0]["status"], "crashed")
 
+    def test_a_prompt_file_on_a_resume_keeps_the_re_arm_notice(self):
+        with World() as w:
+            w.cy("-n", "probe-pf", env={"FAKE_CLAUDE_EXIT": "0"})
+            sid = w.loops()[0]["id"]
+            (w.state / "crons").mkdir()
+            (w.state / "crons" / f"{sid}.json").write_text(json.dumps({"session_crons": [{"schedule": "*/5 * * * *",
+                                                                                          "prompt": "tick"}]}))
+            pf = w.home / "p.txt"
+            pf.write_text("Session start: do your steps.")
+            w.cy("-r", "probe-pf", "--prompt-file", str(pf), env={"FAKE_CLAUDE_EXIT": "0"})
+            prompt = w.argv()[1][-1]
+            self.assertTrue(prompt.startswith("Session start: do your steps."), prompt)
+            self.assertIn("tick", prompt)
+
     def test_a_loop_stopped_with_esc_after_the_crons_were_saved_is_not_re_armed(self):
         with World() as w:
             w.cy("-n", "probe-esc", env={"FAKE_CLAUDE_EXIT": "0"})
@@ -881,6 +895,19 @@ class Cag(unittest.TestCase):
             self.assertIn(["stop", "blk00001"], w.argv())
             self.assertIn(f"pane run w1:p5 {os.path.realpath(CY)} -r s-blk", (w.home / "herdr.log").read_text())
             self.assertNotIn("--prompt-file", (w.home / "herdr.log").read_text())  # it set no wakeup
+
+    def test_adopt_refuses_a_name_a_window_runs(self):
+        import fcntl
+        with World() as w:
+            cyl = w.module(CY, "cy_t_adopt")
+            sid = "eeeeeeee-0000-4000-8000-000000000001"
+            cyl.write_json(cyl.loop_file(sid), {"id": sid, "name": "busy-one", "status": "live", "conversations": [sid]})
+            with open(cyl.lock_file(sid), "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                p = subprocess.run([sys.executable, str(CAG), "adopt", "busy-one"], env=w.env, capture_output=True,
+                                   text=True, timeout=60)
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("already runs under cy", p.stderr)
 
     def test_adopt_tells_a_session_that_set_a_wakeup_that_it_was_lost(self):
         with World() as w:

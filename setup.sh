@@ -480,7 +480,8 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
     fi
 
     # Foreground sessions: every new Claude session runs in its own herdr window under `cy` (docs/claude-code.md).
-    # This file is the switch `kc-new`, `tok` and `cy-follow` read; removing it sends new sessions back to the old path.
+    # This file is the switch `kc-new`, `tok`, `cy-follow` and `stella` read; going back means reverting the switch's
+    # commits too (the old cy, cpy and cag shell commands are gone).
     mkdir -p "$HOME/.local/state/cy" && touch "$HOME/.local/state/cy/enabled"
 
     # The leak gate: a push from this repo runs githooks/pre-push, which calls ~/.local/bin/leakcheck (the

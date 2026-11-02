@@ -170,30 +170,51 @@ def cy():
 
 
 def her_window() -> dict | None:
-    """Her newest `cy` launch, live or ended."""
-    mine = [l for l in cy().launches() if l.get("name") == "stella"]
+    """Her newest `cy` launch, live or not (renamed too: by her agent, or a former name)."""
+    mine = [l for l in cy().launches() if "stella" in (l.get("name"), l.get("agent")) or "stella" in (l.get("former_names") or [])]
     return max(mine, key=lambda l: (l.get("status") == "live", l.get("started_at") or 0), default=None)
 
 
+def her_job() -> bool:
+    """A job record named stella, with a process or not (the daemon respawns and retires workers, and has none after a
+    reboot): until `cag adopt stella` moves her into a window, she is that job."""
+    for f in (Path.home() / ".claude/jobs").glob("*/state.json"):
+        try:
+            if json.loads(f.read_text()).get("name") == "stella":
+                return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def in_window() -> bool:
-    """After the switch, unless her background job still runs (she moves last)."""
+    """After the switch, once she has a window, or when she never was a job."""
     if not (cy().STATE / "enabled").exists():
         return False
-    return her_window() is not None or not any(d.get("name") == "stella" and d.get("kind") == "bg" for d in cy().registry())
+    return her_window() is not None or not her_job()
 
 
-def open_window(fresh: bool = False) -> dict | None:
-    """Make sure her window runs, in the space `stella`: her conversation resumed, or (`fresh`, or never started) a new
-    one."""
-    w = None if fresh else her_window()
-    if w and w.get("status") == "live":
+def open_window() -> dict | None:
+    """Make sure her window runs, in the space `stella`: her conversation resumed, or, never started, a new one. A window
+    waiting at its "⏎ resumes it here" line is hers to resume there; one a herdr restart interrupted is given herdr's
+    restore first (it reruns her window's `cy -r`)."""
+    w = her_window()
+    if w and w.get("status") == "interrupted":
+        w = cy().wait_for(lambda: (lambda x: x if x and x.get("status") == "live" else None)(her_window()),
+                          float(os.environ.get("STELLA_RESTORE_WAIT", "30"))) or her_window()
+    if w and (w.get("status") == "live" or cy().held(w["id"])):
         return w
-    pf = STORE / ".start-prompt"  # read and deleted by cy
+    pf = cy().HOME / ".local/state/kc-new/prompts/stella.txt"  # read and deleted by cy
+    pf.parent.mkdir(parents=True, exist_ok=True)
     pf.write_text(start_prompt())
     me = shlex.quote(str(Path(__file__).resolve().with_name("cy")))
     command = (f"{me} -r {shlex.quote(w['id'])} --prompt-file {shlex.quote(str(pf))}" if w else
                f"{me} -n stella --agent stella --model sonnet --prompt-file {shlex.quote(str(pf))}")
-    load("kc-new", "kc_new").place({"space": "stella", "name": "stella", "dir": str(STORE)}, command)
+    try:
+        load("kc-new", "kc_new").place({"space": "stella", "name": "stella", "dir": str(STORE)}, command)
+    except (RuntimeError, OSError) as e:
+        pf.unlink(missing_ok=True)
+        sys.exit(f"stella: could not open her window ({e}); is herdr running? (`tw` starts it)")
     return cy().wait_for(lambda: next((l for l in cy().launches() if l.get("name") == "stella"
                                        and l.get("status") == "live"), None), float(os.environ.get("KC_NEW_START_WAIT", "20")))
 
@@ -202,13 +223,18 @@ def go_to(w: dict | None) -> None:
     tab = (w or {}).get("tab") or (cy().wait_for(lambda: (her_window() or {}).get("tab"), 10))
     if not tab or not cy().herdr_ok(cy().herdr("tab", "focus", tab)):
         sys.exit("stella: her window is open in the space `stella`; herdr would not go to it")
+    if w and w.get("status") != "live":
+        print("stella: press ⏎ in her window to resume her")
 
 
 def restart_window() -> None:
-    w = her_window()
-    if not w or w.get("status") != "live":
-        open_window(fresh=True)  # not running: start her with a new conversation
-        return
+    """A fresh conversation in her window, as a restart request; when she is not running, her window is resumed first,
+    so there is only ever one Stella (her old key would otherwise come back on its own)."""
+    w = open_window()
+    if not w:
+        sys.exit("stella: her window did not start in time; look in the space `stella`, then `stella restart` again")
+    if w.get("status") != "live":
+        sys.exit("stella: her window waits at its \"⏎ resumes it here\" line: press ⏎ there, then `stella restart`")
     req = cy().submit(w["id"], "restart", {"fresh": True, "prompt": start_prompt()}, by="kohen")
     print(f"stella: restart queued ({req.name}); she restarts with an empty conversation when she is idle")
 

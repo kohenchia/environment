@@ -758,7 +758,9 @@ class Loop:
         pf = self.spec.pop("prompt_file", None)
         if pf:  # read and removed only now: a refused start keeps its prompt file
             try:
-                self.spec["prompt"] = Path(pf).read_text()
+                text = Path(pf).read_text()
+                resumed = self.spec.get("resume") and not self.spec.get("fork")
+                self.spec["prompt"] = rearm_text(self.spec["resume"], text) if resumed else text  # keep the re-arm notice
                 Path(pf).unlink()
             except OSError as e:
                 print(f"cy: cannot read the prompt file: {e}", file=sys.stderr)

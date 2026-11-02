@@ -143,9 +143,6 @@ class StellaSettings(unittest.TestCase):
             self.assertTrue(s["hooks"]["Stop"][0]["hooks"][0]["asyncRewake"])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class StellaWindow(unittest.TestCase):
     """After the switch, Stella runs under `cy` in a window of the space `stella`, once her background job is gone."""
@@ -170,7 +167,7 @@ class StellaWindow(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             run = self.runs(w)[-1]
             self.assertIn("-n stella --agent stella --model sonnet --prompt-file", run)
-            self.assertIn("Session start (today is", (w.home / ".local/share/stella/.start-prompt").read_text())
+            self.assertIn("Session start (today is", (w.home / ".local/state/kc-new/prompts/stella.txt").read_text())
             self.assertIn("herdr workspace create --label stella", " ".join(w.calls()))
 
     def test_start_resumes_her_conversation_when_her_window_ended(self):
@@ -206,3 +203,57 @@ class StellaWindow(unittest.TestCase):
             (reg / "1.json").write_text(json.dumps({"pid": os.getpid(), "name": "stella", "kind": "bg", "status": "idle"}))
             w.run("stella", "start", env=self.ENV)
             self.assertEqual(self.runs(w), [])  # no window: she is still the job
+
+    def test_a_dormant_job_keeps_the_old_path_too(self):
+        with World() as w:
+            self.switched(w)
+            w.job("stella", state="blocked", running=False, flags=STELLA_FLAGS)  # no process: after a reboot
+            w.run("stella", "start", env=self.ENV)
+            self.assertEqual(self.runs(w), [])
+
+    def live_window(self, w, state, status="live", tab="w1:t1"):
+        import fcntl
+        (state / "abc-key.loop.json").write_text(json.dumps({"id": "abc-key", "name": "stella", "status": status,
+                                                              "end": "exit" if status == "ended" else None,
+                                                              "conversations": ["abc-key"], "tab": tab}))
+        lock = open(state / "abc-key.lock", "a")
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return lock
+
+    def test_stella_goes_to_her_live_window(self):
+        with World() as w:
+            state = self.switched(w)
+            lock = self.live_window(w, state, tab=list(w.load()["tabs"])[0])
+            try:
+                p = w.run("stella", env=self.ENV)
+            finally:
+                lock.close()
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertTrue(any(c.startswith("herdr tab focus") for c in w.calls()))
+            self.assertEqual(self.runs(w), [])
+
+    def test_a_window_waiting_to_be_resumed_is_not_opened_twice(self):
+        with World() as w:
+            state = self.switched(w)
+            lock = self.live_window(w, state, status="ended", tab=list(w.load()["tabs"])[0])
+            try:
+                p = w.run("stella", env=self.ENV)
+                r = w.run("stella", "restart", env=self.ENV)
+            finally:
+                lock.close()
+            self.assertIn("press ⏎ in her window", p.stdout)
+            self.assertIn("press ⏎ there", r.stderr)
+            self.assertEqual(self.runs(w), [])
+
+    def test_herdr_down_is_a_clear_message(self):
+        with World() as w:
+            self.switched(w)
+            w.opt("herdr_down", True)
+            p = w.run("stella", "start", env=self.ENV)
+            self.assertNotEqual(p.returncode, 0)
+            self.assertIn("is herdr running?", p.stderr)
+            self.assertNotIn("Traceback", p.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

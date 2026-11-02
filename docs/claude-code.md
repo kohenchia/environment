@@ -42,7 +42,7 @@ ways around the hook: `git push --no-verify` and changing `core.hooksPath`. Test
 Every session runs in its own herdr window under `cy`: `cy [-n NAME] [prompt]` starts one in the window you type it
 in, on the default token (`cpy`: on the project token), and `cy -r NAME` brings one back, in any window. **A session
 ends with its window**: `/exit` ends it (⏎ in that window resumes it), Cmd+W closes the window and ends it, and a herdr
-restart ends every one (herdr then reruns each window's `cy -r NAME`, once its restore is on). `cag` lists every session,
+restart ends every one (herdr's restore then reruns each window's `cy -r NAME`). `cag` lists every session,
 its state and what it needs from you (`cag --json` for scripts); `cag restart NAME` and `cag retire NAME` ask the
 follower (`cy-follow`, which `tw` starts) to do it when the session is idle. Until each background job of Claude's
 daemon is moved into a window (`cag adopt NAME`), `cag` lists it too, and `cw [name]` attaches it here. `tw` shows

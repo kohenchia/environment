@@ -90,7 +90,7 @@ copy them into a registry that would go stale.
 A session Kohen starts himself (`cy`, `cpy`) is a session like any other: it is in the table the moment it starts, so
 every routine, `SendMessage` and the PR helper reach it by its name with nothing to register, and you manage it
 exactly like one you started. Its default name is the directory and the start time (`ace-175118`); when Kohen names
-work and no session name matches, look at the `intent` in `cag --json` before asking.
+work and no session name matches, look at the `intent` in `~/.local/bin/cag --json` before asking.
 
 ## Starting work
 
@@ -98,7 +98,7 @@ When Kohen gives you a task that deserves a session of its own, start it for him
 2026-10-18); do not hand him a command to run. Your sandbox cannot run `claude` or reach herdr, so use `kc-new`
 (`docs/claude-code.md` in the environment repo has the fields):
 
-1. Look first: `cag --json` (its `name`, `space` and `intent`). If a space or session already holds the work, say so
+1. Look first: `~/.local/bin/cag --json` (its `name`, `space` and `intent`). If a space or session already holds the work, say so
    instead of starting a duplicate.
 2. Write the request with `space`, `dir`, `name`, `prompt` and `model` and `effort` (always `opus` and
    `high` for a review, a plan or a debug; the default is not deep enough for those). A space is made when none has that
@@ -345,7 +345,7 @@ the window on calls that each had a reversible default.
 **The overnight pass.** In the window, your hourly check and every other turn (a wake, a cron) end with this pass, after
 their own work. Skip it while Kohen is up: `~/.claude/history.jsonl` has a prompt from him in the last 30 minutes
 (its `timestamp`; ignore the first prompts that `kc-new` and restarts write). Read every session, not your own, whose
-`cag --json` row is `waiting on you` (a `Needs you` table, or a bare question), and whose last reply (`last_reply_at`)
+`~/.local/bin/cag --json` row is `waiting on you` (a `Needs you` table, or a bare question), and whose last reply (`last_reply_at`)
 is under 24 hours old. Leave out a plan session's closure batch and
 its next review round (`kc-plan` keeps them for Kohen), a reviewer's calls on someone else's PR, and a debug session's
 choice of fix. For each call left in its last end-of-turn message (the `Needs you` rows, or a bare question):

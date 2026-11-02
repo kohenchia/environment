@@ -640,7 +640,7 @@ function tw() {
         local i
         for i in {1..20}; do herdr status server >/dev/null 2>&1 && break; sleep 0.25; done
     fi
-    stella start >/dev/null 2>&1
+    stella start >/dev/null || print -u2 "tw: stella start failed (run it to see why)"
     herdr
 }
 
