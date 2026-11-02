@@ -10,7 +10,7 @@ Exit 1 and print `file:line: message` for each of:
   - a table row whose unescaped `|` count differs from its header (a `|` in a cell, even inside backticks or in
     [[note|alias]], must be written `\\|`).
   - anything below `</dataPolicy:slack>`: Obsidian does not render the markdown after the Slack tags, so the Slack
-    section must be the last thing in the file.
+    section must be the last thing in the file (a block inside a code fence is fine).
 Allowed bare: <br>, <kbd>, <sub>, <sup>, <mark>, <u>, <wbr>, <!-- comments -->, <https://...> autolinks and the
 Slack data tags <dataSource:slack>, <dataPolicy:slack>. --allow adds tag names (an old page with inline <svg>).
 --fix wraps each complete bare tag in backticks (the only change it makes) and still reports what it cannot fix.
@@ -120,12 +120,21 @@ def check(path, fix=False, allow=frozenset()):
 
 
 def slack_last(path):
+    """The Slack tags outside a code fence must be the last thing in the file; a fenced block renders as code."""
     lines = Path(path).read_text().split("\n")
-    closes = [i for i, l in enumerate(lines) if l.strip() == "</dataPolicy:slack>"]
-    if closes and any(l.strip() for l in lines[closes[-1] + 1:]):
-        return [(closes[-1] + 2, "text after </dataPolicy:slack>: Obsidian does not render markdown after the Slack tags; move the Slack section to the end of the file")]
-    opens = [i for i, l in enumerate(lines) if l.strip() == "<dataSource:slack>"]
-    if opens and not closes:
+    fence, loose = None, []
+    for i, line in enumerate(lines):
+        m = FENCE.match(line)
+        if m and (fence is None or m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence)):
+            fence = None if fence else m.group(1)
+        elif not fence:
+            loose.append((i, line.strip()))
+    closes = [i for i, t in loose if t in ("</dataPolicy:slack>", "</dataSource:slack>")]
+    opens = [i for i, t in loose if t == "<dataSource:slack>"]
+    tail = re.sub(r"<!--.*?-->", "", "\n".join(t for i, t in loose if closes and i > closes[-1]), flags=re.S)
+    if closes and tail.strip():
+        return [(closes[-1] + 2, "text after </dataPolicy:slack>: Obsidian does not render markdown after the Slack tags; move the Slack section to the end of the file (or put the block in a code fence)")]
+    if opens and not any(t == "</dataPolicy:slack>" for i, t in loose):
         return [(opens[0] + 1, "<dataSource:slack> without a closing </dataPolicy:slack>")]
     return []
 

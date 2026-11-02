@@ -96,6 +96,14 @@ class SlackBlock(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn(":10: text after </dataPolicy:slack>", r.stdout)
 
+    def test_a_fenced_slack_block_is_code_and_may_have_text_after_it(self):
+        r, _ = check("## Slack\n\n```\n" + self.BLOCK + "```\n\nmore text\n")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_an_unclosed_slack_block_is_flagged(self):
+        r, _ = check("# note\n\n<dataSource:slack>\n<dataPolicy:slack>\np\n")
+        self.assertEqual(r.returncode, 1)
+
     def test_the_slack_block_last_passes(self):
         r, _ = check("## Evidence\n\nfine\n\n" + self.BLOCK)
         self.assertEqual((r.returncode, r.stdout), (0, ""))
