@@ -1,12 +1,12 @@
 # Claude Code setup
 
-How Claude Code is set up on this machine: ordinary sessions run by Claude's background daemon, skills instead of
-teams, one gate on publishing, and a personal assistant (Stella) in a permanent session.
+How Claude Code is set up on this machine: ordinary sessions, each in its own herdr window under `cy`, skills instead
+of teams, one gate on publishing, and a personal assistant (Stella) in a permanent session.
 
 ```
-Alacritty ── herdr (tw)                                  Claude's background daemon
-  spaces you make  ── a window per session ──────────►   every session; `cag` is the master list
-  space `stella`    ── her permanent session
+Alacritty ── herdr (tw)
+  spaces you make  ── a window per session, each running `cy` ── claude     `cag`: every session and what it needs
+  space `stella`    ── her permanent session                               `cy-follow`: keeps herdr's view, does restarts
 ```
 
 ## Pieces
@@ -18,7 +18,8 @@ Alacritty ── herdr (tw)                                  Claude's background
 | The `stella` agent | `claude/agents/stella.md` | `~/.claude/agents/stella.md` |
 | The leak gate | `githooks/pre-push` | `core.hooksPath` of this repo |
 | The guard around it | `claude/plugin/hooks/hooks.json` → `claude/bin/kc-hook` | the `kc@kc-local` plugin |
-| `stella`, `stella-check`, `kc-env`, `kc-keys`, `herdr-space`, `kc-new`, `kc-sessions` | `bin/` | `~/.local/bin/` |
+| `cy`, `cy-follow`, `cag`, `stella`, `stella-check`, `kc-env`, `kc-keys`, `herdr-space`, `kc-new`, `kc-sessions` | `bin/` | `~/.local/bin/` |
+| The Stop hook that saves a window's crons | `claude/bin/cy-crons` | passed by `cy` in each window's `--settings` |
 
 `./setup.sh` links all of it and installs the plugin; re-run it after adding a skill or agent.
 
