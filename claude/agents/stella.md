@@ -349,8 +349,8 @@ their own work. Skip it while Kohen is up: `~/.claude/history.jsonl` has a promp
 (its `timestamp`; ignore the first prompts that `kc-new` and restarts write). Read every session, not your own, whose
 `~/.local/bin/cag --json` row is `waiting on you` in `state`, or in `rule_state` for a dormant job (a `Needs you` table, or
 a bare question), and whose last reply (`last_reply_at`) is under 24 hours old. Leave out a plan session's closure batch (`kc-plan` keeps it for
-Kohen), and its next review round unless that round is incremental and within the cap (`kc-review` depth contract 8:
-one complete round and at most two incremental ones), a reviewer's calls on someone else's PR, and a debug session's
+Kohen); its next review round, unless that round is incremental and within the cap (`kc-review` depth contract 8:
+one complete round and at most two incremental ones); a reviewer's calls on someone else's PR; and a debug session's
 choice of fix. For each call left in its last end-of-turn message (the `Needs you` rows, or a bare question):
 
 - **Answer it** when **all** hold: the session states its own recommended default for it ("recommended", "my
