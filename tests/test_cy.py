@@ -896,6 +896,21 @@ class Cag(unittest.TestCase):
             self.assertIn(f"pane run w1:p5 {os.path.realpath(CY)} -r s-blk", (w.home / "herdr.log").read_text())
             self.assertNotIn("--prompt-file", (w.home / "herdr.log").read_text())  # it set no wakeup
 
+    def test_adopt_takes_the_running_plain_session_over_its_old_job_record(self):
+        with World() as w:
+            self.job(w, "aaaa0552", name="tracker", state="done", sessionId="first-1", resumeSessionId="now-1")
+            reg = w.home / ".claude/sessions"
+            reg.mkdir(parents=True)
+            (reg / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "now-1", "name": "tracker",
+                                                    "status": "idle", "kind": "interactive",
+                                                    "cwd": str(w.home / "projects")}))  # no procStart: never signalled
+            subprocess.run([sys.executable, str(CAG), "adopt", "tracker"], env=dict(w.env, FAKE_CLAUDE_EXIT="0"),
+                           capture_output=True, text=True, timeout=60)
+            self.assertIn("-r now-1", (w.home / "herdr.log").read_text())  # the conversation that runs, not first-1
+            p = subprocess.run([sys.executable, str(CAG), "--json", "--all"], env=w.env, capture_output=True, text=True)
+            r = next(x for x in json.loads(p.stdout) if x["name"] == "tracker" and x["kind"] == "cy")
+            self.assertEqual(r["job_id"], "aaaa0552")  # Stella's ledger still finds what it told the job
+
     def test_adopt_refuses_a_name_a_window_runs(self):
         import fcntl
         with World() as w:

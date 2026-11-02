@@ -134,10 +134,16 @@ def rows(show_all: bool = False, light: bool = False, since: float | None = None
     reg = cy.registry()
     rd = Reader(light, since)
     out, seen_convs = [], set()
+    job_of = {}  # conversation id -> the job record it came from (a session moved into a window keeps its job's id)
+    for j in jobs():
+        for c in (j.get("sessionId"), j.get("resumeSessionId")):
+            if c:
+                job_of.setdefault(c, j)
     for l in cy.launches():
         convs = l.get("conversations") or [l["id"]]
         conv = l.get("conversation") or convs[-1]
         seen_convs.update(convs)
+        was = next((job_of[c] for c in convs if c in job_of), None)
         live = cy.live_row(convs, reg)
         recs = rd.recs(conv, (live or {}).get("status"))
         st = cy.state_of(live, recs) if live else None
@@ -160,7 +166,8 @@ def rows(show_all: bool = False, light: bool = False, since: float | None = None
         at, text = rd.reply(recs)
         out.append(row(name=l.get("name"), state=st["state"], needs=st["needs"], waiting_kind=st["waiting_kind"],
                        token=l.get("token") or "?", pinned=bool(l.get("pinned")), mode=mode,
-                       space=l.get("space"), window=l.get("window"), cwd=l.get("cwd"), prs=rd.prs(convs),
+                       space=l.get("space"), window=l.get("window"), cwd=l.get("cwd"),
+                       prs=rd.prs(convs, job_prs(was or {})), job_id=(was or {}).get("_id"),
                        intent=rd.intent(convs[0]), last_activity=ts_of(recs), last_reply_at=at, last_reply=text,
                        conversation=conv, conversations=convs, first=l["id"], started_at=l.get("started_at"),
                        transcript=cy.transcript(conv), pending=len(cy.pending(l["id"])), flags=flags, kind="cy"))
@@ -354,6 +361,9 @@ def adopt(name: str) -> int:
         return 1
     reg = cy.registry()
     job = job_named(name, reg, live=True)
+    plain = next((d for d in reg if d.get("name") == name and d.get("kind") == "interactive"), None)
+    if job and plain and not any(d.get("jobId") == job["_id"] for d in reg):
+        job = None  # a plain claude runs under this name; the job record (no process) is where it came from
     if job:
         key = job.get("sessionId") or job["_id"]
         live_id = job.get("resumeSessionId") or key
