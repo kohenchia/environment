@@ -210,7 +210,8 @@ def rows(show_all: bool = False, light: bool = False, since: float | None = None
     for r in out:
         if r["name"] and names.count(r["name"]) > 1:
             r["flags"].append("name shared by two live sessions")
-        if r["kind"] == "cy" and len([x for x in out if x["conversation_id"] == r["conversation_id"]]) > 1:
+        live = lambda x: x["kind"] == "cy" and not x["state"].startswith(("ended", "retired", "stopped"))
+        if live(r) and len([x for x in out if live(x) and x["conversation_id"] == r["conversation_id"]]) > 1:
             r["flags"].append("one conversation in two windows")
     return out
 
