@@ -145,8 +145,9 @@ def rows(show_all: bool = False, light: bool = False, since: float | None = None
         if not live:
             ended = {"ended": "ended: window closed" if l.get("end") == "closed" else "ended",
                      "interrupted": "ended: herdr restart", "crashed": "stopped: crashed", "retired": "retired"}
+            back = "⏎ in its window" if cy.held(l["id"]) else f"cy -r {l.get('name')}"  # its loop still waits there
             st = {"state": ended.get(status, status or "ended"), "waiting_kind": None,
-                  "needs": f"cy -r {l.get('name')}" if status != "retired" else ""}
+                  "needs": back if status != "retired" else ""}
             when = l.get("ended_at") or ts_of(recs)
             if not show_all and when and time.time() - when > DAY:
                 continue

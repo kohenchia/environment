@@ -112,8 +112,8 @@ def next_file(sid: str) -> Path:
 def status_of(sid: str, loop: dict, view: dict) -> tuple[str, str | None]:
     """A session's status and how it ended. The loop holds its lock while it runs; once it has let go, the loop's own
     end record wins, then what the follower saw (herdr's pane.closed, its start-up check), else it simply ended."""
-    if held(sid):
-        return "live", None
+    if held(sid):  # a loop waiting at "⏎ resumes it here" holds the lock too, and has recorded the end
+        return ("ended", "exit") if (loop.get("status"), loop.get("end")) == ("ended", "exit") else ("live", None)
     if loop.get("end") == "retired":
         return "retired", "retired"  # the window the follower closes after a retire is part of the retire
     if view.get("end") == "closed":

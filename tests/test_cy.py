@@ -571,6 +571,15 @@ class Follower(unittest.TestCase):
                 self.assertEqual((f.view(sid)["status"], f.view(sid)["end"]), ("crashed", "crashed"))
             self.run_follower(w, body)
 
+    def test_a_window_waiting_at_its_resume_line_reads_ended(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                loop = fm.cy.read_json(fm.cy.loop_file(sid))
+                fm.cy.write_json(fm.cy.loop_file(sid), dict(loop, status="ended", end="exit"))  # the lock stays held
+                got = next(l for l in fm.cy.launches() if l["id"] == sid)
+                self.assertEqual((got["status"], got["end"]), ("ended", "exit"))
+            self.run_follower(w, body)
+
     def test_a_retired_window_stays_retired_when_its_pane_closes(self):
         with World() as w:
             def body(fm, sid, child, lock):
