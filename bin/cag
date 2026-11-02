@@ -327,6 +327,26 @@ def job_named(name: str, reg: list[dict], *, live: bool) -> dict | None:
     return next((j for j in named if (j["_id"] in running) == live), None) or (named[0] if named and live else None)
 
 
+MOVED = ("[cy restart] You were moved from Claude's background daemon into this window. The session crons and "
+         "wakeups you had set (CronCreate, ScheduleWakeup, /loop) ended with the old process: set them up again if you "
+         "still need them.")
+
+
+def moved_prompt(name: str, conv: str | None) -> str:
+    """The `--prompt-file` part of the window's `cy -r`, when the session's recent transcript set a cron or a wakeup:
+    those lived only in the old process, and a background job had no hook that saved them."""
+    def set_one(rec: dict) -> bool:
+        content = (rec.get("message") or {}).get("content") if rec.get("type") == "assistant" else None
+        return isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_use"
+                                                 and b.get("name") in ("CronCreate", "ScheduleWakeup") for b in content)
+    if not any(set_one(r) for r in cy.records(cy.transcript(conv), TAIL)):
+        return ""
+    pf = cy.HOME / ".local/state/kc-new/prompts" / f"{name}-moved.txt"
+    pf.parent.mkdir(parents=True, exist_ok=True)
+    pf.write_text(MOVED)
+    return f" --prompt-file {shlex.quote(str(pf))}"
+
+
 def adopt(name: str) -> int:
     reg = cy.registry()
     job = job_named(name, reg, live=True)
@@ -352,7 +372,7 @@ def adopt(name: str) -> int:
         if worker:
             subprocess.run(["claude", "stop", job["_id"]], capture_output=True, timeout=60)
         pane = open_window(old.get("workspace_id") if old else None, os.path.basename(job.get("cwd") or "adopted"), name,
-                           job.get("cwd") or str(cy.HOME), f"{shlex.quote(cy.ME)} -r {key}")
+                           job.get("cwd") or str(cy.HOME), f"{shlex.quote(cy.ME)} -r {key}" + moved_prompt(name, live_id))
         if old and pane:
             cy.herdr("pane", "close", old["pane_id"])  # never typed into: after the stop it may show the agents view
         print(f"cag: {name} now runs under cy in {'its space' if old else 'space ' + os.path.basename(job.get('cwd') or '')}"
@@ -378,7 +398,7 @@ def adopt(name: str) -> int:
     if d:
         cy.signal_if_same(d["pid"], d.get("procStart"))
     pane = open_window(old.get("workspace_id") if old else None, os.path.basename((d or {}).get("cwd") or "adopted"),
-                       name, (d or {}).get("cwd") or str(cy.HOME), f"{shlex.quote(cy.ME)} -r {key}")
+                       name, (d or {}).get("cwd") or str(cy.HOME), f"{shlex.quote(cy.ME)} -r {key}" + moved_prompt(name, key))
     print(f"cag: {name} now runs under cy" if pane else f"cag: {name} was ended; open it with: cy -r {key}")
     return 0 if pane else 1
 

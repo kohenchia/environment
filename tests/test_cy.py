@@ -880,6 +880,22 @@ class Cag(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertIn(["stop", "blk00001"], w.argv())
             self.assertIn(f"pane run w1:p5 {os.path.realpath(CY)} -r s-blk", (w.home / "herdr.log").read_text())
+            self.assertNotIn("--prompt-file", (w.home / "herdr.log").read_text())  # it set no wakeup
+
+    def test_adopt_tells_a_session_that_set_a_wakeup_that_it_was_lost(self):
+        with World() as w:
+            self.job(w, "wk000001", name="looping", state="blocked", tempo="blocked", sessionId="s-wk",
+                     cwd=str(w.home / "projects"))
+            tr = w.home / ".claude/projects/-x/s-wk.jsonl"
+            tr.parent.mkdir(parents=True)
+            tr.write_text(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "name": "ScheduleWakeup", "input": {"delaySeconds": 600}}]}}) + "\n")
+            p = subprocess.run([sys.executable, str(CAG), "adopt", "looping"], env=dict(w.env, FAKE_CLAUDE_EXIT="0"),
+                               capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("-r s-wk --prompt-file", (w.home / "herdr.log").read_text())
+            moved = (w.home / ".local/state/kc-new/prompts/looping-moved.txt").read_text()
+            self.assertTrue(moved.startswith("[cy restart]"))
 
 
 class Hook(unittest.TestCase):
