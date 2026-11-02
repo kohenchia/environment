@@ -557,8 +557,20 @@ class Follower(unittest.TestCase):
                 for _ in range(3):
                     f.tick()
                 time.sleep(0.5)
-                self.assertIsNone(child.poll())
-                self.assertNotIn(f.view(sid).get("status"), ("orphan", "crashed"))
+                self.assertIsNone(child.poll())  # the other process is never killed
+                self.assertEqual(f.view(sid).get("status"), "crashed")  # its loop died without an end: crashed, not orphan
+            self.run_follower(w, body)
+
+    def test_a_loop_killed_with_its_claude_reads_crashed(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                lock.close()  # kill -9 of the loop: no end record
+                child.kill()  # and its claude went with it
+                child.wait()
+                f = fm.Follower()
+                f.tick()
+                got = next(l for l in fm.cy.launches() if l["id"] == sid)
+                self.assertEqual((got["status"], got["end"]), ("crashed", "crashed"))
             self.run_follower(w, body)
 
     def test_an_orphan_is_ended_once_it_is_idle(self):

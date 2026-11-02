@@ -117,6 +117,8 @@ class Follower:
                 fields.update(status="orphan", end="orphan")
             else:  # nothing left of this launch: later passes can skip it
                 fields["settled_pid"] = loop.get("launched_pid")
+                if loop.get("status") == "live" and not loop.get("end") and not view.get("end"):
+                    fields.update(status="crashed", end="crashed")  # the loop died without saying how it ended
         pane = fields.get("pane") or view.get("pane")
         if pane and cy.held(sid) and time.time() - self.labels_at.get(sid, 0) > LABELS_EVERY:
             now = self.where(pane)
