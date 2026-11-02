@@ -7,8 +7,8 @@ they win).
 ## How I work
 
 - **One terminal, one herdr server.** `tw` opens the work window: herdr spaces I make myself, a window per
-  session. Every session is an ordinary Claude Code session run by Claude's background daemon, so the agents
-  view (`cag`) lists all of them and which ones need me.
+  session. Every session is an ordinary Claude Code session in its own herdr window under `cy`, and it ends with
+  its window (`/exit`, Cmd+W; `cy -r NAME` brings it back). `cag` lists all of them and which ones need me.
 - **Skills, not teams.** Work starts from a skill, and the skill decides whether a task deserves
   subagents and which ones:
 

@@ -187,9 +187,12 @@ def her_job() -> bool:
     return False
 
 
+SWITCH = Path.home() / ".local/state/cy/enabled"
+
+
 def in_window() -> bool:
     """After the switch, once she has a window, or when she never was a job."""
-    if not (cy().STATE / "enabled").exists():
+    if not SWITCH.exists():  # tested without loading cy, so a broken cy never stops the old path
         return False
     return her_window() is not None or not her_job()
 
@@ -243,7 +246,7 @@ def main() -> None:
     cmd = sys.argv[1:]
     if cmd not in ([], ["start"], ["restart"]):
         sys.exit(__doc__)
-    if (cy().STATE / "enabled").exists():
+    if SWITCH.exists():
         cy().start_follower()  # the follower runs wherever Stella does; tw runs `stella start`
     if in_window():
         write_settings()
