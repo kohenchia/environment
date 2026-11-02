@@ -732,8 +732,9 @@ class Loop:
             if not row:
                 continue
             convs = self.facts().get("conversations", [])
-            if row.get("sessionId") and row["sessionId"] not in convs:
-                self.record(conversations=convs + [row["sessionId"]], conversation=row["sessionId"])
+            if row.get("sessionId") and row["sessionId"] != self.facts().get("conversation"):
+                self.record(conversations=convs + [row["sessionId"]] if row["sessionId"] not in convs else convs,
+                            conversation=row["sessionId"])  # /clear and /branch change it; the registry knows
             if row.get("name") and row["name"] != self.spec["name"] and row.get("nameSource") == "user":
                 self.spec["name"] = row["name"]  # Kohen's own /rename is kept
                 self.record(name=row["name"])
@@ -804,7 +805,8 @@ class Loop:
             self.spec["prompt"] = None  # a prompt is sent once; a restart brings its own
             self.spec["token"] = self.spec["parent"] = None  # asked once: from then on the hook keeps the session's pin
             self.record(launched_pid=self.child.pid, launched_start=started_at(self.child.pid), token=label, pinned=pinned,
-                        conversation=self.spec.get("resume") or self.spec["id"], status="live", end=None,
+                        conversation=self.spec["id"] if self.spec.get("fork") or not self.spec.get("resume")
+                        else self.spec["resume"], status="live", end=None,  # a --branch copy has its own id
                         pane=os.environ.get("HERDR_PANE_ID"), tab=os.environ.get("HERDR_TAB_ID"),
                         workspace=os.environ.get("HERDR_WORKSPACE_ID"))
             code = self.child.wait()

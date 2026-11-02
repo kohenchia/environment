@@ -276,6 +276,8 @@ class Loop(unittest.TestCase):
             sid = w.loops()[0]["id"]
             code, out, err = w.cy("-r", "probe-eight", "--branch", "probe-eight-alt", env={"FAKE_CLAUDE_EXIT": "0"})
             self.assertEqual(code, 0, err)
+            kid = next(l for l in w.loops() if l["name"] == "probe-eight-alt")
+            self.assertEqual(kid["conversation"], kid["id"])  # its own conversation, not the one it was copied from
             argv = w.argv()[1]
             self.assertIn("--fork-session", argv)
             self.assertEqual(argv[argv.index("--resume") + 1], sid)
