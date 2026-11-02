@@ -51,7 +51,8 @@ seven of them already carrying the builder's own recommendation. It worked 3.5 h
 - **A call that is genuinely Kohen's** (a contract the order did not name, a scope change that adds or drops a
   deliverable, or a row the plan marks `needs his yes`): build on the default if one is reversible. If none is, park
   that part and build everything else.
-- **An outward-facing step is never a default you take** (a ticket filed or edited, a reviewer requested, a PR opened
+- **An outward-facing step is never a default you take** (a ticket filed or edited, unless the extension gives the
+  work's tickets a default; a reviewer requested, a PR opened
   that the order or the plan did not ask for, a post or reply anywhere, a registration, a real run): prepare it (the
   exact command or text), list it as a call, and build everything that does not depend on it.
 - **Batch the calls into the end-of-turn list once the branch is pushed** (and its PR is up, when the order or the
@@ -79,8 +80,9 @@ Run the repo's gates (format, lint, type check, tests) and exercise the change f
 and dry runs allow. Evidence before assertions: quote the commands and their results. If anything fails,
 say so with the output.
 
-For a non-trivial change, run `/kc-review` on the committed branch, **one round per PR**, and act on its final report
-(not a provisional first report, whose `Depth:` line begins `IN PROGRESS:`):
+For a non-trivial change, run `/kc-review` on the committed branch, **one complete round per PR and at most two
+incremental ones** (`kc-review` depth contract 8), and act on each round's final report (not a provisional first
+report, whose `Depth:` line begins `IN PROGRESS:`):
 
 - every `blocks merge` ask is fixed, with a test that fails without the fix (where nothing can be tested, the gate or
   check that shows it), or declined with code evidence, or put to Kohen as a `blocks merge` call;
@@ -88,9 +90,11 @@ For a non-trivial change, run `/kc-review` on the committed branch, **one round 
   PR already changes, no new behaviour). That is the cap on fast-follow work in a PR. Every other one becomes a
   follow-up ticket, drafted where the plan's ticket rule says (with no plan, under "Follow-ups" in the PR
   description), and one `can wait` call lists them;
-- the fixes are verified by the gates and the tests, not reviewed again: the report says "fixes verified, not
-  re-reviewed". A second round runs only when Kohen asks for one. A verdict that the shape is wrong is a `blocks merge`
-  call: rebuild toward the review's target and ask him whether to review it again.
+- the fixes are verified by the gates and the tests. When the round left `blocks merge` asks, the next round is
+  incremental: it checks those fixes and whatever else changed since, nothing else. When it left none, there is no
+  next round. After the third round, a blocking ask still open is a `blocks merge` call for Kohen; never start a fourth.
+  A verdict that the shape is wrong is a `blocks merge` call too: rebuild toward the review's target and ask him
+  whether to review it again.
 
 ## 6. Commit and push
 

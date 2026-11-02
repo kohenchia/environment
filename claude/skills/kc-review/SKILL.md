@@ -1,6 +1,6 @@
 ---
 name: kc-review
-description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges and every step runs (except a re-review that changes only documentation or formatting, and a later round of a loop Kohen asked for, which runs the delta set), and the report states what was done. A PR gets one round unless Kohen asks for another; non-blocking findings become follow-up tickets. A provisional first report comes at 30 minutes when the quota allows, and an addendum rewrites it to the final state. Writes a short, plain-language report to the vault that opens with a concrete example of what the subject does and a before-and-after of what the user writes and runs, then the verdict and each ask as one block (the failure a user would hit, the fix as an example beneath it, its use case and its step-by-step walk), the code evidence at the end; for a PR also a companion page of every use case it touches, run before and after. Stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
+description: Deep review of a PR, a branch, a worktree or a set of documents (design docs, RFCs, vault notes, gists, repo files) for Kohen, consistent with the reviews he has given before. Debates the best design among real alternatives, then checks UX simplicity, robustness, consistency with existing patterns and code quality to the target repo's standards. Every review is full depth: Opus judges and every step runs (except a re-review that changes only documentation or formatting, and an incremental later round), and the report states what was done. A subject gets one complete round and at most two incremental ones, which check only the earlier asks and what changed; non-blocking findings become follow-up tickets. A provisional first report comes at 30 minutes when the quota allows, and an addendum rewrites it to the final state. Writes a short, plain-language report to the vault that opens with a concrete example of what the subject does and a before-and-after of what the user writes and runs, then the verdict and each ask as one block (the failure a user would hit, the fix as an example beneath it, its use case and its step-by-step walk), the code evidence at the end; for a PR also a companion page of every use case it touches, run before and after. Stays in the session for questions. Never posts anything. Use when Kohen types /kc-review <pr|branch|path|doc url(s)> [focus], or asks for a review.
 ---
 
 # kc-review
@@ -12,7 +12,7 @@ the review below the five questions.
 ## Depth contract (no shortcut is allowed)
 
 Kohen wants every review to be the deepest one the code allows. Nothing below is waived by the focus, by an earlier
-review or by a small diff (the exceptions are tier 0 and the delta round, both in rule 2). Kohen also wants the first answer within 30 minutes:
+review or by a small diff (the exceptions are tier 0 and the incremental round, both in rule 2). Kohen also wants the first answer within 30 minutes:
 time and budget decide when a step's result reaches him, never whether the step runs (rule 7).
 
 1. **Opus does the judging.** Look at the model you are running on (your system prompt names it). On Opus, you
@@ -26,10 +26,11 @@ time and budget decide when a step's result reaches him, never whether the step 
    Opus with `effort: "high"`: the finders, the consumer trace of the subject's own code, a research agent that decides
    how another system behaves, and a verifier helper that reads live data to accept or reject a claim. Every row a
    Sonnet agent brings is ruled on by the verifier (step 5) before it reaches the report.
-2. **Every step runs, every time.** Steps 1 to 5 run in full for every subject. An earlier review of the same subject,
-   yours or anyone's, is something to compare against, never a substitute: re-derive the design, re-read the diff and
-   re-trace the callers at the current head, then say what changed and which earlier findings still hold. The mode
-   `rereview` means a complete review of the current head plus a "Since last review" section, not less work.
+2. **Every step runs in a subject's first round.** Steps 1 to 5 run in full in the first round of every subject. A
+   review someone else wrote, or one older than the subject's current design, is something to compare against, never a
+   substitute: re-derive the design, re-read the diff and re-trace the callers at the current head, then say what
+   changed and which earlier findings still hold. A later round of your own loop on the same subject is incremental
+   (below and rule 8), and the mode `rereview` means that round plus a "Since last review" section.
    One exception, **tier 0** (a code subject only; a document is never tier 0): since the last *complete* review the
    only changes are documentation prose, code comments or formatting that cannot change behavior, or a merge of the base branch that leaves the subject's own diff against the
    new base unchanged, changes no dependency or lock file, and brings no new consumer of any changed symbol (grep each at
@@ -39,32 +40,28 @@ time and budget decide when a step's result reaches him, never whether the step 
    cannot add up to a real change. Then you read the interdiff yourself, re-run the fact sheet's gates at the new head,
    refresh the subject's live state (CI, comments, tickets, the extension's checks), and have a verifier confirm the
    tier-0 label and your conclusion. "Since last review" and the `Depth:` line say it was a tier-0 re-review and why.
-   A second exception, the **delta round**, exists for a fix-and-re-review loop that Kohen asked for (he says "keep
-   fixing until it is green"; each pass is a review, a fix, a review; rule 8: a caller never starts one on its own). It applies only to a code subject, from the second
-   round on, when all of these hold: a complete review of an earlier head of the same subject exists (its report and
-   `assets/<sha10>/`); its design verdict stands (the chosen design, and every ruling the debate made); nothing since
-   then changes the design, adds or removes a public name, flag, key, default, registration or dependency, or reverses
-   an earlier ruling (then it is a complete review); and Kohen has not asked for the whole review again (below).
-   A delta round runs: the fact sheet's gates at the new head; the diff pass on the interdiff since the last round,
-   rerunning the previous round's cases; the break-it, silent-failure and workflow passes on the changed code and its
-   callers; the dry runs at base and head; and a verifier on every new finding, every fixed finding and every earlier
-   claim a changed line touches. It skips the design debate (challenger, advocate, judge), the consumer traces (run
-   the own-code trace on any changed symbol that has a caller; run the trace of other repos only when a public name
-   changed) and the extension's ledger, trap and regression-case agent (it keeps the rows the interdiff can reach, as in
-   tier 0). Measure the interdiff from the last complete round, so successive deltas cannot add up unseen: when the
-   deltas since the last complete round together touch more than a third of the subject's diff, the next round is
-   complete. The round **before the subject is called mergeable or final is always complete**, and a caller that acts
-   on the verdict (`kc-dev`) acts only on a complete round. The report says which rounds were delta and which complete
-   (`Depth:` line, "Since last review", and the "How this was reviewed" table with each skipped step and why; a skipped
-   step under this rule is a stated, allowed gap, so the verdict is not `INCOMPLETE:`).
+   A second exception, the **incremental round** (rule 8): every round after a subject's first. Round 1 is complete
+   and settles the design (the chosen design and every ruling of its debate), so a later round never revisits the
+   alternatives. It reviews only two things: each ask of the earlier rounds (is it fixed, and fixed correctly?) and
+   what is net new since the last round (the interdiff of a branch, the changed passages of a document). It runs only
+   the agents those need: the fact sheet's gates at the new head; the diff pass on the interdiff, rerunning the
+   previous round's cases; the break-it and silent-failure passes on the changed code and its callers; the dry runs
+   of the surfaces the interdiff reaches; the own-code consumer trace for a changed symbol that has a caller, and the
+   trace of other repos only when a public name changed; and a verifier on every earlier ask and every new finding.
+   It skips the design debate (challenger, advocate, judge), the unchanged code and text, and the extension's ledger,
+   trap and regression-case agent beyond the rows the interdiff can reach (as in tier 0). A new finding in unchanged
+   code is out of its scope: it goes to the Follow-ups list. The report says the round was incremental (`Depth:`
+   line, "Since last review", and the "How this was reviewed" table with each skipped step and why; a skipped step
+   under this rule is a stated, allowed gap, so the verdict is not `INCOMPLETE:`). A change that replaces the design
+   (a rebuild after a `right goal, wrong shape` or `don't do this` verdict, a reversed ruling) is not an incremental
+   round: whether to review it is Kohen's call (step 8).
    **Review from the beginning.** When Kohen tells a session to review from the beginning, from scratch, all over,
    fully, with every step or every agent, to start over, or to do a full or complete review, or words to that effect,
-   the round he asks for is complete, whatever the loop was doing, and the report says that he asked. Later rounds may
-   return to delta unless he said that every round is complete. A caller or Stella relaying his words keeps their
+   the round he asks for is complete, whatever the loop was doing, and the report says that he asked. Later rounds
+   are incremental again unless he said that every round is complete. A caller or Stella relaying his words keeps their
    meaning; when unsure whether he meant the whole review, run the complete one.
-   Everything else is a complete review: a document is never carried forward on an earlier verdict, and neither is a
-   change of behavior, a new feature surface, a changed design, or new context from Kohen or from a thread (an earlier
-   pass has already missed defects in text that did not change).
+   A changed design, or new context from Kohen or a thread that reopens it, is never carried forward on an earlier
+   verdict: that is a new complete round, and whether to run it is Kohen's call (rule 8).
 3. **Small is not shallow.** A one-line change is traced to every consumer. Only the design debate (step 2) may be
    inline for a small fix; the diff pass, the break-it pass, the caller trace of the subject's own code and the
    verification still run on Opus, and the trace of every other consumer still runs in full.
@@ -101,14 +98,16 @@ time and budget decide when a step's result reaches him, never whether the step 
    line is then final, and the "How this was reviewed" table gives each agent's start and end minute. A skill that runs
    the review and acts on it (`kc-dev`, `kc-plan`) acts only on the final report, whose `Depth:` line does not begin
    `IN PROGRESS:`.
-8. **One round per PR.** A PR gets one review round, whether it reviews the PR or the branch a `kc-dev` builder reviews
-   before its PR is up (that is the PR's round), and its final report is the one the builder acts on. The builder
-   fixes the `blocks merge` asks and verifies the fixes with tests; they are not reviewed again. The `can follow` asks
-   and the smaller findings end the asks as a **Follow-ups** list, one line each, ready to become a ticket: a title
-   saying what should change, the use case that shows it, and why it is safe to defer. They become follow-up tickets,
-   not another round. A later round runs only when Kohen asks for one, in his words or quoted by Stella or a caller;
-   rule 2's delta round and "review from the beginning" govern it. A document is not bound by this rule: the calling
-   skill (`kc-plan`) says when its revisions are reviewed.
+8. **One complete round, at most two incremental rounds.** A subject (a PR, the branch a `kc-dev` builder reviews
+   before its PR is up, which is that PR's round, or a document) gets one complete round, and after it at most two
+   incremental rounds (rule 2): three rounds in all, so no loop of reviews is still running in the morning. A later
+   round runs only when the last one left asks tagged `blocks merge` (`blocks adoption` for a document) and the
+   builder or planner has fixed them; asks that do not block never earn another round. The `can follow` asks and the
+   smaller findings end the asks as a **Follow-ups** list, one line each, ready to become a ticket: a title saying
+   what should change, the use case that shows it, and why it is safe to defer. They become follow-up tickets. When
+   the third round still leaves a blocking ask, the caller stops and puts it to Kohen with its recommendation; it
+   never starts a fourth round on its own. Kohen may ask for another round, or for a review from the beginning
+   (rule 2); either counts as a round.
 
 ## 0. Load what this machine adds
 
@@ -340,7 +339,7 @@ itself, and keep the earlier copy in `assets/` (`report-before-<what changed>-<d
 | User picture | **The report starts with it**, right under the title and before the verdict or any finding: a concrete example of what the subject implements, then, when it changes what a user writes, runs or sees, a **before and after of the user's experience**, so the impact is clear at a glance, and last the impact in two or three plain lines. Simple, explicit terms; not verbose. Show every surface the subject changes: each config file the user edits (every file, not only the main one), each command line they type, and the output they see when it changes (a new refusal, a new line, a renamed object). Two labelled blocks per surface, **Before** (on the base) and **After** (on the subject's head), on the same running example with real names and values; changed lines only, plus the line or two that place them. About 25 lines in all (about 30 together with the worked example); a longer picture goes to Evidence with a pointer. If the user's experience does not change, say so in one line with the reason ("internal refactor: the same command and config give the same output") and show one unchanged command with its output. For a document, show what the user writes if it is adopted, next to what they write today. The picture is real, not invented: produce each snippet by running or validating it on the base and on the head (a dry run, `--help`, the config validator) and say how; one you could not run is labelled "not run". These snippets are what the user types and sees, so they are not code in the sense of the next row. In a first report, a surface whose dry run is still running says "dry run running, ends about HH:MM", and each snippet says whether a verifier has checked it yet. For a PR, the picture ends with one line linking the companion use-case page (step 7) and its number of cases; the picture is one running example (naming its case on the page) and does not reproduce the others. In a first report that line says the page comes with the final report. |
 | Asks | Numbered, most important first, at most six. A finding that blocks merge is always an ask, whatever the cap or the length; lower-ranked ones go to Evidence, each with a one-line plain case, and the body says "N smaller findings in Evidence". |
 | Follow-ups | For a PR or a builder's branch, right after the asks: every `can follow` ask and every smaller finding worth doing, uncapped, one line each in ticket form (what should change · the use case that shows it · why it can wait). This is the list the builder turns into follow-up tickets (depth contract 8); a finding here is never a reason for another round. It counts against the length budget only for its first five lines. |
-| One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Then one short paragraph, starting from what a user does and what the system then does, never from the code: **if** the user does X, **then** Y fails, **and doing Z** (the fix asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. Then, directly beneath, the fix as an example, in a code block when it is code, config or a command: the exact command to run, the config lines to add, the code it asks for, or the before and after of the name or output that changes (for instance `nightly.cfg` gains the line `retries = 3`; a saved job named `export` becomes `export-eu` and `export-us`). Then the ask's step-by-step walk (*Each ask, step by step*), so each ask is one block: what to do, its example, its walk. There is no separate section of examples or walks. For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case) and still show the fix as an example. End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
+| One ask | A heading that says what the change should do, tagged `blocks merge` or `can follow` (`blocks adoption` for a document; the extension may name the tags). Directly under it, the problem at a glance in a one-row table, **You type · You get · You should get**: the real command or config line, what happens today (the output, the refusal, or the silent result and how it shows), and what should happen (Kohen, 2026-11-02: "it should be easy for me to get a glance of what the problem is"). Then one short paragraph, starting from what a user does and what the system then does, never from the code: **if** the user does X, **then** Y fails, **and doing Z** (the fix asked for) **makes it work**. X is a real action with real names and numbers: the command they run, the input, the config they write. Y is what they see, or what goes wrong silently and how they would notice. Then, directly beneath, the fix as an example, in a code block when it is code, config or a command: the exact command to run, the config lines to add, the code it asks for, or the before and after of the name or output that changes (for instance `nightly.cfg` gains the line `retries = 3`; a saved job named `export` becomes `export-eu` and `export-us`). Then the ask's step-by-step walk (*Each ask, step by step*), so each ask is one block: what to do, its example, its walk. There is no separate section of examples or walks. For two or three cases, use a table instead (*If the user… · then… · this makes it work*, one row per case) and still show the fix as an example. End with the ask's evidence numbers, e.g. `(E2, E5)`. Something not verified is written the same way: "if the user does X, we have not checked whether Y; running `<command>` settles it". |
 | See it happen | For a PR, directly under each ask's heading, one italic line naming the cases on the companion page (step 7) that show it: `*See it happen: [[<page>\|use cases]] B2, B3 (the failure); C7 (must keep working).*` Failure cases first, then any case the fix must not break. The IDs are the page's own (`A1`, `D5`). An ask no case can show says why in the same place (`*No use case: it only breaks on the next upgrade.*`). The page's "If… then…" line names the ask it supports, so the link runs both ways. The lines are written when the page exists, so a first report's asks carry `*See it happen: the use-case page comes with the final report.*` and the addendum fills them in. A document review has no page and no such line. |
 | Code is a footnote | The explanation never starts from code, and it must make sense with every code reference removed. The verdict, terms, draft comment and every section other than the asks hold none. An ask may add, after its paragraph and example, one short line `Key logic: <what it does in plain words> (path:line)`, at most two per ask, only where seeing that piece of logic makes the failure obvious; everything else goes in Evidence. A name the user types or sees (a command, a flag, a config key, an error message) is not code: use it anywhere. Internal shorthand and principle IDs stay in Evidence. Commit shas, PR and ticket numbers are facts. |
 | Unproven | A plausible finding says "(plausible, not proven)" in its ask. |
@@ -425,7 +424,8 @@ Read the report from the top as Kohen would, and revise it until every answer is
    subject implements, with a Before and an After for every changed config file, command and output, each snippet
    saying how it was produced (run, validated, or "not run"), and the impact in a few lines? Is there a worked example
    for the phrase the verdict rests on?
-3. Does every ask name a real user action, what fails for them, and the fix that makes it work, with real names and
+3. Does every ask open with its one-row glance (You type · You get · You should get), then name a real user action,
+   what fails for them, and the fix that makes it work, with real names and
    numbers, and show the fix as an example directly beneath it (the command, the config lines, the code, the before and
    after)?
 4. Is every term either common or defined once above the asks, by an example? Pick the three words in the verdict and
@@ -481,7 +481,7 @@ not only onto the page. If nothing a user types, writes or sees changes, the pag
 unchanged command run at base and head and its identical output; no padding. A review stopped by Kohen or on a wrong
 premise (step 1) has no page; its user picture and index row say "no use-case page: review stopped". A tier-0
 re-review keeps the page with one line naming the new head and the shas its cases ran at, and after a merge of the base
-branch reruns the default-path cases at the new merge base. A delta round (depth contract 2) reruns the default-path cases and every case whose command, config or code the
+branch reruns the default-path cases at the new merge base. An incremental round (depth contract 2) reruns the default-path cases and every case whose command, config or code the
 interdiff touches, and adds the cases the new commits need. Any other re-review reruns every case at the new head and
 its merge base, and adds the cases the new commits need.
 

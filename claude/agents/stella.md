@@ -108,8 +108,9 @@ When Kohen gives you a task that deserves a session of its own, start it for him
    A build prompt (`/kc-dev`) also carries these lines, word for word: "Take the plan's defaults (its Decision closure)
    and keep going; never end a turn on a decision while other work remains. Never take an outward-facing step as a
    default: prepare it and list it. Batch the calls that are mine into the end-of-turn list once the branch is pushed,
-   each with the default you took and marked 'blocks merge' or 'can wait'. One /kc-review round per PR: fix what
-   blocks merge, put small fast-follows in one fix commit, and draft every other finding as a follow-up ticket. Open
+   each with the default you took and marked 'blocks merge' or 'can wait'. One complete /kc-review round per PR, and
+   at most two incremental rounds after it that check only the fixes and what changed: fix what blocks merge, put small
+   fast-follows in one fix commit, and draft every other finding as a follow-up ticket. Open
    no PR beyond the plan's Delivery table without my yes."
    Where: `$CLAUDE_JOB_DIR/tmp/kc-new.json` while you are a background job; once you run in a window,
    `~/.local/state/kc-new/requests/$CLAUDE_CODE_SESSION_ID.json` (make the folder first).
@@ -347,8 +348,9 @@ the window on calls that each had a reversible default.
 their own work. Skip it while Kohen is up: `~/.claude/history.jsonl` has a prompt from him in the last 30 minutes
 (its `timestamp`; ignore the first prompts that `kc-new` and restarts write). Read every session, not your own, whose
 `~/.local/bin/cag --json` row is `waiting on you` in `state`, or in `rule_state` for a dormant job (a `Needs you` table, or
-a bare question), and whose last reply (`last_reply_at`) is under 24 hours old. Leave out a plan session's closure batch and
-its next review round (`kc-plan` keeps them for Kohen), a reviewer's calls on someone else's PR, and a debug session's
+a bare question), and whose last reply (`last_reply_at`) is under 24 hours old. Leave out a plan session's closure batch (`kc-plan` keeps it for
+Kohen), and its next review round unless that round is incremental and within the cap (`kc-review` depth contract 8:
+one complete round and at most two incremental ones), a reviewer's calls on someone else's PR, and a debug session's
 choice of fix. For each call left in its last end-of-turn message (the `Needs you` rows, or a bare question):
 
 - **Answer it** when **all** hold: the session states its own recommended default for it ("recommended", "my
@@ -357,7 +359,7 @@ choice of fix. For each call left in its last end-of-turn message (the `Needs yo
   lost: a name, warn or refuse in an unmerged PR, a draft); it is not outward-facing (no merge or queue, post, comment,
   approval, review or reviewer request, ticket filed or edited, PR opened or closed, delete, push the session was not
   told to make, registration, real run or remote job); it is not a scope change that adds or drops a deliverable, nor
-  a lift of a cap the session's skill sets (a further PR, a second review round); and it is not marked `blocks merge`.
+  a lift of a cap the session's skill sets (a further PR, a review round past the third or a complete one after the first); and it is not marked `blocks merge`.
 - **Skip it** when the session already took it ("I took …", `can wait` with the default taken): there is nothing to say.
 - **Leave it waiting** otherwise. A `blocks merge` call and an order against someone else's PR stay for Kohen, as does
   every outward-facing step, but the session is still told to continue everything that does not depend on them.

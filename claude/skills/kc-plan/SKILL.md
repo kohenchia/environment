@@ -118,8 +118,8 @@ attached.
   builder ("you own the merge order and registration"). Record his words and the date.
 - `default, pending`: your recommendation, which needs his yes. His go to build (`/kc-dev <plan>`, "start building")
   accepts every pending default that he has not overruled, and the plan says so in one line above the table.
-- `needs his yes`: a row whose answer authorises an outward-facing act (a ticket filed with its fields, a reviewer
-  requested, a registration or real run, a merge order that makes someone else port their work) or changes a contract
+- `needs his yes`: a row whose answer authorises an outward-facing act (a ticket filed with its fields, unless the
+  extension gives tickets a default; a reviewer requested, a registration or real run, a merge order that makes someone else port their work) or changes a contract
   (anything the extension reserves for him). His go does not accept these: each needs `Kohen, <date>` or `default,
   accepted`. Until then the builder builds on the recommendation, and only the step the row authorises waits.
 - `taken while building`: a choice nobody foresaw, decided by the builder (`kc-dev` step 3). A revision keeps it unless
@@ -142,18 +142,19 @@ question with no default, is an ask tagged `blocks adoption`.
 
 ## 6. Review it before handing it over
 
-Run `/kc-review <plan path>` on the finished plan (it reviews documents at full depth) and treat its asks
-as the next revision: apply each one, or answer it in the plan, then review again. Act only on the final report
+Run `/kc-review <plan path>` on the finished plan (its first round is complete) and treat its asks
+as the next revision: apply each one, or answer it in the plan, then review again only if an ask tagged `blocks
+adoption` was left. Every later round is incremental: it checks the earlier asks and the revised passages only, never
+the design again, and there are at most two of them (`kc-review` depth contract 8). Act only on the final report
 (its `Depth:` line does not begin `IN PROGRESS:`), never on a provisional first report. Stop when the verdict is
 `Adopt as written`, or `Adopt after changes` with no ask tagged `blocks adoption` left. If a decision only
 Kohen can make blocks the verdict, stop and put it to him rather than choosing for him, with the whole closure batch
 (step 5).
 
-Two more places to stop and ask Kohen, because every further round is a full-team review that costs as much as the
-first (one plan used three rounds on a design he then shelved): a verdict of `Rework` or `Do not adopt` (the direction
-is in question: report the verdict and the reviewer's target, and review a revision only after he confirms the
-direction), and a review of the plan's second revision (the third review, counting the first) that still has an ask tagged
-`blocks adoption` (put what blocks to him).
+Two more places to stop and ask Kohen (one plan used three full rounds on a design he then shelved): a verdict of
+`Rework` or `Do not adopt` (the direction is in question: report the verdict and the reviewer's target, and review a
+revision only after he confirms the direction), and a third round that still has an ask tagged `blocks adoption` (put
+what blocks to him; never start a fourth round).
 
 ## 7. Finish
 
