@@ -376,8 +376,9 @@ def adopt(name: str, skip_busy: bool = False) -> int:
             j = cy.read_json(JOBS / job["_id"] / "state.json", {})
             held = [] if j.get("tempo") in ("idle", "blocked") else [j.get("tempo") or "busy"]  # blocked: waits on you
             infl = j.get("inFlight") or {}
-            if infl.get("tasks") or infl.get("queued"):
-                held.append(f"{infl.get('tasks', 0)} tasks, {infl.get('queued', 0)} queued")
+            work = [k for k in (infl.get("kinds") or []) if k != "session_cron"]  # a cron waiting to fire is not work
+            if work or infl.get("queued"):
+                held.append(f"{', '.join(work) or 'tasks'}, {infl.get('queued', 0)} queued")
             if not held:
                 break
             if skip_busy:

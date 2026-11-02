@@ -86,7 +86,9 @@ class World:
         for name, body in (("claude", FAKE_CLAUDE), ("herdr", FAKE_HERDR)):
             (bindir / name).write_text(body)
             (bindir / name).chmod(0o755)
-        self.env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "HERDR_SOCKET_PATH")}
+        # a test run from inside a cy window must not carry that window's identity into the throwaway world
+        self.env = {k: v for k, v in os.environ.items()
+                    if k not in ("CLAUDECODE", "HERDR_SOCKET_PATH", "CY_SESSION", "CY_STARTED_BY")}
         self.env.update(HOME=str(self.home), PATH=f"{bindir}:{os.environ['PATH']}", HERDR_PANE_ID="w1:p1",
                         HERDR_TAB_ID="w1:t1", HERDR_WORKSPACE_ID="w1", CY_NO_FOLLOWER="1")
         self.state = self.home / ".local" / "state" / "cy"
@@ -910,6 +912,20 @@ class Cag(unittest.TestCase):
             p = subprocess.run([sys.executable, str(CAG), "--json", "--all"], env=w.env, capture_output=True, text=True)
             r = next(x for x in json.loads(p.stdout) if x["name"] == "tracker" and x["kind"] == "cy")
             self.assertEqual(r["job_id"], "aaaa0552")  # Stella's ledger still finds what it told the job
+
+    def test_a_cron_waiting_to_fire_does_not_make_a_job_busy(self):
+        with World() as w:
+            self.job(w, "cr000001", name="steady", state="working", tempo="idle", sessionId="s-cr",
+                     cwd=str(w.home / "projects"),
+                     inFlight={"tasks": 1, "queued": 0, "kinds": ["session_cron"], "wake": {"at": 1}})
+            reg = w.home / ".claude/sessions"
+            reg.mkdir(parents=True)
+            (reg / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "s-cr", "jobId": "cr000001",
+                                                    "kind": "bg", "status": "idle"}))
+            p = subprocess.run([sys.executable, str(CAG), "adopt", "steady", "--skip-busy"],
+                               env=dict(w.env, FAKE_CLAUDE_EXIT="0"), capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn(["stop", "cr000001"], w.argv())
 
     def test_adopt_skip_busy_leaves_a_working_job_alone(self):
         with World() as w:
