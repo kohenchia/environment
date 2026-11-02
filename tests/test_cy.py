@@ -911,6 +911,20 @@ class Cag(unittest.TestCase):
             r = next(x for x in json.loads(p.stdout) if x["name"] == "tracker" and x["kind"] == "cy")
             self.assertEqual(r["job_id"], "aaaa0552")  # Stella's ledger still finds what it told the job
 
+    def test_adopt_skip_busy_leaves_a_working_job_alone(self):
+        with World() as w:
+            self.job(w, "bz000001", name="working-one", state="working", tempo="active", sessionId="s-bz",
+                     cwd=str(w.home / "projects"))
+            reg = w.home / ".claude/sessions"
+            reg.mkdir(parents=True)
+            (reg / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "s-bz", "jobId": "bz000001",
+                                                    "kind": "bg", "status": "busy"}))
+            p = subprocess.run([sys.executable, str(CAG), "adopt", "working-one", "--skip-busy"], env=w.env,
+                               capture_output=True, text=True, timeout=30)
+            self.assertEqual(p.returncode, 3)
+            self.assertIn("busy (active); skipped", p.stdout)
+            self.assertFalse((w.home / "argv.log").exists())  # nothing was stopped
+
     def test_adopt_refuses_a_name_a_window_runs(self):
         import fcntl
         with World() as w:
