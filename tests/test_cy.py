@@ -927,6 +927,23 @@ class Cag(unittest.TestCase):
             self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
             self.assertIn(["stop", "cr000001"], w.argv())
 
+    def test_adopt_now_moves_a_job_whose_helper_is_still_registered(self):
+        with World() as w:
+            self.job(w, "tm000001", name="reviewer", state="done", tempo="idle", sessionId="s-tm",
+                     cwd=str(w.home / "projects"),
+                     inFlight={"tasks": 1, "queued": 0, "kinds": ["in_process_teammate"]})
+            reg = w.home / ".claude/sessions"
+            reg.mkdir(parents=True)
+            (reg / "1.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "s-tm", "jobId": "tm000001",
+                                                    "kind": "bg", "status": "idle"}))
+            busy = subprocess.run([sys.executable, str(CAG), "adopt", "reviewer", "--skip-busy"], env=w.env,
+                                  capture_output=True, text=True, timeout=30)
+            self.assertEqual(busy.returncode, 3)
+            p = subprocess.run([sys.executable, str(CAG), "adopt", "reviewer", "--now"],
+                               env=dict(w.env, FAKE_CLAUDE_EXIT="0"), capture_output=True, text=True, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            self.assertIn(["stop", "tm000001"], w.argv())
+
     def test_adopt_skip_busy_leaves_a_working_job_alone(self):
         with World() as w:
             self.job(w, "bz000001", name="working-one", state="working", tempo="active", sessionId="s-bz",

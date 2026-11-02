@@ -4,8 +4,8 @@
     cag [--all] [--json]                 the table (--all adds sessions that ended over a day ago, and done jobs)
     cag restart NAME [--fresh] [--now] [--token T] [--prompt TEXT]
     cag retire NAME
-    cag adopt NAME [--skip-busy]         move a background job, or a plain `claude`, into a `cy` window (waits for it
-                                         to be idle; --skip-busy leaves a working one alone, exit 3)
+    cag adopt NAME [--skip-busy|--now]   move a background job, or a plain `claude`, into a `cy` window (waits for it
+                                         to be idle; --skip-busy leaves a working one alone, exit 3; --now does not wait)
     cag close NAME                       stop a dormant background job (one with no process and no window)
 
 The table reads only files, so a sandboxed session can run `cag --json`: Claude's registry (live, busy or idle),
@@ -358,7 +358,7 @@ def moved_prompt(name: str, conv: str | None) -> str:
 BUSY = 3  # adopt --skip-busy: the session was working, and was left as it is
 
 
-def adopt(name: str, skip_busy: bool = False) -> int:
+def adopt(name: str, skip_busy: bool = False, now: bool = False) -> int:
     held = next((l for l in cy.launches() if l.get("name") == name and cy.held(l["id"])), None)
     if held:
         print(f"cag: {name} already runs under cy in {cy.where(held)}", file=sys.stderr)
@@ -379,7 +379,7 @@ def adopt(name: str, skip_busy: bool = False) -> int:
             work = [k for k in (infl.get("kinds") or []) if k != "session_cron"]  # a cron waiting to fire is not work
             if work or infl.get("queued"):
                 held.append(f"{', '.join(work) or 'tasks'}, {infl.get('queued', 0)} queued")
-            if not held:
+            if not held or now:  # --now: move it as it is (what it still has open ends with the old process)
                 break
             if skip_busy:
                 print(f"cag: {name} is busy ({', '.join(held)}); skipped, adopt it later", flush=True)
@@ -404,7 +404,7 @@ def adopt(name: str, skip_busy: bool = False) -> int:
     if not d:
         print(f"cag: no background job or plain claude named {name}", file=sys.stderr)
         return 1
-    while d.get("status") != "idle":
+    while d.get("status") != "idle" and not now:
         if skip_busy:
             print(f"cag: {name} is busy ({d.get('status')}); skipped, adopt it later", flush=True)
             return BUSY
@@ -449,6 +449,7 @@ def main(argv: list[str]) -> int:
             ap.add_argument("--prompt")
         if argv[0] == "adopt":
             ap.add_argument("--skip-busy", action="store_true", help="leave a working session alone (exit 3) instead of waiting")
+            ap.add_argument("--now", action="store_true", help="move it without waiting: whatever it still runs ends")
         a = ap.parse_args(argv[1:])
         if argv[0] == "restart":
             return queue(a.name, "restart", {k: v for k, v in (("fresh", a.fresh), ("now", a.now), ("token", a.token),
@@ -458,7 +459,7 @@ def main(argv: list[str]) -> int:
         if os.environ.get("CLAUDECODE"):
             print(f"cag: {argv[0]} needs herdr and claude: run it in a window's shell", file=sys.stderr)
             return 2
-        return adopt(a.name, a.skip_busy) if argv[0] == "adopt" else close(a.name)
+        return adopt(a.name, a.skip_busy, a.now) if argv[0] == "adopt" else close(a.name)
     ap = argparse.ArgumentParser(prog="cag", description=__doc__.split("\n\n")[0])
     ap.add_argument("--all", action="store_true")
     ap.add_argument("--json", action="store_true")
