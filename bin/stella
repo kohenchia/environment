@@ -238,7 +238,7 @@ def restart_window() -> None:
         sys.exit("stella: her window did not start in time; look in the space `stella`, then `stella restart` again")
     if w.get("status") != "live":
         sys.exit("stella: her window waits at its \"⏎ resumes it here\" line: press ⏎ there, then `stella restart`")
-    req = cy().submit(w["id"], "restart", {"fresh": True, "prompt": start_prompt()}, by="kohen")
+    req = cy().submit(w["id"], "restart", {"fresh": True, "prompt": start_prompt()}, by="kohen", not_after=7 * 86400)
     print(f"stella: restart queued ({req.name}); she restarts with an empty conversation when she is idle")
 
 

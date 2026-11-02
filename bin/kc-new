@@ -665,8 +665,7 @@ def retire_session(req: dict, request: Path) -> tuple[bool, str, dict]:
         raise ValueError('a retire request has only "retire"')
     job = resolve_target("retire", req.get("retire"))
     caller = caller_key(request)
-    asker = next((j for j in ks.load_jobs() if j.id == caller), None)
-    by_stella = asker is not None and asker.name == "stella" and asker.template == "stella"
+    by_stella = asker(request)["stella"]  # her job, or her window
     if job.id == caller:
         raise ValueError("a session does not retire itself")
     if job.name == "stella" or job.template == "stella":
@@ -695,7 +694,7 @@ def doctor(req: dict, request: Path) -> tuple[bool, str, dict]:
     env = dict(os.environ, KC_CALLER_JOB=caller)
     if what == "repair":
         job = next((j for j in ks.load_jobs() if j.id == caller), None)
-        if job is None or job.name != "stella" or job.template != "stella":
+        if not asker(request)["stella"] and (job is None or job.name != "stella" or job.template != "stella"):
             raise ValueError("repair is only run for Stella's own session")
         stamp = home() / ".local/state/kc-sessions/last-repair"
         if stamp.exists() and time.time() - stamp.stat().st_mtime < 600:

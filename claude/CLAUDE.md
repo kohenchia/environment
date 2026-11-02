@@ -25,8 +25,8 @@ they win).
   quiet unless I ask for the status, and then shows my priorities and a table of the sessions waiting on me with how
   many tasks each has for me. She answers a waiting session from my canon when it settles the question with certainty, and
   overnight (her manual sets the window) with the session's own reversible default, logged for my morning,
-  keeps my PRs moving through their sessions, tells a session that stopped on an API error to continue, restarts a
-  session that is not in bypass mode so she can direct it, learns my preferences, keeps the daily log, my priorities
+  keeps my PRs moving through their sessions, tells a session that stopped on an API error to continue, learns my
+  preferences, keeps the daily log, my priorities
   and an audit of my memories and instructions in files I read when I want, and starts a session in a new space for
   a task I give her. Her manual is her agent file, which only her session loads. `kc-env` lists every command, skill and
   background process of this environment.

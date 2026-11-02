@@ -131,9 +131,10 @@ token), opens a window in the space running `claude attach <id>`, and prints one
 is read, so a refused one is never retried; the answer is also in `kc-new.result.json` next to it.
 
 A request with `restart` instead of `space`/`dir`/`name`/`prompt` restarts a named session:
-`{"restart": "<session name>", "prompt": "optional first message", "space": "optional herdr space"}`. A session in any
-other permission mode holds a peer's messages for its user's approval, and they expire unread, so it is continued in
-bypass-permissions mode: the one restart that has to change the job id (the mode is fixed when a job is created). A
+`{"restart": "<session name>", "prompt": "optional first message", "space": "optional herdr space"}`. For a background
+job (for a `cy` window see "Sessions in `cy` windows" below): one in another permission mode is continued in
+bypass-permissions mode (no mode holds a peer's messages since `crossSessionInbound: accept`, but a job's mode is fixed
+when it is created): the one restart that has to change the job id (the mode is fixed when a job is created). A
 session already in bypass mode is refused unless `"force": true`, which restarts it **in place**: same job id, flags and
 crons, the instruction files reloaded. Both go through `kc-sessions` (below). The request is refused for `stella`
 (`stella restart` does hers), for a busy session (retry when idle), and for a name that more than one session holds.
