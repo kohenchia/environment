@@ -406,6 +406,13 @@ class StateRule(unittest.TestCase):
         self.assertIn(self.cy.file_version(self.cy.ME), self.cy.follower_version())
 
 
+def Follower_module():
+    loader = importlib.machinery.SourceFileLoader("cy_follow_states", str(FOLLOW))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader("cy_follow_states", loader))
+    loader.exec_module(mod)
+    return mod
+
+
 class Follower(unittest.TestCase):
     def setup_session(self, w, status="idle"):
         """A live cy session: its loop file, its lock held by the test, a launched process and its registry row."""
@@ -672,6 +679,14 @@ class Follower(unittest.TestCase):
                 f.tick()
                 self.assertEqual((f.view(sid)["space"], f.view(sid)["window"]), ("projects", "probe-window"))
             self.run_follower(w, body)
+
+    def test_red_only_for_a_prompt_waiting_for_input(self):
+        fm = Follower_module()
+        self.assertEqual(fm.herdr_state({"status": "waiting"}), "blocked")
+        self.assertEqual(fm.herdr_state({"status": "busy"}), "working")
+        self.assertEqual(fm.herdr_state({"status": "shell"}), "working")
+        self.assertEqual(fm.herdr_state({"status": "idle"}), "idle")  # a reply with a Needs-you table: green, not red
+        self.assertEqual(fm.herdr_state(None), "idle")
 
     def test_no_resume_command_is_given_to_herdr_before_the_switch(self):
         with World() as w:

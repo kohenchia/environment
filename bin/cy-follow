@@ -9,7 +9,8 @@ Every 2 seconds, for each session `cy` started (`~/.local/state/cy/*.loop.json`)
   * it keeps the session's launch file (`<id>.json`): name and former names, every conversation id, the window, space
     and tab (a moved window is followed through herdr's `pane.moved` event), the token pin, and how the session ended
     when herdr saw its window close (`pane.closed`: closing a pane sends no SIGHUP, probe P3);
-  * it reports the session's state to herdr, so herdr's dots follow `cag`'s state, with the resume command `cy -r
+  * it reports the session's state to herdr from Claude's registry (working, red only for a prompt waiting for input,
+    else idle: herdr shows a finished turn green until seen), with the resume command `cy -r
     NAME` once the switch has happened (`~/.local/state/cy/enabled`): `herdr pane report-agent --source kc-cy --agent
     claude --state S PANE -- cy -r NAME` (herdr takes a resume command only with a state report);
   * it carries out requests (`requests/<id>/*.json`, oldest first, each claimed by moving it into `doing/`): a
@@ -47,12 +48,14 @@ TICK = 2.0
 IDLE_FOR = 3.0
 LABELS_EVERY = 30.0
 REPORT_EVERY = 300.0  # a report is repeated now and then, so a herdr that forgot it (a restart, a release) hears it again
-HERDR_STATE = {"working": "working", "working (background command)": "working", "waiting on you": "blocked"}
+HERDR_STATE = {"busy": "working", "shell": "working", "waiting": "blocked"}  # Claude's registry status -> herdr's dot
 ALLOWED_TO_RETIRE = ("kohen", "stella")
 
 
-def herdr_state(state: str) -> str:
-    return HERDR_STATE.get(state, "idle")
+def herdr_state(row: dict | None) -> str:
+    """Red only for a prompt waiting for Kohen's input right now (a dialog); a finished turn is idle, asks or not, so
+    herdr shows it green until he has seen it, then hollow, as before the switch. What a session asks is `cag`'s."""
+    return HERDR_STATE.get((row or {}).get("status"), "idle")
 
 
 def enabled() -> bool:
@@ -65,7 +68,6 @@ class Follower:
         self.idle_since: dict[str, float] = {}
         self.reported: dict[str, tuple] = {}
         self.labels_at: dict[str, float] = {}
-        self.states: dict[str, tuple] = {}  # sid -> (transcript key, row status, state)
         self.mu = threading.Lock()  # the event thread and the tick both write launch files
 
     # ── launch files ────────────────────────────────────────────────────────────────────────────────────────────
@@ -131,28 +133,12 @@ class Follower:
 
     # ── state and herdr reports ─────────────────────────────────────────────────────────────────────────────────
 
-    def state(self, sid: str, row: dict | None) -> str:
-        """The state rule, recomputed only when the transcript or the registry status changed (transcripts are big)."""
-        conv = self.view(sid).get("conversation")
-        path = cy.transcript(conv)
-        try:
-            st = path.stat() if path else None
-            key = (str(path), st.st_size, st.st_mtime) if st else None
-        except OSError:
-            key = None
-        cached = self.states.get(sid)
-        if cached and cached[0] == key and cached[1] == (row or {}).get("status"):
-            return cached[2]
-        state = cy.state_of(row, cy.records(path))["state"]
-        self.states[sid] = (key, (row or {}).get("status"), state)
-        return state
-
     def report(self, sid: str, row: dict | None):
         view = self.view(sid)
         pane = view.get("pane")
         if not pane or not cy.held(sid):
             return
-        state = herdr_state(self.state(sid, row))
+        state = herdr_state(row)
         key = (state, view.get("name"), pane, enabled())
         last = self.reported.get(sid)
         if last and last[0] == key and time.time() - last[1] < REPORT_EVERY:
