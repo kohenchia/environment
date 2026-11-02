@@ -145,3 +145,64 @@ class StellaSettings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StellaWindow(unittest.TestCase):
+    """After the switch, Stella runs under `cy` in a window of the space `stella`, once her background job is gone."""
+
+    ENV = {"CY_NO_FOLLOWER": "1", "KC_NEW_START_WAIT": "0"}
+
+    def switched(self, w):
+        state = w.home / ".local/state/cy"
+        state.mkdir(parents=True, exist_ok=True)
+        (state / "enabled").touch()
+        link_stella_check(w)
+        w.pane("w1:p1", ws="w1", ws_label="work")  # a space herdr knows, so "stella" is made beside it
+        return state
+
+    def runs(self, w):
+        return [c for c in w.calls() if c.startswith("herdr pane run")]
+
+    def test_start_opens_her_window_in_the_space_stella(self):
+        with World() as w:
+            self.switched(w)
+            p = w.run("stella", "start", env=self.ENV)
+            self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+            run = self.runs(w)[-1]
+            self.assertIn("-n stella --agent stella --model sonnet --prompt-file", run)
+            self.assertIn("Session start (today is", (w.home / ".local/share/stella/.start-prompt").read_text())
+            self.assertIn("herdr workspace create --label stella", " ".join(w.calls()))
+
+    def test_start_resumes_her_conversation_when_her_window_ended(self):
+        with World() as w:
+            state = self.switched(w)
+            (state / "abc-key.loop.json").write_text(json.dumps({"id": "abc-key", "name": "stella", "status": "ended",
+                                                                  "end": "exit", "conversations": ["abc-key"]}))
+            w.run("stella", "start", env=self.ENV)
+            self.assertIn("-r abc-key --prompt-file", self.runs(w)[-1])
+
+    def test_restart_asks_her_window_for_a_fresh_conversation(self):
+        import fcntl
+        with World() as w:
+            state = self.switched(w)
+            (state / "abc-key.loop.json").write_text(json.dumps({"id": "abc-key", "name": "stella", "status": "live",
+                                                                  "conversations": ["abc-key"]}))
+            with open(state / "abc-key.lock", "a") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                p = w.run("stella", "restart", env=self.ENV)
+            self.assertIn("restart queued", p.stdout, p.stdout + p.stderr)
+            req = json.loads(next((state / "requests" / "abc-key").glob("*-restart.json")).read_text())
+            self.assertTrue(req["body"]["fresh"])
+            self.assertIn("Session start (today is", req["body"]["prompt"])
+            self.assertEqual(self.runs(w), [])
+
+    def test_her_background_job_keeps_the_old_path_until_she_is_moved(self):
+        with World() as w:
+            self.switched(w)
+            w.job("stella", state="blocked", running=True, flags=STELLA_FLAGS)
+            reg = w.home / ".claude/sessions"
+            reg.mkdir(parents=True, exist_ok=True)
+            import os
+            (reg / "1.json").write_text(json.dumps({"pid": os.getpid(), "name": "stella", "kind": "bg", "status": "idle"}))
+            w.run("stella", "start", env=self.ENV)
+            self.assertEqual(self.runs(w), [])  # no window: she is still the job

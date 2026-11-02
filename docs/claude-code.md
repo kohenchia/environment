@@ -39,15 +39,21 @@ ways around the hook: `git push --no-verify` and changing `core.hooksPath`. Test
 
 ## Sessions
 
-Every session is a background session of Claude's daemon, so `cag` (the agents view) lists all of them and which
-ones need you. `cw [name]` attaches one here (Ctrl+Z drops back to the shell; it keeps running). `tw` shows them in
-herdr (see `herdr.md`).
+Every session runs in its own herdr window under `cy`: `cy [-n NAME] [prompt]` starts one in the window you type it
+in, on the default token (`cpy`: on the project token), and `cy -r NAME` brings one back, in any window. **A session
+ends with its window**: `/exit` ends it (⏎ in that window resumes it), Cmd+W closes the window and ends it, and a herdr
+restart ends every one (herdr then reruns each window's `cy -r NAME`, once its restore is on). `cag` lists every session,
+its state and what it needs from you (`cag --json` for scripts); `cag restart NAME` and `cag retire NAME` ask the
+follower (`cy-follow`, which `tw` starts) to do it when the session is idle. Until each background job of Claude's
+daemon is moved into a window (`cag adopt NAME`), `cag` lists it too, and `cw [name]` attaches it here. `tw` shows
+them in herdr (see `herdr.md`).
 
 ## Stella
 
-A personal assistant in a permanent background session named `stella`, started in `~/.local/share/stella` with the
-`stella` agent. `stella` opens it (starting it if needed), `stella start` only starts it, `stella restart` reloads
-her manual. She automates routine operations, starts a session in a space (through `kc-new`) for a task Kohen gives
+A personal assistant in a permanent session named `stella`, in a window of the space `stella`, started in
+`~/.local/share/stella` with the `stella` agent (until her background job is moved into that window, the migration's
+last step, she is that job). `stella` goes to her window (starting her if needed), `stella start` only makes sure she
+runs (and starts `cy-follow`), `stella restart` reloads her manual with an empty conversation. She automates routine operations, starts a session in a space (through `kc-new`) for a task Kohen gives
 her, and does not otherwise manage other sessions. Kohen watches their sessions themselves, so the only thing she
 reports is how many are waiting for them. She answers a waiting session herself when the canon settles it with
 certainty and, in the overnight window her manual sets in one line, with the session's own default when that is
@@ -65,8 +71,8 @@ she can act on: a session waiting 15 minutes on a bare question or on a dialog (
 marked the ask as Kohen's, so no wake; once per reply), an API-error stop (hourly, up to 3 hours), a PR item
 that is new or whose signature changed (a conflict counts once it has held for two runs; an item she marked `noted`
 for that signature is silent and listed under `noted` in `pr-tasks.json`), a merged set whose session is not working,
-a due reminder, and the check's own errors. A session in a mode that holds her messages is no wake: it matters only
-when an item for it says `would_be_held`. Hooks in her project settings start the watcher at session start and at the
+a due reminder, and the check's own errors. No mode holds her messages (`crossSessionInbound: accept` in
+`~/.claude/settings.json`). Hooks in her project settings start the watcher at session start and at the
 end of every turn (`asyncRewake`: its exit code 2 starts her turn), and `stella` writes those settings on every
 start and restart, with recaps off, a one-hour prompt cache and, after a day of PR lists in files, a 200k-token
 compaction window. A quiet hour draws nothing and spends nothing, except one hourly judgment check (a self-paced
@@ -92,10 +98,10 @@ switches her over.
 | `kc-env` | Every command, skill and background process of this environment |
 | `kc-keys` | Every key binding of the work window, read from the Alacritty and herdr configs |
 | `tw` | The work window: herdr, with the spaces you make |
-| `cy` | New session, permission prompts skipped |
-| `cag` | The agents view |
-| `cw [name]` | Open a background session here (no name: pick with fzf) |
-| `stella` | Open Stella's session |
+| `cy [-n NAME] [prompt]`, `cy -r NAME` | A new session in this window, or bring one back here; `cpy` the same on the project token |
+| `cag` | Every session, its state and what it needs (`restart`, `retire`, `adopt`, `--json`) |
+| `cw [name]` | Attach a background job that is not in a window yet (no name: pick with fzf) |
+| `stella` | Go to Stella's window |
 
 ## Sessions starting sessions: `kc-new`
 

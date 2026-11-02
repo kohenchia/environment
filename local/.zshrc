@@ -538,7 +538,6 @@ alias bb='cd ~/bitbucket'
 alias ca="conda activate"
 alias cda="conda deactivate"
 alias cg='cd ~/github'
-alias cy='claude --dangerously-skip-permissions'
 alias d='docker'
 alias dcp='docker-compose'
 alias dev='cd ~/development'
@@ -612,13 +611,11 @@ if [[ -e "$HOME/.zshrc_work" ]]; then
 fi
 
 # ── Claude Code workspace ─────────────────────────────────────────────
-# Every session is a background session of Claude's daemon; herdr (`tw`) shows them. See docs/claude-code.md.
+# Every session runs in its own herdr window under `cy` (~/.local/bin): `cy` starts one here, `cy -r NAME` brings one
+# back, `cag` lists every session and what it needs, `/exit` or Cmd+W ends one. See docs/claude-code.md.
 
-# cag: the agents view. Sessions dispatched from it skip permission prompts, like `cy`.
-alias cag='claude agents --dangerously-skip-permissions'
-
-# cw [name|id]: open a background session in this terminal. Ctrl+Z drops back to
-# the shell and the session keeps running. With no argument, pick one with fzf.
+# cw [name|id]: attach a background job of Claude's daemon here, until the last one is moved into a window (`cag adopt`).
+# Ctrl+Z drops back to the shell and the job keeps running. With no argument, pick one with fzf.
 function cw() {
     if [[ -n "$1" ]]; then
         claude attach "$@"
@@ -634,7 +631,8 @@ for s in json.load(sys.stdin):
     claude attach "${pick%%$'\t'*}"
 }
 
-# tw: the work window. Start the herdr server if needed and Stella's session if she is not running, then attach.
+# tw: the work window. Start the herdr server if needed, then Stella's session if she is not running and the follower
+# that keeps every `cy` window's state in herdr (`stella start` does both), then attach.
 # A space is yours to make (Cmd+N, a blank terminal) and to delete (Cmd+Ctrl+W).
 function tw() {
     if ! herdr status server >/dev/null 2>&1; then

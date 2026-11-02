@@ -31,7 +31,7 @@ close_tab         = "alt+shift+w"
 
 # Spaces: Cmd+Shift+K / J go to the space above / below, Cmd+Ctrl+K / J move it (the command below).
 #   Cmd+N                 new space (a blank terminal)
-#   Cmd+Ctrl+W            close this space (herdr asks first; its sessions keep running)
+#   Cmd+Ctrl+W            close this space (herdr asks first; the sessions in its windows end)
 #   Cmd+Ctrl+Shift+R       rename this space
 new_workspace      = "alt+n"
 previous_workspace = "ctrl+alt+up"

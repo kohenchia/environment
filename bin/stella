@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-"""stella: open Stella's permanent Claude session, starting it in the background first when it is not running.
+"""stella: open Stella's permanent Claude session, starting it first when it is not running.
 
-    stella            attach to her session (Ctrl+Z drops back to the shell; she keeps running)
-    stella start      start her in the background if she is not running, without attaching
-    stella restart    start her again with an empty conversation (same window, new session id; her store keeps what she
-                      learned), so she reloads her manual and routines and knows today's date
+    stella            go to her window (opening it when she is not running)
+    stella start      make sure she runs, without going to her window; also starts `cy-follow` (`tw` runs this)
+    stella restart    start her again with an empty conversation (her store keeps what she learned), so she reloads her
+                      manual and routines and knows today's date
 
-She is an ordinary background session of Claude's daemon, named `stella`, running the agent file
-~/.claude/agents/stella.md in her store ~/.local/share/stella. Nothing else is needed for her to exist.
+She is an ordinary Claude session named `stella`, running the agent file ~/.claude/agents/stella.md in her store
+~/.local/share/stella. Since the switch to foreground sessions (`~/.local/state/cy/enabled`) she runs under `cy` in a
+window of the herdr space `stella`, like every session; until her background job is moved into that window
+(`cag adopt stella`, the migration's last step) she stays the background job of Claude's daemon she was, and
+`stella` attaches it as before. Nothing else is needed for her to exist.
 
 `start`, `restart` and a run that starts her also write her project settings (~/.local/share/stella/.claude/settings.json), so they can
 always be rebuilt from this repo: the hooks that run `stella-check --watch` (it wakes her only when something needs
@@ -23,6 +26,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -147,10 +151,82 @@ def restart() -> str:
     return job.id
 
 
+# ── her window (after the switch) ──────────────────────────────────────────────────────────────────────────────
+
+
+def load(name: str, module: str):
+    """A tool next to this file, as a module (`cy`'s launch files and requests, `kc-new`'s herdr helpers)."""
+    path = Path(__file__).resolve().with_name(name)
+    loader = importlib.machinery.SourceFileLoader(module, str(path))
+    mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(module, loader))
+    loader.exec_module(mod)
+    return mod
+
+
+def cy():
+    if not hasattr(cy, "mod"):
+        cy.mod = load("cy", "cy_lib")
+    return cy.mod
+
+
+def her_window() -> dict | None:
+    """Her newest `cy` launch, live or ended."""
+    mine = [l for l in cy().launches() if l.get("name") == "stella"]
+    return max(mine, key=lambda l: (l.get("status") == "live", l.get("started_at") or 0), default=None)
+
+
+def in_window() -> bool:
+    """After the switch, unless her background job still runs (she moves last)."""
+    if not (cy().STATE / "enabled").exists():
+        return False
+    return her_window() is not None or not any(d.get("name") == "stella" and d.get("kind") == "bg" for d in cy().registry())
+
+
+def open_window(fresh: bool = False) -> dict | None:
+    """Make sure her window runs, in the space `stella`: her conversation resumed, or (`fresh`, or never started) a new
+    one."""
+    w = None if fresh else her_window()
+    if w and w.get("status") == "live":
+        return w
+    pf = STORE / ".start-prompt"  # read and deleted by cy
+    pf.write_text(start_prompt())
+    me = shlex.quote(str(Path(__file__).resolve().with_name("cy")))
+    command = (f"{me} -r {shlex.quote(w['id'])} --prompt-file {shlex.quote(str(pf))}" if w else
+               f"{me} -n stella --agent stella --model sonnet --prompt-file {shlex.quote(str(pf))}")
+    load("kc-new", "kc_new").place({"space": "stella", "name": "stella", "dir": str(STORE)}, command)
+    return cy().wait_for(lambda: next((l for l in cy().launches() if l.get("name") == "stella"
+                                       and l.get("status") == "live"), None), float(os.environ.get("KC_NEW_START_WAIT", "20")))
+
+
+def go_to(w: dict | None) -> None:
+    tab = (w or {}).get("tab") or (cy().wait_for(lambda: (her_window() or {}).get("tab"), 10))
+    if not tab or not cy().herdr_ok(cy().herdr("tab", "focus", tab)):
+        sys.exit("stella: her window is open in the space `stella`; herdr would not go to it")
+
+
+def restart_window() -> None:
+    w = her_window()
+    if not w or w.get("status") != "live":
+        open_window(fresh=True)  # not running: start her with a new conversation
+        return
+    req = cy().submit(w["id"], "restart", {"fresh": True, "prompt": start_prompt()}, by="kohen")
+    print(f"stella: restart queued ({req.name}); she restarts with an empty conversation when she is idle")
+
+
 def main() -> None:
     cmd = sys.argv[1:]
     if cmd not in ([], ["start"], ["restart"]):
         sys.exit(__doc__)
+    if (cy().STATE / "enabled").exists():
+        cy().start_follower()  # the follower runs wherever Stella does; tw runs `stella start`
+    if in_window():
+        write_settings()
+        if cmd == ["restart"]:
+            return restart_window()
+        w = open_window()
+        if cmd == []:
+            go_to(w)
+        return
     if cmd or row() is None:  # start, restart, or starting her now; a plain attach to a running Stella writes nothing
         write_settings()
     sid = restart() if cmd == ["restart"] else (row() or {}).get("id") or start()

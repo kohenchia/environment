@@ -479,6 +479,10 @@ if [[ $CHECK_ONLY -eq 0 ]]; then
             "${REPO_DIR}/vscode-user-settings.json"
     fi
 
+    # Foreground sessions: every new Claude session runs in its own herdr window under `cy` (docs/claude-code.md).
+    # This file is the switch `kc-new`, `tok` and `cy-follow` read; removing it sends new sessions back to the old path.
+    mkdir -p "$HOME/.local/state/cy" && touch "$HOME/.local/state/cy/enabled"
+
     # The leak gate: a push from this repo runs githooks/pre-push, which calls ~/.local/bin/leakcheck (the
     # machine's own check; a machine without it cannot push). See docs/claude-code.md.
     git -C "${REPO_DIR}" config core.hooksPath githooks

@@ -14,7 +14,8 @@ herdr's words and mine differ. This setup uses mine:
 
 The left column (the Spaces and Agents lists, their dots and rows) is herdr's own, unconfigured. You make a space
 yourself (`Cmd+N`, a blank terminal), name it (`Cmd+Ctrl+Shift+R`) and delete it (`Cmd+Ctrl+W`). A window holds one
-Claude session (`claude attach <id>`, or `cw` to pick one) or whatever else you open there.
+Claude session (under `cy`: the session ends with its window, `cy -r NAME` brings it back) or whatever else you open
+there.
 
 ## `tw`
 
@@ -32,14 +33,14 @@ an `alt+…` chord, so the chords from the tmux days carry over unchanged.
 | Split right / down | `Cmd+D` / `Cmd+Shift+D` |
 | Zoom, rename, clear, search a pane | `Cmd+Shift+Enter`, `Cmd+R`, `Cmd+K`, `Cmd+F` |
 | Resize a pane | `C-b` then an arrow |
-| New window / close a pane (a window goes with its last pane) / close the window | `Cmd+T` / `Cmd+W` / `Cmd+Shift+W` |
+| New window / close a pane (a window goes with its last pane; a session in it ends) / close the window | `Cmd+T` / `Cmd+W` / `Cmd+Shift+W` |
 | Window 1–9 / previous / next | `Cmd+1…9` / `Cmd+Shift+[` / `Cmd+Shift+]` |
 | Move a window left / right | `Cmd+Ctrl+[` / `]` |
 | Rename the window | `Cmd+Shift+R` |
 | **New space** | `Cmd+N` |
 | **Go to the space above / below** | `Cmd+Shift+K` / `J` |
 | **Move the space up / down** | `Cmd+Ctrl+K` / `J` |
-| **Delete the space** (herdr asks first; its sessions keep running) | `Cmd+Ctrl+W` |
+| **Delete the space** (herdr asks first; it ends the sessions in its windows) | `Cmd+Ctrl+W` |
 | **Rename the space** | `Cmd+Ctrl+Shift+R` (or `C-b` then `Shift+W`) |
 
 The layers are the same for every component. `Cmd` does things (new, close, rename, split, zoom, clear, search, and
