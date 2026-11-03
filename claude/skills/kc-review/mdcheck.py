@@ -9,11 +9,15 @@ Exit 1 and print `file:line: message` for each of:
     lists) rendering until the next blank line. Write it as `<name>` in backticks, or as &lt;name&gt;.
   - a table row whose unescaped `|` count differs from its header (a `|` in a cell, even inside backticks or in
     [[note|alias]], must be written `\\|`).
+  - a table inside a list item that Obsidian's reading view shows as plain lines with a literal `|---|`: its rows are
+    indented 1 to 3 spaces (4 spaces or a tab are needed under `5. ` and `- `) or no blank line comes before it. A table
+    after the list, at column 0 behind a blank line, is fine.
   - anything below `</dataPolicy:slack>`: Obsidian does not render the markdown after the Slack tags, so the Slack
     section must be the last thing in the file (a block inside a code fence is fine).
 Allowed bare: <br>, <kbd>, <sub>, <sup>, <mark>, <u>, <wbr>, <!-- comments -->, <https://...> autolinks and the
 Slack data tags <dataSource:slack>, <dataPolicy:slack>. --allow adds tag names (an old page with inline <svg>).
---fix wraps each complete bare tag in backticks (the only change it makes) and still reports what it cannot fix.
+--fix wraps each complete bare tag in backticks, re-indents such a table to 4 spaces and puts a blank line before it (the
+only changes it makes), and still reports what it cannot fix.
 """
 
 import re
@@ -24,6 +28,8 @@ ALLOWED = {"br", "kbd", "sub", "sup", "mark", "u", "wbr"}
 BARE = re.compile(r"(?<!\\)</?([A-Za-z][A-Za-z0-9:-]*)(?:\s[^<>\n]*)?/?>|(?<!\\)<(?=[A-Za-z/!?])")
 OK_SPECIAL = re.compile(r"<!--|<https?://[^>\s]*>|<mailto:[^>\s]*>|</?data(?:Source|Policy):slack>")
 CODE = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
+LIST_ITEM = re.compile(r"(?:\d{1,9}[.)]|[-*+])(?:\s|$)")
+DELIM = re.compile(r"\s*\|?\s*:?-{3,}")
 FENCE = re.compile(r"\s*(?:>\s*)*(`{3,}|~{3,})")
 
 
@@ -87,9 +93,69 @@ def cells(row):
     return len(re.split(r"(?<!\\)\|", row))
 
 
+def in_list(lines, h):
+    """True when the nearest line above line index h that is neither blank nor indented starts a list item."""
+    for j in range(h - 1, -1, -1):
+        if lines[j].strip() and lines[j][0] not in " \t":
+            return bool(LIST_ITEM.match(lines[j]))
+    return False
+
+
+def tables(text):
+    """Yield (header line index, row count, indent, blank line before, inside a list) for each table outside fences."""
+    doc = text.split("\n")
+    for start, lines in blocks(text):
+        for k in range(1, len(lines)):
+            if "|" not in lines[k] or not DELIM.match(lines[k]) or "|" not in lines[k - 1]:
+                continue
+            n = 2
+            while k + n - 1 < len(lines) and lines[k + n - 1].lstrip().startswith("|"):
+                n += 1
+            h = start - 1 + k - 1
+            lead = re.match(r"[ \t]*", doc[h]).group(0)
+            yield h, n, 4 if "\t" in lead else len(lead), h == 0 or not doc[h - 1].strip(), in_list(doc, h)
+            break
+
+
+def bad_layout(indent, blank, listy):
+    """The reason Obsidian will not render this table, or None."""
+    if not listy:
+        return None
+    if not blank:
+        return "no blank line before the table inside a list item: add one"
+    if 0 < indent < 4:
+        return f"table inside a list item is indented {indent} spaces: Obsidian needs 4 (or a tab) to read it as a table"
+    return None
+
+
+def fix_tables(text):
+    """Re-indent each badly laid out table to 4 spaces and put a blank line before it."""
+    doc = text.split("\n")
+    for h, n, indent, blank, listy in sorted(tables(text), reverse=True):
+        if not bad_layout(indent, blank, listy):
+            continue
+        if indent < 4:
+            for i in range(h, h + n):
+                doc[i] = " " * 4 + doc[i].lstrip(" ")
+        if not blank:
+            doc.insert(h, "")
+    return "\n".join(doc)
+
+
 def check(path, fix=False, allow=frozenset()):
     text = Path(path).read_text()
+    if fix and (fixed := fix_tables(text)) != text:
+        Path(path).write_text(fixed)
+        text = fixed
     problems, edits = [], []
+    doc = text.split("\n")
+    for h, n, indent, blank, listy in tables(text):
+        if (why := bad_layout(indent, blank, listy)):
+            problems.append((h + 1, why))
+        want = cells(doc[h + 1])
+        for i in range(h, h + n):
+            if cells(doc[i]) != want:
+                problems.append((i + 1, f"table row has {cells(doc[i])} cells, the header has {want}: write a `|` inside a cell as \\|"))
     for start, lines in blocks(text):
         block = "\n".join(lines)
         for pos, end, tok, complete in bare_tags(block, allow):
@@ -97,13 +163,6 @@ def check(path, fix=False, allow=frozenset()):
             problems.append((line, f"bare {tok.strip()!r}: write it in backticks or as &lt;&gt;" + ("" if complete else " (unclosed)")))
             if complete:
                 edits.append((start, len(lines), pos, end))
-        if len(lines) > 1 and re.match(r"\s*\|?\s*:?-{3,}", lines[1]) and "|" in lines[1]:
-            want = cells(lines[1])
-            for k, row in enumerate(lines[2:], 2):
-                if not row.lstrip().startswith("|"):
-                    break
-                if cells(row) != want:
-                    problems.append((start + k, f"table row has {cells(row)} cells, the header has {want}: write a `|` inside a cell as \\|"))
     if fix and edits:
         out = text.split("\n")
         by_block = {}

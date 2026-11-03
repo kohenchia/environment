@@ -346,7 +346,7 @@ itself, and keep the earlier copy in `assets/` (`report-before-<what changed>-<d
 | Draft comment | One Kohen could post if he wants to; never post it. At most 12 lines, written the same plain way: a bold imperative per ask that goes to the author, then at most two sentences (the change, and the exact command or ticket number). Numbers match the asks. No rationale, no riders ("check that…"), no placeholders. |
 | Symbols | A symbol (✅ ❌ ⚠️ 🔴) is never bare: say once, in the legend or the cell, what goes wrong and give an example. "Accepted" is a problem only when the result is silently wrong, so say "accepted, then X happens". No ASCII art. |
 | Length | From the title to the end of the draft comment (the `Depth:` and any summary lines count): about 40 lines, plus the user picture and the worked example (together their own budget of about 30) and the asks' glance rows and step-by-step walks (no budget), so about one and a half screens plus the picture. Everything else comes after. When the blocking asks cannot fit, the budget gives way, never an ask. In a first report, "Still being checked" is one line (`N findings still being checked, M could block merge:`, `adoption` for a document) plus one line for each of the M, and none of it counts against the budget. |
-| Each ask, step by step | Under each ask, right after its fix example, a `**Step by step**` walk on one real use case (the one its `See it happen` line names first), in short sentences and everyday words. The sides or parts every walk uses (for a pair, the left side and the right side, by role), and any rule of the system two or more walks rely on, are named once, in plain words, just above the first ask. Each walk, in order: (1) **what the user writes or runs**, the real line or command, each part named by its role; (2) **what is stored where**, a table of the real values the case reads (omit only when the case reads no stored value); (3) **who does what**, one line per player (the user, the tool on their machine, the server, the job); (4) **what each player does with that input**, step by step, one player at a time; (5) **where it goes wrong**, a table of the real cases (two to five rows) with what each player decides and what the user then sees; (6) **why it hurts**: what the user sees, or how they would notice a silent failure; (7) **the fix**, as the same steps in order, with the case table's outcome after it; (8) **how sure**: which run, capture or reading shows it, and what is inferred; then an empty reply line `==**KC:** ==` for Kohen. A small ask may merge steps (2) and (3) or (5) and (6), never drop the real case or the fix. Every name, number and output in a walk is real and comes from the captures; a walk adds no finding and no claim the asks and Evidence do not carry, and the verifier checks it like the asks. Kohen's replies on the reply lines are kept verbatim whenever the report is revised. The walks are outside the length budget. A document review walks each ask the same way, on what a user would write and run if the document were adopted. |
+| Each ask, step by step | Under each ask, right after its fix example, a `**Step by step**` walk on one real use case (the one its `See it happen` line names first), in short sentences and everyday words. The sides or parts every walk uses (for a pair, the left side and the right side, by role), and any rule of the system two or more walks rely on, are named once, in plain words, just above the first ask. Each walk, in order: (1) **what the user writes or runs**, the real line or command, each part named by its role; (2) **what is stored where**, a table of the real values the case reads (omit only when the case reads no stored value); (3) **who does what**, one line per player (the user, the tool on their machine, the server, the job); (4) **what each player does with that input**, step by step, one player at a time; (5) **where it goes wrong**, a table of the real cases (two to five rows) with what each player decides and what the user then sees; (6) **why it hurts**: what the user sees, or how they would notice a silent failure; (7) **the fix**, as the same steps in order, with the case table's outcome after it; (8) **how sure**: which run, capture or reading shows it, and what is inferred; then an empty reply line `==**KC:** ==` for Kohen. The walk is a numbered list, so each table in it (steps 2 and 5, and the case table of step 7) has a blank line before it and its rows indented 4 spaces, never 3 (*Text Obsidian can render*); `mdcheck.py` flags the rest. A small ask may merge steps (2) and (3) or (5) and (6), never drop the real case or the fix. Every name, number and output in a walk is real and comes from the captures; a walk adds no finding and no claim the asks and Evidence do not carry, and the verifier checks it like the asks. Kohen's replies on the reply lines are kept verbatim whenever the report is revised. The walks are outside the length budget. A document review walks each ask the same way, on what a user would write and run if the document were adopted. |
 | End matter | After the draft comment, in this order: what is good about it, briefly, so the author knows what to keep; the sections the extension adds; `## Evidence`, numbered `E1`, `E2`, …, each naming the ask it supports, with the code (`file:line` at the head sha), how it was verified and by which agent; last, the "How this was reviewed" table (each agent, its model, its task, its start and end minute, every step not done and why). |
 
 One ask, before and after:
@@ -412,8 +412,20 @@ that section goes last in the file, or the block sits inside a code fence). Neve
 block tag: markdown inside it does not render. A `<` that cannot start a tag (`a < b`, `<0.60`, `x<-1`) is plain text,
 but `n<m` is not (a letter follows), so code it too.
 
-Checked by parsing the samples with markdown-it (CommonMark), which Obsidian follows for these cases; Obsidian itself
-could not be opened to look. `mdcheck.py` below finds every bare tag and every table row with the wrong cell count.
+**A table under a numbered or bulleted item** (Kohen, 2026-11-03): put a blank line before it and indent every row (header,
+`|---|` row and body) by 4 spaces, never 3. Obsidian's reading view does not parse a table nested at a 3-space indent
+(the usual indent under `5. `): it shows the rows as plain lines with a literal `|---|`. A table after the list, at column 0
+behind a blank line, needs no indent.
+
+| Written | Obsidian shows |
+|---|---|
+| `5. text`, blank line, rows indented 4 spaces | a table ✅ |
+| `5. text`, blank line, rows indented 3 spaces | plain lines and a literal `\|---\|` ❌ |
+| `5. text`, then rows on the next line | plain lines ❌ |
+
+The tag rules were checked by parsing the samples with markdown-it (CommonMark), which Obsidian follows for these
+cases; Obsidian itself could not be opened to look. The table indent is Kohen's observation in Obsidian (CommonMark alone
+would accept 3 spaces). `mdcheck.py` below finds every bare tag, every table row with the wrong cell count and every table in a list item with a 1 to 3 space indent or no blank line before it.
 
 ### Before saving: the self-check
 
@@ -461,8 +473,8 @@ Read the report from the top as Kohen would, and revise it until every answer is
     itself. Reread again until none is left.
 13. Run `python3 ~/.claude/skills/kc-review/mdcheck.py <report> [<use-case page>]` on every file you wrote in the
     vault, including the index row's file when you edited it. It prints nothing and exits 0 when no bare `<tag>` sits
-    outside code and no table row has the wrong number of cells. Fix each line it names (`--fix` wraps complete tags in
-    backticks and changes nothing else; a `|` in a cell you escape by hand) and run it again until it is silent.
+    outside code, no table row has the wrong number of cells and no table in a list item is indented under 4 spaces. Fix
+    each line it names (`--fix` wraps complete tags in backticks, re-indents such a table to 4 spaces and changes nothing else; a `|` in a cell you escape by hand) and run it again until it is silent.
 
 ## 7. The companion use-case page (a PR only)
 
