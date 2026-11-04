@@ -14,12 +14,17 @@ Exit 1 and print `file:line: message` for each of:
     after the list, at column 0 behind a blank line, is fine.
   - anything below `</dataPolicy:slack>`: Obsidian does not render the markdown after the Slack tags, so the Slack
     section must be the last thing in the file (a block inside a code fence is fine).
+  - frontmatter Obsidian cannot read as YAML: an unquoted value holding `: ` (`updated: 2026-11-03 (replies: ask 3)`),
+    starting with a YAML indicator (`@`, a backtick, `&`, `*`, `!`, `%`), or with a quote it never closes, and a
+    ` #` that YAML takes as a comment (`title: issue #42` keeps only `issue`). Obsidian then shows the whole block
+    as raw text instead of Properties. A first `---` with no closing `---` is flagged too.
 Allowed bare: <br>, <kbd>, <sub>, <sup>, <mark>, <u>, <wbr>, <!-- comments -->, <https://...> autolinks and the
 Slack data tags <dataSource:slack>, <dataPolicy:slack>. --allow adds tag names (an old page with inline <svg>).
---fix wraps each complete bare tag in backticks, re-indents such a table to 4 spaces and puts a blank line before it (the
-only changes it makes), and still reports what it cannot fix.
+--fix wraps each complete bare tag in backticks, re-indents such a table to 4 spaces and puts a blank line before it, and
+double-quotes such a frontmatter value (the only changes it makes), and still reports what it cannot fix.
 """
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -31,6 +36,8 @@ CODE = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
 LIST_ITEM = re.compile(r"(?:\d{1,9}[.)]|[-*+])(?:\s|$)")
 DELIM = re.compile(r"\s*\|?\s*:?-{3,}")
 FENCE = re.compile(r"\s*(?:>\s*)*(`{3,}|~{3,})")
+FM_ITEM = re.compile(r"((?:[A-Za-z0-9_][\w .-]*?):[ \t]+|[ \t]*-[ \t]+)(.*)$")
+INDICATORS = "@`&*!%"
 
 
 def blocks(text):
@@ -142,12 +149,54 @@ def fix_tables(text):
     return "\n".join(doc)
 
 
+def frontmatter_problem(value):
+    """Why YAML would not read this frontmatter value as the text it shows, or None."""
+    v = value.strip()
+    if not v or v[0] in "[{|>":  # empty, a flow collection or a block scalar
+        return None
+    if v[0] in "\"'":
+        closed = len(v) > 1 and v[-1] == v[0] and (v[0] == "'" or not v.endswith('\\"'))
+        return None if closed else f"frontmatter value opens a {v[0]} quote it never closes"
+    if ": " in v or v.endswith(":"):
+        return "unquoted frontmatter value holds ': ', so YAML fails and Obsidian shows the block as raw text: quote it"
+    if v[0] in INDICATORS:
+        return f"unquoted frontmatter value starts with {v[0]!r}, a YAML indicator: quote it"
+    if " #" in v:
+        return "unquoted frontmatter value holds ' #', which YAML reads as a comment and drops: quote it"
+    return None
+
+
+def frontmatter(text, fix=False):
+    """(problems, text) for the YAML frontmatter; with fix, each flagged plain value is double-quoted."""
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return [], text
+    end = next((i for i in range(1, len(lines)) if lines[i].strip() in ("---", "...")), None)
+    if end is None:
+        return [(1, "frontmatter opens with --- and never closes: add a closing --- line")], text
+    problems = []
+    for i in range(1, end):
+        m = FM_ITEM.match(lines[i])
+        if not m or lines[i].lstrip().startswith("#"):
+            continue
+        why = frontmatter_problem(m.group(2))
+        if why and fix and not why.startswith("frontmatter value opens"):
+            lines[i] = m.group(1) + json.dumps(m.group(2).strip(), ensure_ascii=False)
+        elif why:
+            problems.append((i + 1, why))
+    return problems, "\n".join(lines)
+
+
 def check(path, fix=False, allow=frozenset()):
     text = Path(path).read_text()
+    fm_problems, fixed = frontmatter(text, fix)
+    if fix and fixed != text:
+        Path(path).write_text(fixed)
+        text = fixed
     if fix and (fixed := fix_tables(text)) != text:
         Path(path).write_text(fixed)
         text = fixed
-    problems, edits = [], []
+    problems, edits = list(fm_problems), []
     doc = text.split("\n")
     for h, n, indent, blank, listy in tables(text):
         if (why := bad_layout(indent, blank, listy)):

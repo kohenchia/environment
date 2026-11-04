@@ -425,7 +425,7 @@ behind a blank line, needs no indent.
 
 The tag rules were checked by parsing the samples with markdown-it (CommonMark), which Obsidian follows for these
 cases; Obsidian itself could not be opened to look. The table indent is Kohen's observation in Obsidian (CommonMark alone
-would accept 3 spaces). `mdcheck.py` below finds every bare tag, every table row with the wrong cell count and every table in a list item with a 1 to 3 space indent or no blank line before it.
+would accept 3 spaces). `mdcheck.py` below finds every bare tag, every table row with the wrong cell count, every table in a list item with a 1 to 3 space indent or no blank line before it, and frontmatter YAML cannot read (an unquoted value holding `: ` makes Obsidian show the whole block as raw text).
 
 ### Before saving: the self-check
 
@@ -473,8 +473,10 @@ Read the report from the top as Kohen would, and revise it until every answer is
     itself. Reread again until none is left.
 13. Run `python3 ~/.claude/skills/kc-review/mdcheck.py <report> [<use-case page>]` on every file you wrote in the
     vault, including the index row's file when you edited it. It prints nothing and exits 0 when no bare `<tag>` sits
-    outside code, no table row has the wrong number of cells and no table in a list item is indented under 4 spaces. Fix
-    each line it names (`--fix` wraps complete tags in backticks, re-indents such a table to 4 spaces and changes nothing else; a `|` in a cell you escape by hand) and run it again until it is silent.
+    outside code, no table row has the wrong number of cells, no table in a list item is indented under 4 spaces and
+    the frontmatter parses as YAML. Fix each line it names (`--fix` wraps complete tags in backticks, re-indents such a
+    table to 4 spaces, double-quotes a frontmatter value that holds `: ` or ` #`, and changes nothing else; a `|` in a
+    cell you escape by hand) and run it again until it is silent.
 
 ## 7. The companion use-case page (a PR only)
 

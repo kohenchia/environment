@@ -176,3 +176,78 @@ class TablesInLists(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Frontmatter(unittest.TestCase):
+    def test_an_unquoted_value_with_a_colon_is_flagged_at_its_line(self):
+        r, _ = check("""\
+            ---
+            pr: org/repo#41
+            updated: 2026-11-03 (Kohen's replies: ask 3 dropped)
+            ---
+            # report
+            """)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(":3: unquoted frontmatter value holds ': '", r.stdout)
+
+    def test_quoted_plain_and_list_values_pass(self):
+        r, _ = check("""\
+            ---
+            verdict: "✅ merge with fixes · 1 blocks merge: one test"
+            note: 'it: works'
+            url: https://example.com/a:b
+            reviewed: 2026-10-29 05:36
+            tags: [review, notes]
+            items:
+              - plain item
+            body: |
+              any: text here
+            ---
+            # report
+            """)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_an_indicator_an_open_quote_and_a_comment_are_flagged(self):
+        r, _ = check("""\
+            ---
+            a: @mention
+            b: "never closed
+            c: issue #42
+            ---
+            """)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(":2: unquoted frontmatter value starts with '@'", r.stdout)
+        self.assertIn(":3: frontmatter value opens a \" quote it never closes", r.stdout)
+        self.assertIn(":4: unquoted frontmatter value holds ' #'", r.stdout)
+
+    def test_an_unclosed_frontmatter_is_flagged(self):
+        r, _ = check("""\
+            ---
+            pr: x
+            # report
+            """)
+        self.assertIn(":1: frontmatter opens with --- and never closes", r.stdout)
+
+    def test_a_colon_in_the_body_is_not_frontmatter(self):
+        r, _ = check("""\
+            # report
+            updated: 2026-11-03 (replies: ask 3)
+            """)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_fix_double_quotes_the_value_and_changes_nothing_else(self):
+        r, text = check("""\
+            ---
+            pr: org/repo#41
+            updated: 2026-11-03 (Kohen's replies: ask "3" dropped)
+            ---
+            # report
+            """, "--fix")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertEqual(text, textwrap.dedent("""\
+            ---
+            pr: org/repo#41
+            updated: "2026-11-03 (Kohen's replies: ask \\"3\\" dropped)"
+            ---
+            # report
+            """))
