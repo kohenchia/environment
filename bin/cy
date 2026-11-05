@@ -508,11 +508,14 @@ def alerts(conv: str | None, drop: bool = False) -> list[dict]:
     for f in sorted(ALERTS.glob(f"{conv}.*.json")):
         a = read_json(f)
         if not isinstance(a, dict) or not isinstance(a.get("note"), str) or not a["note"] \
-                or not isinstance(a.get("at", 0), (int, float)) or not isinstance(a.get("cleared_by", ""), str):
+                or not isinstance(a.get("at", 0), (int, float)) or not isinstance(a.get("cleared_by") or "", str):
             continue
         if a.get("cleared_by") and fixed_since(transcript(conv), a["cleared_by"], float(a.get("at") or 0)):
             if drop and read_json(f) == a:  # a newer alert written meanwhile is kept
-                f.unlink(missing_ok=True)
+                try:
+                    f.unlink(missing_ok=True)
+                except OSError:
+                    pass
             continue
         a.setdefault("kind", f.name[len(conv) + 1: -len(".json")])
         out.append(a)

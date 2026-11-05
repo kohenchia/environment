@@ -765,6 +765,22 @@ class Follower(unittest.TestCase):
             cy.alerts(sid, drop=True)
             self.assertEqual(json.loads(alert.read_text())["at"], 2.0)
 
+    def test_an_alert_without_a_fix_text_counts_and_an_undeletable_one_does_not_crash(self):
+        with World() as w:
+            cy = w.module(CY, "cy_t_alert_n")
+            sid = "11111111-2222-3333-4444-555555555558"
+            tr = w.home / ".claude" / "projects" / "-fake" / f"{sid}.jsonl"
+            tr.parent.mkdir(parents=True, exist_ok=True)
+            cy.write_json(cy.ALERTS / f"{sid}.a.json", {"note": "n", "at": 1.0, "cleared_by": None})
+            self.assertEqual([a["kind"] for a in cy.alerts(sid)], ["a"])
+            cy.write_json(cy.ALERTS / f"{sid}.b.json", {"note": "n", "at": 1.0, "cleared_by": "<x>done"})
+            tr.write_text(json.dumps({"type": "system", "content": "<x>done", "timestamp": "2030-01-01T00:00:00Z"}) + "\n")
+            cy.ALERTS.chmod(0o500)
+            try:
+                self.assertEqual([a["kind"] for a in cy.alerts(sid, drop=True)], ["a"])  # b is answered, its file stays
+            finally:
+                cy.ALERTS.chmod(0o700)
+
     def test_no_resume_command_is_given_to_herdr_before_the_switch(self):
         with World() as w:
             def body(fm, sid, child, lock):
