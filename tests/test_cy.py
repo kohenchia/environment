@@ -738,6 +738,33 @@ class Follower(unittest.TestCase):
                 self.assertEqual([l.split("--state ")[1].split()[0] for l in reports], ["blocked", "idle"])
             self.run_follower(w, body)
 
+    def test_an_earlier_reconnect_in_the_same_second_does_not_clear_an_alert(self):
+        with World() as w:
+            cy = w.module(CY, "cy_t_alert_s")
+            sid = "11111111-2222-3333-4444-555555555556"
+            tr = w.home / ".claude" / "projects" / "-fake" / f"{sid}.jsonl"
+            tr.parent.mkdir(parents=True, exist_ok=True)
+            whole = float(int(time.time()))
+            stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(whole))
+            tr.write_text(json.dumps({"type": "system", "subtype": "local_command", "timestamp": stamp + ".100Z",
+                                      "content": "<local-command-stdout>Reconnected to s.</local-command-stdout>"}) + "\n")
+            cy.write_json(cy.ALERTS / f"{sid}.slack.json", {"note": "n", "at": whole + 0.8,
+                                                             "cleared_by": "<local-command-stdout>Reconnected to s."})
+            self.assertEqual([a["kind"] for a in cy.alerts(sid)], ["slack"])  # 0.1 s is before 0.8 s
+
+    def test_an_alert_rewritten_while_its_fix_is_checked_is_kept(self):
+        with World() as w:
+            cy = w.module(CY, "cy_t_alert_r")
+            sid = "11111111-2222-3333-4444-555555555557"
+            alert = cy.ALERTS / f"{sid}.slack.json"
+            cy.write_json(alert, {"note": "n", "at": 1.0, "cleared_by": "x"})
+            def fixed_but_rewritten(*_):  # the hook writes a newer failure between the check and the delete
+                cy.write_json(alert, {"note": "n", "at": 2.0, "cleared_by": "x"})
+                return True
+            cy.fixed_since = fixed_but_rewritten
+            cy.alerts(sid, drop=True)
+            self.assertEqual(json.loads(alert.read_text())["at"], 2.0)
+
     def test_no_resume_command_is_given_to_herdr_before_the_switch(self):
         with World() as w:
             def body(fm, sid, child, lock):
@@ -882,6 +909,26 @@ class Cag(unittest.TestCase):
             p = subprocess.run([sys.executable, str(CAG)], env=w.env, capture_output=True, text=True)
             self.assertIn("tracker 🔴 slack", p.stdout)
             self.assertIn("🔴 tracker: Slack is signed out: run /mcp", p.stdout)
+
+    def test_a_malformed_alert_is_skipped_and_the_sessions_own_ask_is_kept(self):
+        with World() as w:
+            reg = w.home / ".claude" / "sessions"
+            reg.mkdir(parents=True)
+            (reg / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "plain-3",
+                                                                  "name": "asker", "status": "waiting",
+                                                                  "waitingFor": "approve the push", "kind": "interactive"}))
+            alerts = w.state / "alerts"
+            alerts.mkdir(parents=True)
+            (alerts / "plain-3.slack.json").write_text(json.dumps({"note": "Slack MCP is signed out", "at": time.time()}))
+            (alerts / "plain-3.bad.json").write_text(json.dumps({"note": "x", "at": "soon"}))
+            (alerts / "plain-3.worse.json").write_text(json.dumps({"note": ["x"], "at": 1}))
+            p = subprocess.run([sys.executable, str(CAG)], env=w.env, capture_output=True, text=True)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            line = next(l for l in p.stdout.splitlines() if l.startswith("asker"))
+            self.assertIn("asker 🔴 slack", line)
+            self.assertNotIn("bad", line)
+            self.assertIn("approve the push", line)  # its own ask, not the note
+            self.assertIn("🔴 asker: Slack MCP is signed out", p.stdout)
 
     def test_a_plain_session_that_was_a_job_keeps_the_jobs_prs(self):
         with World() as w:

@@ -55,8 +55,10 @@ dialog shows (a lost sign-in, say): it writes `~/.local/state/cy/alerts/<session
 cannot reach herdr, so the follower does the rest: while the session is live its dot is red (`blocked`), and `cag`
 shows `🔴 <kind>` after its name, the note under "Needs from you" and a footer line (`alerts` in `--json`). An alert
 also ends when a transcript record later than `at` begins with `cleared_by` (the output of the fix, a reconnect for
-example), which catches a fix no hook sees; the follower then removes the file. A background job's dot is herdr's own,
-so it gets only the `cag` marker.
+example), which catches a fix no hook sees; the follower (or `cag`) then removes the file. A file of any other shape is
+skipped. A session outside a `cy` window (a background job, a plain `claude`) gets only the `cag` marker: its dot is
+herdr's own. A follower that was running before a change to it keeps the old code until a `cy` launch, `tw` or `stella
+start` in a terminal replaces it.
 
 ## Stella
 

@@ -456,15 +456,19 @@ ALERT_TAIL = 1 << 20  # a fix is looked for in the transcript's last 1 MB: the f
 
 
 def iso_epoch(ts) -> float | None:
+    """A transcript timestamp (`2026-11-05T17:06:15.547Z`, UTC) as epoch seconds, milliseconds kept."""
     try:
-        return calendar.timegm(time.strptime(str(ts)[:19], "%Y-%m-%dT%H:%M:%S"))
+        whole = calendar.timegm(time.strptime(str(ts)[:19], "%Y-%m-%dT%H:%M:%S"))
+        frac = re.match(r"\.(\d+)", str(ts)[19:])
+        return whole + (float("0." + frac.group(1)) if frac else 0.0)
     except ValueError:
         return None
 
 
 def fixed_since(path: Path | None, text: str, at: float) -> bool:
-    """Does a record later than `at` begin with `text` (the output of the command that fixes what an alert is about,
-    such as a reconnect)? Only lines that contain it are parsed, and only from the transcript's tail."""
+    """Does a user or system record later than `at` begin with `text` (the output of the command that fixes what an
+    alert is about, such as a reconnect; a reply that quotes it does not count)? Only lines that contain it are parsed,
+    and only from the transcript's tail."""
     if not path or not text:
         return False
     try:
@@ -484,8 +488,10 @@ def fixed_since(path: Path | None, text: str, at: float) -> bool:
             rec = json.loads(line)
         except ValueError:
             continue
+        if not isinstance(rec, dict) or rec.get("type") not in ("user", "system"):
+            continue
         said = text_of(rec) or (rec.get("content") if isinstance(rec.get("content"), str) else "")
-        if said.lstrip().startswith(text) and (iso_epoch(rec.get("timestamp")) or 0) >= int(at):
+        if said.lstrip().startswith(text) and (iso_epoch(rec.get("timestamp")) or 0) >= at:
             return True
     return False
 
@@ -493,17 +499,19 @@ def fixed_since(path: Path | None, text: str, at: float) -> bool:
 def alerts(conv: str | None, drop: bool = False) -> list[dict]:
     """What the machine's hooks say this conversation needs Kohen to fix: `alerts/<conversation id>.<kind>.json`, each
     {"kind", "note" (one line for him), "at", "cleared_by" (optional)}. The hook that wrote one removes it when the
-    trouble is gone; one whose `cleared_by` text has appeared in the transcript since is gone too (removed with `drop`).
-    The follower shows a live session with an alert red."""
+    trouble is gone; one whose `cleared_by` text has appeared in the transcript since is gone too (removed with `drop`,
+    unless the file changed meanwhile). A file of any other shape is skipped. The follower shows a live session with an
+    alert red."""
     if not conv or not re.fullmatch(r"[\w-]+", conv):
         return []
     out = []
     for f in sorted(ALERTS.glob(f"{conv}.*.json")):
         a = read_json(f)
-        if not isinstance(a, dict) or not a.get("note"):
+        if not isinstance(a, dict) or not isinstance(a.get("note"), str) or not a["note"] \
+                or not isinstance(a.get("at", 0), (int, float)) or not isinstance(a.get("cleared_by", ""), str):
             continue
-        if a.get("cleared_by") and fixed_since(transcript(conv), str(a["cleared_by"]), float(a.get("at") or 0)):
-            if drop:
+        if a.get("cleared_by") and fixed_since(transcript(conv), a["cleared_by"], float(a.get("at") or 0)):
+            if drop and read_json(f) == a:  # a newer alert written meanwhile is kept
                 f.unlink(missing_ok=True)
             continue
         a.setdefault("kind", f.name[len(conv) + 1: -len(".json")])
