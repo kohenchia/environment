@@ -688,6 +688,56 @@ class Follower(unittest.TestCase):
         self.assertEqual(fm.herdr_state({"status": "idle"}), "idle")  # a reply with a Needs-you table: green, not red
         self.assertEqual(fm.herdr_state(None), "idle")
 
+    def test_an_alert_is_red_only_while_the_session_is_live(self):
+        fm = Follower_module()
+        alert = [{"kind": "slack", "note": "Slack is signed out: run /mcp"}]
+        self.assertEqual(fm.herdr_state({"status": "idle"}, alert), "blocked")
+        self.assertEqual(fm.herdr_state({"status": "busy"}, alert), "blocked")  # still working, but needs Kohen
+        self.assertEqual(fm.herdr_state(None, alert), "idle")  # its claude has ended: nothing to fix until it is back
+
+    def test_an_alert_turns_the_dot_red_until_its_fix_appears_in_the_transcript(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                tr = w.home / ".claude" / "projects" / "-fake" / f"{sid}.jsonl"
+                tr.parent.mkdir(parents=True, exist_ok=True)
+                said = "<local-command-stdout>Reconnected to the-server.</local-command-stdout>"
+                old_fix = {"type": "system", "subtype": "local_command", "content": said, "timestamp": "2020-01-01T00:00:00.000Z"}
+                tr.write_text(json.dumps(old_fix) + "\n")  # a reconnect before the alert does not clear it
+                alert = fm.cy.ALERTS / f"{sid}.slack.json"
+                fm.cy.write_json(alert, {"kind": "slack", "note": "Slack is signed out: run /mcp", "at": time.time(),
+                                         "cleared_by": "<local-command-stdout>Reconnected to the-server."})
+                f = fm.Follower()
+                f.tick()
+                states = lambda: [l.split("--state ")[1].split()[0] for l in self.herdr_log(w).splitlines()
+                                  if l.startswith("pane report-agent")]
+                self.assertEqual(states(), ["blocked"])
+                quoted = {"type": "assistant", "message": {"content": [{"type": "text", "text": "it said " + said}]},
+                          "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}
+                with open(tr, "a") as fh:
+                    fh.write(json.dumps(quoted) + "\n")  # a reply that only quotes the line is no reconnect
+                f.tick()
+                self.assertEqual(states(), ["blocked"])
+                fix = dict(old_fix, timestamp=time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() + 1)))
+                with open(tr, "a") as fh:
+                    fh.write(json.dumps(fix) + "\n")
+                f.tick()
+                self.assertEqual(states(), ["blocked", "idle"])
+                self.assertFalse(alert.exists())  # the follower removes an alert its fix answered
+            self.run_follower(w, body)
+
+    def test_an_alert_its_hook_removes_goes_back_to_normal(self):
+        with World() as w:
+            def body(fm, sid, child, lock):
+                alert = fm.cy.ALERTS / f"{sid}.slack.json"
+                fm.cy.write_json(alert, {"kind": "slack", "note": "Slack is signed out: run /mcp", "at": time.time()})
+                f = fm.Follower()
+                f.tick()
+                alert.unlink()  # a Slack call that worked: the hook removed it
+                f.tick()
+                reports = [l for l in self.herdr_log(w).splitlines() if l.startswith("pane report-agent")]
+                self.assertEqual([l.split("--state ")[1].split()[0] for l in reports], ["blocked", "idle"])
+            self.run_follower(w, body)
+
     def test_no_resume_command_is_given_to_herdr_before_the_switch(self):
         with World() as w:
             def body(fm, sid, child, lock):
@@ -813,6 +863,25 @@ class Cag(unittest.TestCase):
             for field in ("waiting_kind", "pinned", "prs", "intent", "last_reply_at", "conversation_ids",
                           "first_conversation_id", "transcript", "pending_requests"):
                 self.assertIn(field, rows["probe-g"])
+
+    def test_an_alert_shows_a_red_marker_its_note_and_a_footer_line(self):
+        with World() as w:
+            reg = w.home / ".claude" / "sessions"
+            reg.mkdir(parents=True)
+            (reg / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "sessionId": "plain-2",
+                                                                  "name": "tracker", "status": "idle",
+                                                                  "kind": "interactive"}))
+            alerts = w.state / "alerts"
+            alerts.mkdir(parents=True)
+            (alerts / "plain-2.slack.json").write_text(json.dumps({"kind": "slack", "at": time.time(),
+                                                                    "note": "Slack is signed out: run /mcp"}))
+            (alerts / "someone-else.slack.json").write_text(json.dumps({"kind": "slack", "note": "x", "at": 1}))
+            p = subprocess.run([sys.executable, str(CAG), "--json"], env=w.env, capture_output=True, text=True)
+            r = next(x for x in json.loads(p.stdout) if x["name"] == "tracker")
+            self.assertEqual([(a["kind"], a["note"]) for a in r["alerts"]], [("slack", "Slack is signed out: run /mcp")])
+            p = subprocess.run([sys.executable, str(CAG)], env=w.env, capture_output=True, text=True)
+            self.assertIn("tracker 🔴 slack", p.stdout)
+            self.assertIn("🔴 tracker: Slack is signed out: run /mcp", p.stdout)
 
     def test_a_plain_session_that_was_a_job_keeps_the_jobs_prs(self):
         with World() as w:

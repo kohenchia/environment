@@ -9,8 +9,9 @@ Every 2 seconds, for each session `cy` started (`~/.local/state/cy/*.loop.json`)
   * it keeps the session's launch file (`<id>.json`): name and former names, every conversation id, the window, space
     and tab (a moved window is followed through herdr's `pane.moved` event), the token pin, and how the session ended
     when herdr saw its window close (`pane.closed`: closing a pane sends no SIGHUP, probe P3);
-  * it reports the session's state to herdr from Claude's registry (working, red only for a prompt waiting for input,
-    else idle: herdr shows a finished turn green until seen), with the resume command `cy -r
+  * it reports the session's state to herdr from Claude's registry (working, red only for a prompt waiting for input
+    or for an alert a hook left, `alerts/<conversation>.<kind>.json`, else idle: herdr shows a finished turn green until
+    seen), with the resume command `cy -r
     NAME` once the switch has happened (`~/.local/state/cy/enabled`): `herdr pane report-agent --source kc-cy --agent
     claude --state S PANE -- cy -r NAME` (herdr takes a resume command only with a state report);
   * it carries out requests (`requests/<id>/*.json`, oldest first, each claimed by moving it into `doing/`): a
@@ -52,9 +53,12 @@ HERDR_STATE = {"busy": "working", "shell": "working", "waiting": "blocked"}  # C
 ALLOWED_TO_RETIRE = ("kohen", "stella")
 
 
-def herdr_state(row: dict | None) -> str:
-    """Red only for a prompt waiting for Kohen's input right now (a dialog); a finished turn is idle, asks or not, so
-    herdr shows it green until he has seen it, then hollow, as before the switch. What a session asks is `cag`'s."""
+def herdr_state(row: dict | None, alerts: list[dict] | None = None) -> str:
+    """Red only for a prompt waiting for Kohen's input right now (a dialog), or for a live session with an alert (a hook
+    saw something only he can fix, such as a lost sign-in); a finished turn is idle, asks or not, so herdr shows it
+    green until he has seen it, then hollow, as before the switch. What a session asks is `cag`'s."""
+    if row and alerts:
+        return "blocked"
     return HERDR_STATE.get((row or {}).get("status"), "idle")
 
 
@@ -138,7 +142,7 @@ class Follower:
         pane = view.get("pane")
         if not pane or not cy.held(sid):
             return
-        state = herdr_state(row)
+        state = herdr_state(row, cy.alerts(view.get("conversation"), drop=True) if row else None)
         key = (state, view.get("name"), pane, enabled())
         last = self.reported.get(sid)
         if last and last[0] == key and time.time() - last[1] < REPORT_EVERY:

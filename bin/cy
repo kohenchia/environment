@@ -19,6 +19,7 @@ Files, all under ~/.local/state/cy/:
     next/<id>.json       the follower's restart or end order, for one launched pid
     requests/<id>/       requests from `tok`, `cag` and `kc-new`, applied by the follower in order
     crons/<session>.json written by the Stop hook: the session's crons and pending wakeups
+    alerts/<session>.<kind>.json  written by a machine's hooks: something the session needs Kohen to fix (red dot)
 
 The token is the machine's business: `~/.config/cy/launch-env TOKEN KEY [PARENT]` prints the environment for it
 (KEY=VALUE lines, or -KEY to unset; `token=LABEL` names what it chose, and `pin=LABEL` says the session is pinned to it).
@@ -54,6 +55,7 @@ STATE = HOME / ".local" / "state" / "cy"
 NEXT = STATE / "next"
 REQUESTS = STATE / "requests"
 CRONS = STATE / "crons"
+ALERTS = STATE / "alerts"
 LAUNCH_HOOK = HOME / ".config" / "cy" / "launch-env"
 SESSIONS = HOME / ".claude" / "sessions"
 PROJECTS = HOME / ".claude" / "projects"
@@ -446,6 +448,67 @@ def title_of(recs: list[dict]) -> str | None:
         if r.get("type") in ("custom-title", "agent-name"):
             return r.get("customTitle") or r.get("agentName")
     return None
+
+
+# ── alerts ──────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ALERT_TAIL = 1 << 20  # a fix is looked for in the transcript's last 1 MB: the follower reads it every 2 s while one is up
+
+
+def iso_epoch(ts) -> float | None:
+    try:
+        return calendar.timegm(time.strptime(str(ts)[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return None
+
+
+def fixed_since(path: Path | None, text: str, at: float) -> bool:
+    """Does a record later than `at` begin with `text` (the output of the command that fixes what an alert is about,
+    such as a reconnect)? Only lines that contain it are parsed, and only from the transcript's tail."""
+    if not path or not text:
+        return False
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, 2)
+            f.seek(max(0, size - ALERT_TAIL))
+            data = f.read()
+    except OSError:
+        return False
+    needle = text.encode()
+    if needle not in data:
+        return False
+    for line in data.splitlines():
+        if needle not in line:
+            continue
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        said = text_of(rec) or (rec.get("content") if isinstance(rec.get("content"), str) else "")
+        if said.lstrip().startswith(text) and (iso_epoch(rec.get("timestamp")) or 0) >= int(at):
+            return True
+    return False
+
+
+def alerts(conv: str | None, drop: bool = False) -> list[dict]:
+    """What the machine's hooks say this conversation needs Kohen to fix: `alerts/<conversation id>.<kind>.json`, each
+    {"kind", "note" (one line for him), "at", "cleared_by" (optional)}. The hook that wrote one removes it when the
+    trouble is gone; one whose `cleared_by` text has appeared in the transcript since is gone too (removed with `drop`).
+    The follower shows a live session with an alert red."""
+    if not conv or not re.fullmatch(r"[\w-]+", conv):
+        return []
+    out = []
+    for f in sorted(ALERTS.glob(f"{conv}.*.json")):
+        a = read_json(f)
+        if not isinstance(a, dict) or not a.get("note"):
+            continue
+        if a.get("cleared_by") and fixed_since(transcript(conv), str(a["cleared_by"]), float(a.get("at") or 0)):
+            if drop:
+                f.unlink(missing_ok=True)
+            continue
+        a.setdefault("kind", f.name[len(conv) + 1: -len(".json")])
+        out.append(a)
+    return out
 
 
 # ── requests ────────────────────────────────────────────────────────────────────────────────────────────────────

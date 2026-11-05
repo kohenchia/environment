@@ -49,6 +49,15 @@ follower (`cy-follow`, which `tw` starts) to do it when the session is idle. Unt
 daemon is moved into a window (`cag adopt NAME`), `cag` lists it too, and `cw [name]` attaches it here. `tw` shows
 them in herdr (see `herdr.md`).
 
+**Red for something only you can fix: alerts.** A machine's hook can mark a session as needing you for a reason no
+dialog shows (a lost sign-in, say): it writes `~/.local/state/cy/alerts/<session id>.<kind>.json` with
+`{"kind", "note", "at", "cleared_by"}` and deletes it when the trouble is gone. Hooks run in the session's sandbox and
+cannot reach herdr, so the follower does the rest: while the session is live its dot is red (`blocked`), and `cag`
+shows `🔴 <kind>` after its name, the note under "Needs from you" and a footer line (`alerts` in `--json`). An alert
+also ends when a transcript record later than `at` begins with `cleared_by` (the output of the fix, a reconnect for
+example), which catches a fix no hook sees; the follower then removes the file. A background job's dot is herdr's own,
+so it gets only the `cag` marker.
+
 ## Stella
 
 A personal assistant in a permanent session named `stella`, in a window of the space `stella`, started in
