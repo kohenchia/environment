@@ -76,8 +76,8 @@ new notes.
 After appending, look at what landed under `## Learned` and offer the next step — don't
 do it unprompted:
 
-- A root-caused bug across repos → a note from the vault's
-  `Templates/Investigation.md` in `Notes/`.
+- A root-caused bug across repos → an issue report from the vault's
+  `Templates/Issue.md` in the vault's `Issues/` folder.
 - A standalone fact worth recalling → a note from `Templates/Note.md` in `Notes/`.
 - A whole mechanism worth explaining → `/kc-tutorial`.
 - Something that changes how an agent should work → a memory in

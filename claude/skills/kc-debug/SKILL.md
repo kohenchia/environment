@@ -45,5 +45,24 @@ or as `&lt;pr&gt;`, never bare, and a `|` inside a table cell as `\|`. Before sa
 `python3 ~/.claude/skills/kc-review/mdcheck.py <file>` on each file written to the vault; it must print nothing
 (`--fix` wraps complete tags; the safe forms by context are in kc-review, "Text Obsidian can render").
 
-If it cost real effort to find, offer to record it: a note in the vault's `Notes/` (via the vault's
-investigation template, if it has one) for how a system works, or a memory for how agents should work.
+## 5. Keep the write-up in the vault's `Issues/` folder
+
+Whenever Kohen asks you to debug or investigate an issue, the deliverable is also an issue report in the vault's
+`Issues/` folder (a plain-language correction-of-errors report). Never skip it, and never write the
+same issue twice:
+
+1. Look first: grep `Issues/` for the error text, the feature and the Slack link. If a report for this issue exists,
+   add to it or edit it (update the facts, add a dated line under `Timeline`, set `updated:`); otherwise create one
+   from the vault's `Templates/Issue.md`.
+2. Name: `YYYY-MM-DD First Last - Issue title`: the date the issue was raised and the full name of the person who
+   raised it (the author of the original message; Kohen Chia when he found it himself). No `/` or `:` in a file name.
+   The title is a claim: what is wrong and why.
+3. Front-matter: `reporter` and `slack` (the link to the original message, or `unknown`), plus the vault's usual fields.
+   Slack-derived text keeps its data-policy tags and never goes into a repo.
+4. Body, in simple and explicit language that assumes no knowledge of the feature: **What happened** (what the person saw,
+   as a concrete example with real values), **Why it happens** (the root cause, a worked example, every term defined where
+   it first appears), **The fix**, **How to recognise it next time**, **What we could not confirm**, **Timeline**,
+   **Evidence**. Show it, don't only say it: a before/after or a small table per scenario.
+5. Add it to the `Issues` index note, and apply the angle-bracket rule above.
+
+Offer a memory (not a vault note) only for how agents should work.
