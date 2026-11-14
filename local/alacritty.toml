@@ -166,6 +166,9 @@ bindings = [
   { key = "Enter", mods = "Shift", chars = "\u001B\r" },
 
   { key = "Enter", mods = "Command", action = "ToggleSimpleFullscreen" },
+
+  # A new Alacritty window beside herdr (Cmd+N is herdr's new space).
+  { key = "N", mods = "Command|Shift", action = "CreateNewWindow" },
 ]
 
 # Cmd+C, Cmd+V, Cmd+Q, Cmd+H, Cmd+M and the font-size chords are left
