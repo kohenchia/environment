@@ -124,6 +124,8 @@ class TablePipes(unittest.TestCase):
 
 
 class TablesInLists(unittest.TestCase):
+    """Obsidian does not render a table nested in a list item at any indent (Kohen, 2026-11-18): it sits at column 0."""
+
     THREE = (
         "5. **Where it goes wrong**\n"
         "\n"
@@ -136,41 +138,59 @@ class TablesInLists(unittest.TestCase):
     def test_a_table_indented_3_under_a_numbered_item_is_flagged_at_its_header(self):
         r, _ = check(self.THREE)
         self.assertEqual(r.returncode, 1)
-        self.assertIn(":3: table inside a list item is indented 3 spaces", r.stdout)
+        self.assertIn(":3: table nested in a list item (indented 3 spaces)", r.stdout)
 
     def test_a_table_indented_2_under_a_bullet_is_flagged(self):
         r, _ = check("- item\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n")
-        self.assertIn(":3: table inside a list item is indented 2 spaces", r.stdout)
+        self.assertIn(":3: table nested in a list item (indented 2 spaces)", r.stdout)
 
-    def test_4_spaces_or_a_tab_after_a_blank_line_passes(self):
-        r, _ = check("5. item\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n\n- bullet\n\n\t| a | b |\n\t|---|---|\n")
-        self.assertEqual((r.returncode, r.stdout), (0, ""))
+    def test_4_spaces_or_a_tab_is_flagged_too(self):
+        r, _ = check("5. item\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n")
+        self.assertIn(":3: table nested in a list item (indented 4 spaces)", r.stdout)
+        r, _ = check("- bullet\n\n\t| a | b |\n\t|---|---|\n")
+        self.assertIn(":3: table nested in a list item (indented 4 spaces)", r.stdout)
 
-    def test_no_blank_line_before_a_table_in_a_list_item_is_flagged(self):
-        r, _ = check("5. item\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n")
+    def test_a_table_deep_under_a_nested_bullet_is_flagged(self):
+        r, _ = check("1. item\n   - sub\n\n        | a | b |\n        |---|---|\n")
+        self.assertIn(":4: table nested in a list item (indented 8 spaces)", r.stdout)
+
+    def test_no_blank_line_before_a_table_that_follows_a_list_item_is_flagged(self):
+        r, _ = check("5. item\n| a | b |\n|---|---|\n| 1 | 2 |\n")
         self.assertIn(":2: no blank line before the table", r.stdout)
 
-    def test_a_table_after_the_list_or_outside_one_is_not_flagged(self):
-        r, _ = check("1. item\n2. item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nText\n\n  | a | b |\n  |---|---|\n")
+    def test_a_table_at_column_0_after_the_list_passes(self):
+        r, _ = check("1. item\n2. item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n3. next\n\nText\n\n  | a | b |\n  |---|---|\n")
         self.assertEqual((r.returncode, r.stdout), (0, ""))
 
     def test_a_table_in_a_fence_is_not_read(self):
         r, _ = check("1. item\n\n   ```\n   | a | b |\n   |---|---|\n   ```\n")
         self.assertEqual((r.returncode, r.stdout), (0, ""))
 
-    def test_fix_reindents_every_row_to_4_and_adds_the_blank_line_and_nothing_else(self):
+    def test_fix_moves_the_table_to_column_0_with_a_blank_line_on_both_sides(self):
         before = "5. item\n   | a | b |\n   |---|---|\n   | `x` | y |\n6. next\n\n| top | t |\n|---|---|\n"
         r, after = check(before, "--fix")
         self.assertEqual((r.returncode, r.stdout), (0, ""))
-        self.assertEqual(after, "5. item\n\n    | a | b |\n    |---|---|\n    | `x` | y |\n6. next\n\n| top | t |\n|---|---|\n")
+        self.assertEqual(after, "5. item\n\n| a | b |\n|---|---|\n| `x` | y |\n\n6. next\n\n| top | t |\n|---|---|\n")
+
+    def test_fix_dedents_a_4_space_table_and_keeps_the_rest(self):
+        before = "5. item\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n\n6. next\n"
+        r, after = check(before, "--fix")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(after, "5. item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n6. next\n")
+
+    def test_fix_handles_two_tables_in_one_walk(self):
+        before = "1. a\n\n    | a | b |\n    |---|---|\n2. b\n\n    | c | d |\n    |---|---|\n    | 1 | 2 |\n3. c\n"
+        r, after = check(before, "--fix")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(after, "1. a\n\n| a | b |\n|---|---|\n\n2. b\n\n| c | d |\n|---|---|\n| 1 | 2 |\n\n3. c\n")
 
     def test_fix_leaves_a_correct_file_untouched(self):
-        text = "5. item\n\n    | a | b |\n    |---|---|\n    | 1 | 2 |\n"
+        text = "5. item\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n6. next\n"
         r, after = check(text, "--fix")
         self.assertEqual(after, text)
 
-    def test_the_cell_count_is_still_checked_for_a_nested_table(self):
-        r, _ = check("5. item\n\n    | a | b |\n    |---|---|\n    | `x|y` | z |\n")
+    def test_the_cell_count_is_still_checked_for_a_table_after_a_list(self):
+        r, _ = check("5. item\n\n| a | b |\n|---|---|\n| `x|y` | z |\n")
         self.assertIn(":5: table row has 3 cells", r.stdout)
 
 

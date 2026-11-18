@@ -9,9 +9,9 @@ Exit 1 and print `file:line: message` for each of:
     lists) rendering until the next blank line. Write it as `<name>` in backticks, or as &lt;name&gt;.
   - a table row whose unescaped `|` count differs from its header (a `|` in a cell, even inside backticks or in
     [[note|alias]], must be written `\\|`).
-  - a table inside a list item that Obsidian's reading view shows as plain lines with a literal `|---|`: its rows are
-    indented 1 to 3 spaces (4 spaces or a tab are needed under `5. ` and `- `) or no blank line comes before it. A table
-    after the list, at column 0 behind a blank line, is fine.
+  - a table nested in a list item, which Obsidian's reading view shows as plain lines with a literal `|---|` whatever
+    the indent (3 spaces, 4 spaces, a tab), or a table straight after a list item with no blank line before it. A table
+    after the list, at column 0 behind a blank line, is fine: it ends the list and the numbered walk goes on.
   - anything below `</dataPolicy:slack>`: Obsidian does not render the markdown after the Slack tags, so the Slack
     section must be the last thing in the file (a block inside a code fence is fine).
   - frontmatter Obsidian cannot read as YAML: an unquoted value holding `: ` (`updated: 2026-11-03 (replies: ask 3)`),
@@ -20,7 +20,7 @@ Exit 1 and print `file:line: message` for each of:
     as raw text instead of Properties. A first `---` with no closing `---` is flagged too.
 Allowed bare: <br>, <kbd>, <sub>, <sup>, <mark>, <u>, <wbr>, <!-- comments -->, <https://...> autolinks and the
 Slack data tags <dataSource:slack>, <dataPolicy:slack>. --allow adds tag names (an old page with inline <svg>).
---fix wraps each complete bare tag in backticks, re-indents such a table to 4 spaces and puts a blank line before it, and
+--fix wraps each complete bare tag in backticks, moves such a table to column 0 with a blank line before and after it, and
 double-quotes such a frontmatter value (the only changes it makes), and still reports what it cannot fix.
 """
 
@@ -128,22 +128,23 @@ def bad_layout(indent, blank, listy):
     """The reason Obsidian will not render this table, or None."""
     if not listy:
         return None
+    if indent > 0:
+        return f"table nested in a list item (indented {indent} spaces): Obsidian shows it as plain rows. Put it at column 0 after a blank line, ending the list, and continue the list with its next number"
     if not blank:
-        return "no blank line before the table inside a list item: add one"
-    if 0 < indent < 4:
-        return f"table inside a list item is indented {indent} spaces: Obsidian needs 4 (or a tab) to read it as a table"
+        return "no blank line before the table that follows a list item: add one"
     return None
 
 
 def fix_tables(text):
-    """Re-indent each badly laid out table to 4 spaces and put a blank line before it."""
+    """Move each table nested in a list item to column 0, with a blank line before and after it."""
     doc = text.split("\n")
     for h, n, indent, blank, listy in sorted(tables(text), reverse=True):
         if not bad_layout(indent, blank, listy):
             continue
-        if indent < 4:
-            for i in range(h, h + n):
-                doc[i] = " " * 4 + doc[i].lstrip(" ")
+        for i in range(h, h + n):
+            doc[i] = doc[i].lstrip(" \t")
+        if h + n < len(doc) and doc[h + n].strip():
+            doc.insert(h + n, "")
         if not blank:
             doc.insert(h, "")
     return "\n".join(doc)
