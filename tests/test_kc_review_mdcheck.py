@@ -35,9 +35,7 @@ class BareTags(unittest.TestCase):
         r, _ = check("""\
             # run `<pr>` in the heading
             Inline `<pr>`, entity &lt;pr&gt;, backslash \\<pr>, a<br>break, math 3 < 5 and x<-1 and <0.60.
-            A span across
-            lines `<date>-<slug>
-            .yaml` is code.
+            A span on one line `<date>-<slug>.yaml` is code.
 
             ```
             <feature> in a fence
@@ -196,6 +194,47 @@ class TablesInLists(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WrappedCodeSpans(unittest.TestCase):
+    """A code span hard-wrapped across a line break breaks in Obsidian (Kohen, 2026-11-18)."""
+
+    WRAPPED = "- **a** run `uv run ship --phase\n  bronze` for <slug> now\n- **b** next\n"
+
+    def test_a_span_across_a_line_break_is_flagged_at_the_line_it_starts(self):
+        r, _ = check(self.WRAPPED)
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(":1: code span wrapped across a line break", r.stdout)
+
+    def test_a_span_across_a_paragraph_line_break_is_flagged(self):
+        r, _ = check("text\nsee `a b\nc d` end\n")
+        self.assertIn(":2: code span wrapped", r.stdout)
+
+    def test_one_line_spans_a_fence_and_a_span_across_a_blank_line_are_not_this_problem(self):
+        r, _ = check("- `uv run ship --phase bronze` and ``a ` b``\n\n```\nx `y\nz` w\n```\n")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+
+    def test_fix_joins_the_span_with_one_space_and_changes_nothing_else(self):
+        r, after = check(self.WRAPPED, "--fix")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(after, "- **a** run `uv run ship --phase bronze` for `<slug>` now\n- **b** next\n")
+
+    def test_fix_joins_two_spans_in_one_block(self):
+        r, after = check("a `x\n y` b `p\n\tq` c\n", "--fix")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(after, "a `x y` b `p q` c\n")
+
+    def test_a_span_in_a_quote_is_joined_across_the_quote_marks(self):
+        r, after = check("> a `uv run x\n> --phase bronze` b\n> next\n", "--fix")
+        self.assertEqual((r.returncode, r.stdout), (0, ""))
+        self.assertEqual(after, "> a `uv run x --phase bronze` b\n> next\n")
+
+    def test_a_span_whose_next_line_starts_a_list_item_is_reported_not_joined(self):
+        text = "- a stray ` tick\n- next item `code`\n"
+        r, after = check(text, "--fix")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("join by hand", r.stdout)
+        self.assertEqual(after, text)
 
 
 class Frontmatter(unittest.TestCase):

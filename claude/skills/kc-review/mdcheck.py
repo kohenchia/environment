@@ -12,6 +12,9 @@ Exit 1 and print `file:line: message` for each of:
   - a table nested in a list item, which Obsidian's reading view shows as plain lines with a literal `|---|` whatever
     the indent (3 spaces, 4 spaces, a tab), or a table straight after a list item with no blank line before it. A table
     after the list, at column 0 behind a blank line, is fine: it ends the list and the numbered walk goes on.
+  - an inline code span hard-wrapped across a line break (`uv run ... --phase⏎   bronze`). Obsidian ends the span at the
+    line break, so the later backticks pair wrongly, a following `<slug>` is read as an HTML tag and its text vanishes,
+    and the bold of the next list items stops rendering. A code span stays on one line.
   - anything below `</dataPolicy:slack>`: Obsidian does not render the markdown after the Slack tags, so the Slack
     section must be the last thing in the file (a block inside a code fence is fine).
   - frontmatter Obsidian cannot read as YAML: an unquoted value holding `: ` (`updated: 2026-11-03 (replies: ask 3)`),
@@ -20,8 +23,9 @@ Exit 1 and print `file:line: message` for each of:
     as raw text instead of Properties. A first `---` with no closing `---` is flagged too.
 Allowed bare: <br>, <kbd>, <sub>, <sup>, <mark>, <u>, <wbr>, <!-- comments -->, <https://...> autolinks and the
 Slack data tags <dataSource:slack>, <dataPolicy:slack>. --allow adds tag names (an old page with inline <svg>).
---fix wraps each complete bare tag in backticks, moves such a table to column 0 with a blank line before and after it, and
-double-quotes such a frontmatter value (the only changes it makes), and still reports what it cannot fix.
+--fix wraps each complete bare tag in backticks, moves such a table to column 0 with a blank line before and after it,
+joins a wrapped code span into one line (the newline and its indent become one space; a span whose next line starts a list
+item, table row, heading or quote is reported, not joined), and double-quotes such a frontmatter value (the only changes it makes), and still reports what it cannot fix.
 """
 
 import json
@@ -91,6 +95,35 @@ def bare_tags(block, allow):
         else:
             found.append((m.start(), m.end(), m.group(0), True))
     return found
+
+
+BLOCK_START = re.compile(r"\s*(?:(?:\d{1,9}[.)]|[-*+])(?:\s|$)|[|#>])")
+
+
+def wrapped_spans(block):
+    """(start, end, joinable) of each code span in a block that runs across a line break. Joinable: no later line of the
+    span starts a list item, table row, heading or quote, so joining the lines cannot merge two blocks."""
+    out = []
+    for m in CODE.finditer(block):
+        if "\n" in m.group(0):
+            first = block[block.rfind("\n", 0, m.start()) + 1:].lstrip()
+            quoted = first.startswith(">")  # a span inside a quote: each next line's own `>` continues the quote
+            later = [x.lstrip().removeprefix(">") if quoted and x.lstrip().startswith(">") else x for x in m.group(0).split("\n")[1:]]
+            out.append((m.start(), m.end(), not any(BLOCK_START.match(x) for x in later)))
+    return out
+
+
+def fix_spans(text):
+    """Join each wrapped code span into one line: the newline and the indent after it become a single space."""
+    out = text.split("\n")
+    for start, lines in sorted(blocks(text), reverse=True):
+        block = "\n".join(lines)
+        spans = [(a, b) for a, b, ok in wrapped_spans(block) if ok]
+        for a, b in reversed(spans):
+            block = block[:a] + re.sub(r"[ \t]*\n[ \t]*(?:>[ \t]*)*" if block[block.rfind("\n", 0, a) + 1:].lstrip().startswith(">") else r"[ \t]*\n[ \t]*", " ", block[a:b]) + block[b:]
+        if spans:
+            out[start - 1:start - 1 + len(lines)] = block.split("\n")
+    return "\n".join(out)
 
 
 def cells(row):
@@ -197,8 +230,16 @@ def check(path, fix=False, allow=frozenset()):
     if fix and (fixed := fix_tables(text)) != text:
         Path(path).write_text(fixed)
         text = fixed
+    if fix and (fixed := fix_spans(text)) != text:
+        Path(path).write_text(fixed)
+        text = fixed
     problems, edits = list(fm_problems), []
     doc = text.split("\n")
+    for start, lines in blocks(text):
+        block = "\n".join(lines)
+        for a, b, ok in wrapped_spans(block):
+            line = start + block.count("\n", 0, a)
+            problems.append((line, "code span wrapped across a line break: Obsidian ends it at the break and the later backticks pair wrongly. Keep the span on one line" + ("" if ok else " (the next line starts a list item, table row, heading or quote: join by hand)")))
     for h, n, indent, blank, listy in tables(text):
         if (why := bad_layout(indent, blank, listy)):
             problems.append((h + 1, why))
