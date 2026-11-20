@@ -21,7 +21,7 @@ time and budget decide when a step's result reaches him, never whether the step 
    substitute your own view for theirs. Every judging subagent gets both settings, set explicitly: without `effort` it
    runs at the default, which is not the depth Kohen wants. A review in which no Opus agent reasoned about the subject is not a review; the verdict line says so.
    **Opus rules, Sonnet gathers.** An agent whose output is a list it does not rule on (the fact sheet, the consumer
-   trace of other repos, docs and open PRs, the dry runs and their raw differences, the use-case captures, a rerun of
+   trace of other repos, docs and open PRs, the dry runs and their raw differences, the cold reader's predictions, the use-case captures, a rerun of
    a command whose result is already predicted) runs on `model: "sonnet"`. Every agent that settles a claim runs on
    Opus with `effort: "high"`: the finders, the consumer trace of the subject's own code, a research agent that decides
    how another system behaves, and a verifier helper that reads live data to accept or reject a claim. Every row a
@@ -143,6 +143,14 @@ State the problem the subject solves in one or two sentences, without its soluti
 best solution would look like, from the problem, the codebase and the knowledge, before looking at the
 subject's approach. This is the guard against anchoring on whatever the author chose.
 
+**Design what the user writes first, then the mechanism (Kohen, 2026-11-20).** Before any mechanism, write the shortest
+thing a user could write or type that states their intent (one config line, one flag, one command), and say what code
+would have to do to make that enough. A clean design keeps the user's surface small and puts the logic in code. Then hold
+every key, field, flag and name the subject adds against that shortest surface: each must earn its place, and one that
+holds a fact the code could work out itself is a cost. Always count the shortest surface, with the logic in code, among
+the alternatives below, even when it needs more code. A review once compared ways to swap a data source, accepted the
+subject's new config block, and never weighed the one-line surface Kohen then proposed; the block misled on four counts.
+
 Before naming alternatives, widen the field. Each of these has missed a better design before:
 
 - **Same constraint, solved elsewhere.** List the hard constraints the research found ("the scheduler
@@ -160,7 +168,7 @@ Before naming alternatives, widen the field. Each of these has missed a better d
 
 Name two to four credible alternatives (the subject's approach is one of them). Debate them for real. For
 anything bigger than a small fix, spawn one challenger whose task is to find the strongest alternative the list omits
-or dropped and to argue the strongest case against the design you chose above, and, only when your design differs from
+or dropped (the shortest user surface with the logic in code always among them) and to argue the strongest case against the design you chose above, and, only when your design differs from
 the subject's, one advocate for the subject's approach, arguing as strongly as the code allows. You argue for your own
 design in the design file; no agent advocates it. Each agent ends with the concrete fix for the problem under its design
 (the command, the config lines, the before and after), so the asks can be written from it. There is no separate judge
@@ -181,12 +189,18 @@ Answer each for the chosen design and for what the subject actually does:
 | # | Question | What a yes looks like |
 |---|---|---|
 | 1 | Is this the best design, rigorously debated? | It wins the debate in step 2, or the gap to the winner is named |
-| 2 | Does the UX stay elegant, simple, effortless? | Walk every surface a user touches (CLI, config, output, docs) from their seat; count what they must learn; nothing new to learn without a reason |
+| 2 | Does the UX stay elegant, simple, effortless, and is the design unconfusing? | Walk every surface a user touches (CLI, config, output, docs) from their seat; count what they must learn; nothing new to learn without a reason. Every new name says what it does: it does not look like an existing concept that behaves differently, implies no capability it lacks, is no generic name for a narrow job, and announces any work done silently. No field restates a fact the user can get wrong and the code cannot check. The cold reader's predictions (step 4) match what the code does |
 | 3 | Is it robust enough? | Failure modes, edge inputs, concurrency, partial failure, rollback; tests that would catch a regression |
 | 4 | Is it consistent with existing patterns? | Grep for two or three existing implementations of the same thing; same names, signatures, layering |
 | 5 | Is the implementation clean, to this repo's standards? | Passes the repo's own linters and conventions; no dead code, duplication or needless abstraction |
 
 Plus question 6: is the review itself consistent with the knowledge (step 0)?
+
+Questions 1 and 2 weigh as much as 3 to 5: a review checks that the design is clean and unconfusing, not only that it
+works (Kohen, 2026-11-20). Two signals are findings in themselves: the count of concepts a user must learn grows (a review
+counted 6 before and 15 after, and did not act on it), or the reviewer needs a worked example and several rewrites to
+explain one key. A surface that misleads its users can make the verdict that the shape is wrong even when every check
+passes; who owns the schema decides who picks the fix, never whether the review flags it.
 
 ## 4. The review team (required)
 
@@ -204,6 +218,7 @@ evidence and, for each, the user-level case it causes: what a user does, what fa
 | Consumer trace, own code | Opus | Every caller of every changed or removed symbol, flag, default and name inside the subject's repo, ruling on each guard, refusal and branch the change passes through (does it still fire, for which inputs) |
 | Consumer trace, everything else | Sonnet | Every consumer in the other repos involved, in docs, registrations and open PRs, and what the change should have touched but did not: one table row per consumer with `file:line`, what it reads, and the exact condition of any guard quoted; it rules on nothing. One agent per kind of consumer when there are more than three kinds, never per repo |
 | Verifier (step 5) | Opus | Try to disprove each finding, each "no problem here" claim on a risky area, and the debate's factual claims; rule on every row of the Sonnet tables (consumers, dry-run differences) once their final versions land. Its helpers are Opus when they read live data to accept or reject a claim, Sonnet when they only rerun a command |
+| Cold reader | Sonnet | Given only the user-facing surface the subject adds (the example config, command or output from its description and docs; never the code, the diff or the design file), say in plain words what each new name and key seems to do, what the user would think they control, what they would expect to happen, and what they would get wrong; it rules on nothing. The verifier sets each prediction beside what the code does: every mismatch is a finding under question 2 |
 | Use-case capture (step 7, a PR only) | Sonnet | At most three: run every case of the companion page at the base and the head and record it; no judgment |
 | Use-case verifier (step 7, a PR only) | Opus | Check the companion page against the captures, rerun a sample, and rewrite or label every statement that was inferred rather than observed |
 
@@ -489,6 +504,9 @@ Read the report from the top as Kohen would, and revise it until every answer is
     the frontmatter parses as YAML. Fix each line it names (`--fix` wraps complete tags in backticks, moves such a
     table to column 0 with a blank line before and after it, joins a wrapped code span into one line, double-quotes a frontmatter value that holds `: ` or ` #`, and changes nothing else; a `|` in a
     cell you escape by hand) and run it again until it is silent.
+14. Does the report judge the design's surface as well as its correctness: the shortest surface written down and
+    debated, the cold reader's mismatches ruled on, a growing concept count or a key that needed a worked example raised
+    as a finding, and the verdict saying so when the surface misleads?
 
 ## 7. The companion use-case page (a PR only)
 
